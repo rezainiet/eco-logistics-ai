@@ -1,0 +1,3 @@
+user-pass-random
+db_user_logec
+FupQUG9RCIdUotGI

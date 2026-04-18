@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npm view *)",
+      "Bash(npm audit *)",
+      "Bash(npm --workspace apps/api run typecheck)",
+      "Bash(npm --workspace apps/web run typecheck)",
+      "Bash(npm run *)",
+      "Bash(npm --workspace apps/api test)",
+      "Bash(npm --workspace apps/api run dev)",
+      "Bash(npm --workspace apps/web run dev)",
+      "Bash(powershell.exe *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(curl -s http://localhost:4000/health)",
+      "Bash(curl -s -o /dev/null -w \"frontend HTTP %{http_code}\\\\n\" http://localhost:3000)",
+      "Bash(npm --workspace apps/api install express-rate-limit rate-limit-redis lru-cache)",
+      "Bash(netstat -ano)",
+      "Bash(tasklist)",
+      "Bash(wmic process *)",
+      "Bash(taskkill //PID 13596 //T //F)",
+      "Bash(taskkill //PID 18248 //T //F)",
+      "Bash(npm test *)"
+    ]
+  }
+}

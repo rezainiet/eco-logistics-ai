@@ -1,0 +1,10 @@
+{
+  "name": "@ecom/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./tailwind.js",
+  "files": [
+    "tailwind.js",
+    "tsconfig.base.json"
+  ]
+}
