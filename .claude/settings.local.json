@@ -21,7 +21,29 @@
       "Bash(wmic process *)",
       "Bash(taskkill //PID 13596 //T //F)",
       "Bash(taskkill //PID 18248 //T //F)",
-      "Bash(npm test *)"
+      "Bash(npm test *)",
+      "Bash(npx vitest *)",
+      "Bash(node *)",
+      "Bash(npm ls *)",
+      "Bash(curl -sf -o /dev/null http://localhost:4000/health)",
+      "Bash(curl -sI http://localhost:4000/health)",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq *\" //FI \"IMAGENAME eq node.exe\" //FI \"PID eq $\\(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(xargs -I {} taskkill //PID {} //T //F)",
+      "Bash(npx tsc *)",
+      "Bash(npx next *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(Move-Item *)",
+      "Bash(NEXT_TELEMETRY_DISABLED=1 npx next build)",
+      "PowerShell(Remove-Item *)",
+      "Bash(git stash *)",
+      "Bash(npm --workspace apps/api run test)",
+      "Bash(npm --workspace apps/api run build)",
+      "Bash(npm --workspace apps/web run build)",
+      "Bash(ls C:\\\\devs\\\\ecommerce-logistics\\\\apps\\\\api\\\\tests\\\\ *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(grep -rn \"rescoreOrder\\\\|fraud\\\\\\\\.score\\\\|ip_velocity\\\\|source\\\\\\\\.ip\" /c/devs/ecommerce-logistics/apps)",
+      "Bash(git add *)"
     ]
   }
 }

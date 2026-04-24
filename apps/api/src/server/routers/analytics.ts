@@ -1,10 +1,34 @@
 import { Types } from "mongoose";
-import { CallLog, MerchantStats, Order } from "@ecom/db";
+import { TRPCError } from "@trpc/server";
+import { CallLog, Merchant, MerchantStats, Order } from "@ecom/db";
 import { protectedProcedure, router } from "../trpc.js";
 import { cached } from "../../lib/cache.js";
+import { getPlan, type AnalyticsLevel } from "../../lib/plans.js";
 
 const DASHBOARD_TTL = 120;
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
+
+const ANALYTICS_RANK: Record<AnalyticsLevel, number> = {
+  basic: 0,
+  advanced: 1,
+  premium: 2,
+};
+
+async function requireAnalyticsLevel(
+  merchantId: Types.ObjectId,
+  role: "merchant" | "admin" | "agent",
+  required: AnalyticsLevel,
+): Promise<void> {
+  if (role === "admin") return;
+  const m = await Merchant.findById(merchantId).select("subscription.tier").lean();
+  const plan = getPlan(m?.subscription?.tier);
+  if (ANALYTICS_RANK[plan.features.analyticsLevel] < ANALYTICS_RANK[required]) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `${required} analytics requires a higher plan — currently on ${plan.name}`,
+    });
+  }
+}
 
 function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
   return new Types.ObjectId(ctx.user.id);
@@ -66,6 +90,7 @@ export const analyticsRouter = router({
 
   getBestTimeToCall: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
+    await requireAnalyticsLevel(merchantId, ctx.user.role, "advanced");
     const since = new Date(Date.now() - NINETY_DAYS_MS);
 
     const rows = await CallLog.aggregate<{
@@ -145,6 +170,7 @@ export const analyticsRouter = router({
 
   getRTOMetrics: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
+    await requireAnalyticsLevel(merchantId, ctx.user.role, "advanced");
     const since = new Date(Date.now() - NINETY_DAYS_MS);
 
     const [stats, byDistrict, byCourier] = await Promise.all([

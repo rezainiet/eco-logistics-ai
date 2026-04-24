@@ -1,19 +1,26 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
-  darkMode: ["class"],
+  darkMode: "class",
   presets: [require("@ecom/config/tailwind")],
-  content: [
-    "./src/app/**/*.{ts,tsx}",
-    "./src/components/**/*.{ts,tsx}",
-  ],
+  content: ["./src/app/**/*.{ts,tsx}", "./src/components/**/*.{ts,tsx}"],
   theme: {
     container: {
       center: true,
-      padding: "2rem",
+      padding: "1.5rem",
       screens: { "2xl": "1400px" },
     },
     extend: {
+      fontFamily: {
+        sans: [
+          "Inter",
+          "-apple-system",
+          "BlinkMacSystemFont",
+          "Segoe UI",
+          "sans-serif",
+        ],
+        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -48,11 +55,30 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        "dark-bg": "#0B0E1A",
+        "dark-surface": "#1A1D2E",
+        "dark-surface-hover": "#232738",
+        brand: {
+          DEFAULT: "#0084D4",
+          hover: "#0072BB",
+          focus: "#0059A3",
+          subtle: "rgba(0, 132, 212, 0.1)",
+        },
+        status: {
+          success: "#10B981",
+          warning: "#F59E0B",
+          error: "#EF4444",
+          info: "#3B82F6",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
+      },
+      boxShadow: {
+        glow: "0 0 12px rgba(0, 132, 212, 0.15)",
+        "glow-strong": "0 0 24px rgba(0, 132, 212, 0.25)",
       },
       keyframes: {
         "accordion-down": {

@@ -39,7 +39,22 @@ authRouter.post("/signup", signupLimiter, async (req, res) => {
   if (existing) return res.status(409).json({ error: "email already registered" });
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const merchant = await Merchant.create({ email, passwordHash, businessName, phone, country, language });
+  const now = new Date();
+  const trialEndsAt = new Date(now.getTime() + env.TRIAL_DAYS * 24 * 60 * 60 * 1000);
+  const merchant = await Merchant.create({
+    email,
+    passwordHash,
+    businessName,
+    phone,
+    country,
+    language,
+    subscription: {
+      status: "trial",
+      tier: "starter",
+      startDate: now,
+      trialEndsAt,
+    },
+  });
 
   res.json({
     id: String(merchant._id),

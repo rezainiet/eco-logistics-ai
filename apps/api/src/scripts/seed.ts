@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import mongoose from "mongoose";
 import { CallLog, Merchant, Order } from "@ecom/db";
 import { connectDb } from "../lib/db.js";
+import { encryptSecret } from "../lib/crypto.js";
 
 const WIPE = process.argv.includes("--wipe");
 
@@ -33,10 +34,28 @@ async function main() {
       phone: "+8801711111111",
       country: "BD",
       language: "bn",
-      subscription: { tier: "professional", rate: 299, status: "active", startDate: new Date("2026-01-01") },
+      subscription: {
+        tier: "growth",
+        rate: 2499,
+        status: "active",
+        startDate: new Date("2026-01-01"),
+        activatedAt: new Date("2026-01-01"),
+        activatedBy: "seed",
+        currentPeriodEnd: new Date("2026-12-31"),
+      },
       couriers: [
-        { name: "Steadfast", accountId: "acme-steadfast", apiKey: "sk_test_acme_sf", preferredDistricts: ["Dhaka", "Chattogram"] },
-        { name: "Pathao", accountId: "acme-pathao", apiKey: "sk_test_acme_ph", preferredDistricts: ["Sylhet"] },
+        {
+          name: "steadfast",
+          accountId: "acme-steadfast",
+          apiKey: encryptSecret("sk_test_acme_sf"),
+          preferredDistricts: ["Dhaka", "Chattogram"],
+        },
+        {
+          name: "pathao",
+          accountId: "acme-pathao",
+          apiKey: encryptSecret("sk_test_acme_ph"),
+          preferredDistricts: ["Sylhet"],
+        },
       ],
     },
     {
@@ -46,9 +65,20 @@ async function main() {
       phone: "+8801722222222",
       country: "BD",
       language: "en",
-      subscription: { tier: "starter", rate: 99, status: "trial", startDate: new Date("2026-04-01") },
+      subscription: {
+        tier: "starter",
+        rate: 999,
+        status: "trial",
+        startDate: new Date("2026-04-01"),
+        trialEndsAt: new Date("2026-04-15"),
+      },
       couriers: [
-        { name: "SSL", accountId: "nova-ssl", apiKey: "sk_test_nova_ssl", preferredDistricts: ["Khulna", "Rajshahi"] },
+        {
+          name: "redx",
+          accountId: "nova-redx",
+          apiKey: encryptSecret("sk_test_nova_redx"),
+          preferredDistricts: ["Khulna", "Rajshahi"],
+        },
       ],
     },
   ]);
@@ -85,7 +115,7 @@ async function main() {
           status: pick(["pending", "confirmed", "shipped", "delivered", "delivered", "rto"] as const),
         },
         logistics: {
-          courier: merchant.couriers[0]?.name,
+          courier: merchant.couriers[0]?.name ?? "pathao",
           trackingNumber: `TRK-${merchant._id.toString().slice(-4)}-${i}`,
         },
         fraud: {
