@@ -6,6 +6,7 @@ import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Topbar } from "@/components/shell/topbar";
 import { CommandPaletteProvider } from "@/components/shell/command-palette";
 import { SubscriptionBanner } from "@/components/billing/subscription-banner";
+import { VerifyEmailBanner } from "@/components/billing/verify-email-banner";
 import { Toaster } from "@/components/ui/toast";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
@@ -22,6 +23,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           <Topbar userLabel={userLabel} />
           <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 md:px-8 md:py-8">
             <SubscriptionBanner />
+            <VerifyEmailBanner />
             {children}
           </div>
         </main>

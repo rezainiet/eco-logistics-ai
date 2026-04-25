@@ -59,6 +59,12 @@ export default function HomePage() {
         </Link>
         <nav className="flex items-center gap-2">
           <Link
+            href="/pricing"
+            className="hidden h-9 items-center rounded-md px-3 text-sm font-medium text-fg-muted transition-colors hover:text-fg sm:inline-flex"
+          >
+            Pricing
+          </Link>
+          <Link
             href="/login"
             className="inline-flex h-9 items-center rounded-md px-3 text-sm font-medium text-fg-muted transition-colors hover:text-fg"
           >
@@ -188,15 +194,31 @@ export default function HomePage() {
       </section>
 
       <footer className="relative z-10 border-t border-stroke/8">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-6 text-xs text-fg-subtle md:flex-row">
-          <p>© {new Date().getFullYear()} Logistics · Built for Bangladesh e-commerce.</p>
-          <div className="flex items-center gap-5">
-            <Link href="/login" className="hover:text-fg">
-              Sign in
-            </Link>
-            <Link href="/signup" className="hover:text-fg">
-              Sign up
-            </Link>
+        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-6 py-8 md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-fg-subtle">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-stroke/12 bg-surface px-2 py-1">
+              <ShieldCheck className="h-3 w-3 text-success" /> AES-256-GCM at rest
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-stroke/12 bg-surface px-2 py-1">
+              <ShieldCheck className="h-3 w-3 text-success" /> Audit-logged
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-stroke/12 bg-surface px-2 py-1">
+              <ShieldCheck className="h-3 w-3 text-success" /> Role-based access
+            </span>
+          </div>
+          <div className="flex flex-col items-start gap-3 text-xs text-fg-subtle md:items-end">
+            <div className="flex items-center gap-5">
+              <Link href="/pricing" className="hover:text-fg">
+                Pricing
+              </Link>
+              <Link href="/login" className="hover:text-fg">
+                Sign in
+              </Link>
+              <Link href="/signup" className="hover:text-fg">
+                Sign up
+              </Link>
+            </div>
+            <p>© {new Date().getFullYear()} Logistics · Built for Bangladesh e-commerce.</p>
           </div>
         </div>
       </footer>

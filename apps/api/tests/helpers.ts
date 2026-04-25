@@ -29,16 +29,18 @@ export async function createMerchant(
     businessName: string;
     role: "merchant" | "admin" | "agent";
     tier: "starter" | "growth" | "scale" | "enterprise";
-    status: "trial" | "active" | "past_due" | "paused" | "cancelled";
+    status: "trial" | "active" | "past_due" | "paused" | "suspended" | "cancelled";
     trialEndsAt: Date | null;
     currentPeriodEnd: Date | null;
   }> = {},
 ) {
   await ensureDb();
   const passwordHash = await bcrypt.hash("password123", 10);
-  // Default test merchants run on Growth/active so legacy tests that exercise
-  // fraud review + 2 couriers don't trip the new plan gates.
-  const tier = overrides.tier ?? "growth";
+  // Default test merchants run on Scale/active so legacy tests that exercise
+  // fraud review + day-7 connectors (custom_api, multiple integrations,
+  // advanced behavior tables) don't trip the plan gates. Tier-specific tests
+  // opt down with `{ tier: "starter" }` etc.
+  const tier = overrides.tier ?? "scale";
   const status = overrides.status ?? "active";
   return Merchant.create({
     businessName: overrides.businessName ?? "Test Merchant",

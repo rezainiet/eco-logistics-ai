@@ -14,6 +14,15 @@ import {
   type PlanTier,
 } from "../../lib/plans.js";
 import { getCurrentUsage } from "../../lib/usage.js";
+import { env } from "../../env.js";
+import {
+  createCheckoutSession,
+  createCustomer,
+  createPortalSession,
+  createSubscriptionCheckout,
+  getPriceIdForPlan,
+} from "../../lib/stripe.js";
+import { webUrl } from "../../lib/email.js";
 
 function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
   return new Types.ObjectId(ctx.user.id);
@@ -25,20 +34,24 @@ function summarizeSubscription(sub: {
   rate?: number;
   trialEndsAt?: Date | null;
   currentPeriodEnd?: Date | null;
+  gracePeriodEndsAt?: Date | null;
   startDate?: Date | null;
   activatedAt?: Date | null;
   pendingPaymentId?: Types.ObjectId | null;
+  billingProvider?: string;
 } | undefined) {
   const status = (sub?.status ?? "trial") as
     | "trial"
     | "active"
     | "past_due"
     | "paused"
+    | "suspended"
     | "cancelled";
   const tier = (sub?.tier ?? "starter") as PlanTier;
   const now = Date.now();
   const trialEndsAt = sub?.trialEndsAt ?? null;
   const currentPeriodEnd = sub?.currentPeriodEnd ?? null;
+  const gracePeriodEndsAt = sub?.gracePeriodEndsAt ?? null;
   const trialDaysLeft =
     status === "trial" && trialEndsAt
       ? Math.max(0, Math.ceil((trialEndsAt.getTime() - now) / 86400_000))
@@ -49,6 +62,10 @@ function summarizeSubscription(sub: {
     currentPeriodEnd
       ? Math.max(0, Math.ceil((currentPeriodEnd.getTime() - now) / 86400_000))
       : null;
+  const graceDaysLeft =
+    status === "past_due" && gracePeriodEndsAt
+      ? Math.max(0, Math.ceil((gracePeriodEndsAt.getTime() - now) / 86400_000))
+      : null;
   return {
     status,
     tier,
@@ -58,6 +75,11 @@ function summarizeSubscription(sub: {
     trialExpired,
     currentPeriodEnd,
     periodDaysLeft,
+    gracePeriodEndsAt,
+    graceDaysLeft,
+    billingProvider: (sub?.billingProvider ?? "manual") as
+      | "manual"
+      | "stripe_subscription",
     startDate: sub?.startDate ?? null,
     activatedAt: sub?.activatedAt ?? null,
     pendingPaymentId: sub?.pendingPaymentId ? String(sub.pendingPaymentId) : null,
@@ -71,11 +93,22 @@ export const billingRouter = router({
   /** Merchant dashboard payload: current plan, usage meters, quota progress. */
   getPlan: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
-    const m = await Merchant.findById(merchantId).select("subscription").lean();
+    const m = await Merchant.findById(merchantId)
+      .select("subscription stripeCustomerId stripeSubscriptionId")
+      .lean();
     if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
     const summary = summarizeSubscription(m.subscription);
     const plan = getPlan(summary.tier);
-    return { subscription: summary, plan };
+    // Surface only booleans, not the raw ids — the UI just needs to know
+    // whether to show the "Manage billing" portal button.
+    return {
+      subscription: summary,
+      plan,
+      stripe: {
+        hasCustomer: !!m.stripeCustomerId,
+        hasSubscription: !!m.stripeSubscriptionId,
+      },
+    };
   }),
 
   getUsage: protectedProcedure.query(async ({ ctx }) => {
@@ -107,6 +140,8 @@ export const billingRouter = router({
       const docs = await Payment.find({ merchantId })
         .sort({ createdAt: -1 })
         .limit(input.limit)
+        // Skip the heavy `proofFile.data` blob in the list view.
+        .select("-proofFile.data")
         .lean();
       return docs.map((p) => ({
         id: String(p._id),
@@ -114,9 +149,18 @@ export const billingRouter = router({
         amount: p.amount,
         currency: p.currency,
         method: p.method,
+        provider: (p.provider as "manual" | "stripe" | undefined) ?? "manual",
         txnId: p.txnId ?? null,
         senderPhone: p.senderPhone ?? null,
         proofUrl: p.proofUrl ?? null,
+        proofFile: p.proofFile
+          ? {
+              filename: p.proofFile.filename ?? null,
+              contentType: p.proofFile.contentType,
+              sizeBytes: p.proofFile.sizeBytes,
+              uploadedAt: p.proofFile.uploadedAt ?? null,
+            }
+          : null,
         status: p.status,
         reviewerNote: p.reviewerNote ?? null,
         reviewedAt: p.reviewedAt ?? null,
@@ -124,6 +168,374 @@ export const billingRouter = router({
         periodEnd: p.periodEnd ?? null,
         createdAt: p.createdAt,
       }));
+    }),
+
+  /**
+   * Mint a Stripe Checkout Session for the requested plan. The merchant is
+   * redirected to Stripe-hosted checkout; on success Stripe fires our
+   * webhook which flips the subscription. We persist a pending Payment row
+   * so the receipt history stays consistent across both flows.
+   */
+  createCheckoutSession: protectedProcedure
+    .input(z.object({ plan: z.enum(PLAN_TIERS) }))
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      const merchant = await Merchant.findById(merchantId).select("email subscription");
+      if (!merchant) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+      if (!isPlanTier(input.plan)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid plan" });
+      }
+      const plan = getPlan(input.plan);
+      const useUsd = env.STRIPE_USE_USD;
+      const currency = useUsd ? "USD" : "BDT";
+      // Stripe accepts amounts in the currency's smallest unit; both USD and
+      // BDT are 2-decimal so multiply by 100.
+      const amountSmallestUnit = useUsd
+        ? Math.round(plan.priceUSD * 100)
+        : Math.round(plan.priceBDT * 100);
+      const displayAmount = useUsd ? plan.priceUSD : plan.priceBDT;
+
+      // Pre-create the Payment row so the webhook lookup is cheap and the
+      // history shows "in checkout" while the merchant pays.
+      const payment = await Payment.create({
+        merchantId,
+        plan: input.plan,
+        amount: displayAmount,
+        currency,
+        method: "card",
+        status: "pending",
+        provider: "stripe",
+        notes: `Stripe Checkout for ${plan.name}`,
+      });
+
+      const successUrl = webUrl(`/dashboard/billing?stripe=success&payment=${String(payment._id)}`);
+      const cancelUrl = webUrl(`/dashboard/billing?stripe=cancel&payment=${String(payment._id)}`);
+
+      try {
+        const session = await createCheckoutSession({
+          customerEmail: merchant.email,
+          successUrl,
+          cancelUrl,
+          mode: "payment",
+          plan: {
+            amountSmallestUnit,
+            currency,
+            productName: `Logistics ${plan.name} plan`,
+          },
+          metadata: {
+            merchantId: String(merchantId),
+            plan: input.plan,
+            paymentId: String(payment._id),
+            periodDays: String(env.STRIPE_PERIOD_DAYS),
+          },
+        });
+        await Payment.updateOne(
+          { _id: payment._id },
+          { $set: { providerSessionId: session.id } },
+        );
+
+        void writeAudit({
+          merchantId,
+          actorId: merchantId,
+          actorType: "merchant",
+          action: "payment.checkout_started",
+          subjectType: "payment",
+          subjectId: payment._id,
+          meta: {
+            provider: "stripe",
+            plan: input.plan,
+            currency,
+            amount: displayAmount,
+            mocked: session.mocked,
+          },
+        });
+
+        return {
+          paymentId: String(payment._id),
+          sessionId: session.id,
+          url: session.url,
+          mocked: session.mocked,
+        };
+      } catch (err) {
+        // Roll back the placeholder so failed mints don't clutter history.
+        await Payment.deleteOne({ _id: payment._id });
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `couldn't open checkout: ${(err as Error).message}`,
+        });
+      }
+    }),
+
+  /**
+   * Recurring Stripe Subscription checkout. Distinct from `createCheckoutSession`
+   * (one-shot) so the legacy annual/manual path keeps working untouched.
+   *
+   * Steps:
+   *   1. Resolve the Stripe Price id for the requested tier (env-driven —
+   *      run `npm run stripe:seed` if it's missing).
+   *   2. Ensure the merchant has a Stripe Customer record. We persist the
+   *      customer id on the merchant doc so every subsequent
+   *      checkout/portal call reuses the same one.
+   *   3. Mint a Checkout Session in `mode=subscription`.
+   *   4. Return the hosted URL — the merchant pays on Stripe; webhooks do
+   *      the rest (subscription id is stamped on `checkout.session.completed`,
+   *      status flips to active on `invoice.payment_succeeded`).
+   *
+   * No Payment row is pre-created here — we let `invoice.payment_succeeded`
+   * be the single source of truth so we never have orphan placeholders.
+   */
+  createSubscriptionCheckout: protectedProcedure
+    .input(z.object({ plan: z.enum(PLAN_TIERS) }))
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      const merchant = await Merchant.findById(merchantId).select(
+        "email businessName stripeCustomerId subscription",
+      );
+      if (!merchant) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+      if (!isPlanTier(input.plan)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid plan" });
+      }
+
+      const priceId = getPriceIdForPlan(input.plan);
+      if (!priceId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Stripe price not provisioned for ${input.plan}. Run 'npm run stripe:seed' and set STRIPE_PRICE_${input.plan.toUpperCase()}.`,
+        });
+      }
+
+      // Re-use the merchant's stripeCustomerId if we've ever set one. The
+      // sparse-unique index on Merchant.stripeCustomerId ensures we never
+      // double-create. Race condition: two parallel checkouts on a fresh
+      // merchant could each call `createCustomer`. Stripe doesn't dedupe
+      // by email, so we rely on the optimistic write below — the `$set`
+      // is wrapped in a guard that only fills in when the field is null.
+      let customerId = merchant.stripeCustomerId ?? null;
+      if (!customerId) {
+        const created = await createCustomer({
+          email: merchant.email,
+          name: merchant.businessName,
+          metadata: { merchantId: String(merchantId) },
+        });
+        customerId = created.id;
+        // Conditional update — only stamps if still null. If a parallel
+        // checkout beat us, we re-load and use that customer instead.
+        const claim = await Merchant.findOneAndUpdate(
+          { _id: merchantId, stripeCustomerId: { $exists: false } },
+          { $set: { stripeCustomerId: customerId } },
+          { new: true },
+        )
+          .select("stripeCustomerId")
+          .lean();
+        if (!claim) {
+          const reloaded = await Merchant.findById(merchantId)
+            .select("stripeCustomerId")
+            .lean();
+          customerId = reloaded?.stripeCustomerId ?? customerId;
+        }
+      }
+
+      const successUrl = webUrl(`/dashboard/billing?stripe=success&mode=subscription`);
+      const cancelUrl = webUrl(`/dashboard/billing?stripe=cancel&mode=subscription`);
+
+      try {
+        const session = await createSubscriptionCheckout({
+          customerId,
+          priceId,
+          successUrl,
+          cancelUrl,
+          metadata: {
+            merchantId: String(merchantId),
+            plan: input.plan,
+            billingProvider: "stripe_subscription",
+          },
+        });
+
+        void writeAudit({
+          merchantId,
+          actorId: merchantId,
+          actorType: "merchant",
+          action: "subscription.checkout_started",
+          subjectType: "merchant",
+          subjectId: merchantId,
+          meta: {
+            provider: "stripe_subscription",
+            plan: input.plan,
+            priceId,
+            customerId,
+            mocked: session.mocked,
+          },
+        });
+
+        return {
+          sessionId: session.id,
+          url: session.url,
+          customerId,
+          mocked: session.mocked,
+        };
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `couldn't open subscription checkout: ${(err as Error).message}`,
+        });
+      }
+    }),
+
+  /**
+   * Hosted Stripe customer portal. The merchant manages their card,
+   * upcoming invoices, plan switches, and cancellation there. The portal
+   * itself fires the same `customer.subscription.*` webhooks so our state
+   * stays in sync without an extra round-trip on return.
+   *
+   * Configuration of the portal (which features are enabled, branding,
+   * cancellation policy) lives in the Stripe Dashboard — see
+   * docs/operations.md.
+   */
+  createPortalSession: protectedProcedure.mutation(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    const merchant = await Merchant.findById(merchantId)
+      .select("stripeCustomerId")
+      .lean();
+    if (!merchant) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+    }
+    if (!merchant.stripeCustomerId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "no Stripe customer on file — start a subscription checkout first to enable the portal",
+      });
+    }
+    try {
+      const session = await createPortalSession({
+        customerId: merchant.stripeCustomerId,
+        returnUrl: webUrl("/dashboard/billing"),
+      });
+      return { url: session.url, mocked: session.mocked };
+    } catch (err) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `couldn't open portal: ${(err as Error).message}`,
+      });
+    }
+  }),
+
+  /**
+   * Inline proof-of-payment upload. We accept a base64 data URL up to ~2MB
+   * (so a typical bKash screenshot fits) and store it on the Payment doc
+   * itself. Larger pipelines can swap to S3 later by replacing this handler.
+   *
+   * The merchant can upload proof either before submitting the payment
+   * (rare) or after — both flows merge to the same Payment row.
+   */
+  uploadPaymentProof: protectedProcedure
+    .input(
+      z.object({
+        paymentId: z.string().min(1),
+        contentType: z
+          .string()
+          .regex(/^image\/(png|jpeg|jpg|webp|gif)$|^application\/pdf$/i, "image/* or pdf only"),
+        filename: z.string().trim().min(1).max(200).optional(),
+        /** Base64 (no data: prefix) — clients should strip it before send. */
+        data: z.string().min(8).max(3_500_000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.paymentId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid payment id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const payment = await Payment.findOne({
+        _id: new Types.ObjectId(input.paymentId),
+        merchantId,
+      });
+      if (!payment) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "payment not found" });
+      }
+      if (payment.status !== "pending") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "proof can only be attached to pending payments",
+        });
+      }
+      const buf = Buffer.from(input.data, "base64");
+      if (buf.byteLength === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "empty file" });
+      }
+      if (buf.byteLength > 2_000_000) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "file too large — keep proof under 2MB",
+        });
+      }
+      payment.proofFile = {
+        contentType: input.contentType,
+        sizeBytes: buf.byteLength,
+        filename: input.filename ?? undefined,
+        data: input.data,
+        uploadedAt: new Date(),
+      };
+      await payment.save();
+
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        actorType: "merchant",
+        action: "payment.proof_uploaded",
+        subjectType: "payment",
+        subjectId: payment._id,
+        meta: {
+          contentType: input.contentType,
+          sizeBytes: buf.byteLength,
+        },
+      });
+
+      return {
+        ok: true,
+        contentType: input.contentType,
+        sizeBytes: buf.byteLength,
+      };
+    }),
+
+  /**
+   * Read endpoint for the inline proof. Returned as a data URL so the
+   * frontend can drop it directly into an <img> or <a download>. Tenant-
+   * scoped — the merchant or an admin viewing on their behalf gets the
+   * file; nobody else.
+   */
+  getPaymentProof: protectedProcedure
+    .input(z.object({ paymentId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.paymentId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid payment id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const filter: Record<string, unknown> = { _id: new Types.ObjectId(input.paymentId) };
+      if (ctx.user.role !== "admin") filter.merchantId = merchantId;
+      const payment = await Payment.findOne(filter)
+        .select("proofFile proofUrl merchantId")
+        .lean();
+      if (!payment || (!payment.proofFile && !payment.proofUrl)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "no proof on file" });
+      }
+      if (payment.proofFile) {
+        return {
+          kind: "inline" as const,
+          contentType: payment.proofFile.contentType,
+          filename: payment.proofFile.filename ?? null,
+          sizeBytes: payment.proofFile.sizeBytes,
+          dataUrl: `data:${payment.proofFile.contentType};base64,${payment.proofFile.data}`,
+          uploadedAt: payment.proofFile.uploadedAt ?? null,
+        };
+      }
+      return {
+        kind: "url" as const,
+        contentType: null,
+        filename: null,
+        sizeBytes: null,
+        dataUrl: payment.proofUrl ?? null,
+        uploadedAt: null,
+      };
     }),
 
   /**

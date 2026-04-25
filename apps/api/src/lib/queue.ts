@@ -7,6 +7,11 @@ export const QUEUE_NAMES = {
   tracking: "tracking-sync",
   risk: "risk-recompute",
   subscription: "subscription-sweep",
+  webhookRetry: "webhook-retry",
+  commerceImport: "commerce-import",
+  cartRecovery: "cart-recovery",
+  trialReminder: "trial-reminder",
+  subscriptionGrace: "subscription-grace",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

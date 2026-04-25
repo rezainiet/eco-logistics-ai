@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ExternalLink, Inbox, Loader2, XCircle } from "lucide-react";
+import {
+  CheckCircle2,
+  CreditCard,
+  Download,
+  ExternalLink,
+  FileImage,
+  Inbox,
+  Loader2,
+  XCircle,
+} from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,9 +59,12 @@ type PendingPayment = {
   plan: string;
   currentTier: string;
   method: string;
+  provider?: "manual" | "stripe";
   amount: number;
+  currency?: string;
   txnId: string | null;
   proofUrl: string | null;
+  hasProofFile?: boolean;
   status: "pending" | "approved" | "rejected";
 };
 
@@ -77,6 +89,7 @@ export default function AdminBillingPage() {
     payment: null,
     reason: "",
   });
+  const [viewingProofId, setViewingProofId] = useState<string | null>(null);
 
   const list = trpc.adminBilling.listPendingPayments.useQuery({ status, limit: 100 });
   const utils = trpc.useUtils();
@@ -192,8 +205,14 @@ export default function AdminBillingPage() {
                         <div className="capitalize text-sm text-fg">{p.plan}</div>
                         <div className="text-xs text-fg-subtle">current: {p.currentTier}</div>
                       </TableCell>
-                      <TableCell className="px-3 py-3 capitalize text-sm text-fg-muted">
-                        {p.method.replace("_", " ")}
+                      <TableCell className="px-3 py-3 text-sm text-fg-muted">
+                        {p.provider === "stripe" ? (
+                          <Badge className="border-transparent bg-info-subtle text-info">
+                            <CreditCard className="mr-1 h-3 w-3" /> Stripe
+                          </Badge>
+                        ) : (
+                          <span className="capitalize">{p.method.replace("_", " ")}</span>
+                        )}
                       </TableCell>
                       <TableCell className="px-3 py-3 font-mono text-sm tabular-nums text-fg">
                         {formatBDT(p.amount)}
@@ -202,7 +221,16 @@ export default function AdminBillingPage() {
                         {p.txnId ?? "—"}
                       </TableCell>
                       <TableCell className="px-3 py-3">
-                        {p.proofUrl ? (
+                        {p.hasProofFile ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setViewingProofId(p.id)}
+                          >
+                            <FileImage className="mr-1 h-3 w-3" /> Preview
+                          </Button>
+                        ) : p.proofUrl ? (
                           <a
                             href={p.proofUrl}
                             target="_blank"
@@ -531,6 +559,80 @@ export default function AdminBillingPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AdminProofDialog
+        paymentId={viewingProofId}
+        onClose={() => setViewingProofId(null)}
+      />
     </div>
+  );
+}
+
+function AdminProofDialog({
+  paymentId,
+  onClose,
+}: {
+  paymentId: string | null;
+  onClose: () => void;
+}) {
+  const open = paymentId !== null;
+  const proof = trpc.billing.getPaymentProof.useQuery(
+    { paymentId: paymentId ?? "" },
+    { enabled: open, retry: false },
+  );
+  return (
+    <Dialog open={open} onOpenChange={(v) => (!v ? onClose() : null)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Payment proof</DialogTitle>
+        </DialogHeader>
+        {proof.isLoading ? (
+          <div className="flex items-center justify-center py-10 text-fg-subtle">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : proof.error ? (
+          <p className="py-6 text-center text-sm text-fg-faint">
+            {proof.error.message ?? "No proof on file."}
+          </p>
+        ) : proof.data?.dataUrl ? (
+          <div className="space-y-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-fg-faint">
+                {proof.data.contentType ?? "external link"}
+                {proof.data.sizeBytes
+                  ? ` · ${Math.round(proof.data.sizeBytes / 1024)} KB`
+                  : ""}
+              </p>
+              <a
+                href={proof.data.dataUrl}
+                target="_blank"
+                rel="noreferrer"
+                download={proof.data.filename ?? undefined}
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-stroke/14 px-2.5 text-2xs text-fg hover:bg-surface-raised"
+              >
+                <Download className="h-3 w-3" />
+                {proof.data.kind === "url" ? "Open" : "Download"}
+              </a>
+            </div>
+            {proof.data.contentType === "application/pdf" ? (
+              <iframe
+                src={proof.data.dataUrl}
+                className="h-[480px] w-full rounded-md border border-stroke/12"
+                title="Payment proof"
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={proof.data.dataUrl}
+                alt="Payment proof"
+                className="max-h-[480px] w-full rounded-md border border-stroke/12 object-contain"
+              />
+            )}
+          </div>
+        ) : (
+          <p className="py-6 text-center text-sm text-fg-faint">No proof on file.</p>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

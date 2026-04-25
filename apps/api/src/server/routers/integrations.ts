@@ -3,19 +3,32 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
 import {
+  ImportJob,
   Integration,
   INTEGRATION_PROVIDERS,
+  Merchant,
   WebhookInbox,
   type IntegrationProvider,
 } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { billableProcedure, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
 import { decryptSecret, encryptSecret, maskSecretPayload } from "../../lib/crypto.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import {
+  assertIntegrationCapacity,
+  assertIntegrationProvider,
+  entitlementsFor,
+} from "../../lib/entitlements.js";
+import type { PlanTier } from "../../lib/plans.js";
+import {
   buildShopifyInstallUrl,
 } from "../../lib/integrations/shopify.js";
+import { registerWooWebhooks } from "../../lib/integrations/woocommerce.js";
 import type { IntegrationCredentials } from "../../lib/integrations/types.js";
-import { ingestNormalizedOrder } from "../ingest.js";
+import {
+  replayWebhookInbox,
+  WEBHOOK_RETRY_MAX_ATTEMPTS,
+} from "../ingest.js";
+import { enqueueCommerceImport } from "../../workers/commerceImport.js";
 import { writeAudit } from "../../lib/audit.js";
 
 function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
@@ -117,10 +130,17 @@ export const integrationsRouter = router({
     }));
   }),
 
-  connect: protectedProcedure
+  connect: billableProcedure
     .input(connectInputSchema)
     .mutation(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
+      const sub = ctx.subscription as SubscriptionSnapshot | null;
+      const tier: PlanTier = sub?.tier ?? "starter";
+      // Plan gates: provider allowlist + simultaneous-connector cap.
+      // CSV is uncapped (manual fallback), enforced inside the helper.
+      assertIntegrationProvider(tier, input.provider);
+      await assertIntegrationCapacity(merchantId, tier, input.provider);
+
       const now = new Date();
       let accountKey: string;
       let credentialsPayload: Record<string, string> = {};
@@ -184,13 +204,63 @@ export const integrationsRouter = router({
         { upsert: true, new: true },
       );
 
+      // Auto-register webhooks for Woo on connect — Shopify's flow waits for
+      // OAuth completion (handled in the callback router). Woo uses long-
+      // lived consumer keys so we can do it inline.
+      let wooWebhookSummary: { registered: string[]; errors: string[] } | null = null;
+      if (input.provider === "woocommerce" && status === "connected") {
+        const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/woocommerce/${String(integration._id)}`;
+        try {
+          wooWebhookSummary = await registerWooWebhooks({
+            siteUrl: input.siteUrl,
+            consumerKey: input.consumerKey,
+            consumerSecret: input.consumerSecret,
+            callbackUrl,
+            webhookSecret,
+          });
+          await Integration.updateOne(
+            { _id: integration._id },
+            {
+              $set: {
+                "webhookStatus.registered": wooWebhookSummary.registered.length > 0,
+                "webhookStatus.lastError":
+                  wooWebhookSummary.errors.length > 0
+                    ? wooWebhookSummary.errors.join("; ").slice(0, 500)
+                    : null,
+              },
+            },
+          );
+        } catch (err) {
+          // Never fail connect on webhook registration — the merchant still
+          // has the credentials and can set the URL manually if needed.
+          await Integration.updateOne(
+            { _id: integration._id },
+            {
+              $set: {
+                "webhookStatus.lastError": (err as Error).message.slice(0, 500),
+              },
+            },
+          );
+        }
+      }
+
       void writeAudit({
         merchantId,
         actorId: merchantId,
         action: "integration.connected",
         subjectType: "integration",
         subjectId: integration._id,
-        meta: { provider: input.provider, accountKey, status },
+        meta: {
+          provider: input.provider,
+          accountKey,
+          status,
+          ...(wooWebhookSummary
+            ? {
+                webhooksRegistered: wooWebhookSummary.registered,
+                webhookErrors: wooWebhookSummary.errors,
+              }
+            : {}),
+        },
       });
 
       const result: {
@@ -290,12 +360,13 @@ export const integrationsRouter = router({
     }),
 
   /**
-   * Pull-style import — fetches recent orders from the upstream API and runs
-   * each through the ingestion pipeline. Useful for the first-time connect
-   * flow or when webhooks fail and the merchant needs to backfill manually.
+   * Async pull-style import. Replaces the old synchronous loop — the
+   * mutation now creates an `ImportJob` row, enqueues the worker, and
+   * returns the job id immediately. The dashboard polls `getImportJob` for
+   * progress.
    */
   importOrders: protectedProcedure
-    .input(z.object({ id: z.string().min(1), limit: z.number().int().min(1).max(50).default(10) }))
+    .input(z.object({ id: z.string().min(1), limit: z.number().int().min(1).max(50).default(25) }))
     .mutation(async ({ ctx, input }) => {
       if (!Types.ObjectId.isValid(input.id)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
@@ -304,7 +375,9 @@ export const integrationsRouter = router({
       const integration = await Integration.findOne({
         _id: new Types.ObjectId(input.id),
         merchantId,
-      });
+      })
+        .select("_id provider")
+        .lean();
       if (!integration) {
         throw new TRPCError({ code: "NOT_FOUND", message: "integration not found" });
       }
@@ -314,37 +387,59 @@ export const integrationsRouter = router({
           message: "this provider does not support pull-style import",
         });
       }
-      const adapter = adapterFor(integration.provider as IntegrationProvider);
-      const creds = decryptCreds(integration.credentials ?? {});
-      const result = await adapter.fetchSampleOrders(creds, input.limit);
-      if (!result.ok) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: result.error ?? "import failed",
-        });
+      // Reject when an import is already in flight for this integration so
+      // double-clicks don't fan out duplicate work.
+      const existingActive = await ImportJob.findOne({
+        integrationId: integration._id,
+        status: { $in: ["queued", "running"] },
+      })
+        .select("_id")
+        .lean();
+      if (existingActive) {
+        return { jobId: String(existingActive._id), status: "queued" as const };
       }
-      let imported = 0;
-      let duplicates = 0;
-      let failed = 0;
-      for (const normalized of result.sample) {
-        const ingestResult = await ingestNormalizedOrder(normalized, {
-          merchantId,
-          integrationId: integration._id,
-          source: integration.provider as
-            | "shopify"
-            | "woocommerce"
-            | "custom_api",
-          channel: "api",
-        });
-        if (ingestResult.ok && !ingestResult.duplicate) imported += 1;
-        else if (ingestResult.duplicate) duplicates += 1;
-        else failed += 1;
+      const job = await ImportJob.create({
+        merchantId,
+        integrationId: integration._id,
+        provider: integration.provider,
+        status: "queued",
+        requestedLimit: input.limit,
+        triggeredBy: merchantId,
+      });
+      await enqueueCommerceImport({ importJobId: String(job._id) });
+      return { jobId: String(job._id), status: "queued" as const };
+    }),
+
+  /** Poll endpoint for the import-progress UI. */
+  getImportJob: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
       }
-      await Integration.updateOne(
-        { _id: integration._id },
-        { $set: { lastSyncAt: new Date() } },
-      );
-      return { imported, duplicates, failed, scanned: result.sample.length };
+      const merchantId = merchantObjectId(ctx);
+      const job = await ImportJob.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+      }).lean();
+      if (!job) throw new TRPCError({ code: "NOT_FOUND", message: "import job not found" });
+      const total = job.totalRows ?? 0;
+      const processed = job.processedRows ?? 0;
+      return {
+        id: String(job._id),
+        integrationId: String(job.integrationId),
+        provider: job.provider,
+        status: job.status,
+        totalRows: total,
+        processedRows: processed,
+        importedRows: job.importedRows ?? 0,
+        duplicateRows: job.duplicateRows ?? 0,
+        failedRows: job.failedRows ?? 0,
+        progressPct: total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0,
+        lastError: job.lastError ?? null,
+        startedAt: job.startedAt ?? null,
+        finishedAt: job.finishedAt ?? null,
+      };
     }),
 
   /** Reveal the webhook secret once for re-rotation. Audit-logged. */
@@ -427,8 +522,115 @@ export const integrationsRouter = router({
         lastError: r.lastError ?? null,
         receivedAt: r.receivedAt,
         processedAt: r.processedAt ?? null,
+        nextRetryAt: r.nextRetryAt ?? null,
+        deadLetteredAt: r.deadLetteredAt ?? null,
         resolvedOrderId: r.resolvedOrderId ? String(r.resolvedOrderId) : null,
+        canReplay:
+          (r.status === "failed" || r.status === "received") &&
+          (r.attempts ?? 0) < WEBHOOK_RETRY_MAX_ATTEMPTS,
       }));
+    }),
+
+  /**
+   * Inspect a single webhook delivery — full payload + error trail. Used by
+   * the dashboard's debug pane. Returns 404 cleanly so a bad id doesn't leak
+   * presence information.
+   */
+  inspectWebhook: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const row = await WebhookInbox.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+      }).lean();
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "webhook not found" });
+      }
+      return {
+        id: String(row._id),
+        provider: row.provider,
+        topic: row.topic,
+        externalId: row.externalId,
+        status: row.status,
+        attempts: row.attempts ?? 0,
+        lastError: row.lastError ?? null,
+        receivedAt: row.receivedAt,
+        processedAt: row.processedAt ?? null,
+        nextRetryAt: row.nextRetryAt ?? null,
+        deadLetteredAt: row.deadLetteredAt ?? null,
+        resolvedOrderId: row.resolvedOrderId ? String(row.resolvedOrderId) : null,
+        payload: row.payload ?? null,
+        payloadBytes: row.payloadBytes ?? 0,
+        canReplay:
+          (row.status === "failed" || row.status === "received") &&
+          (row.attempts ?? 0) < WEBHOOK_RETRY_MAX_ATTEMPTS,
+      };
+    }),
+
+  /**
+   * Plan-aware entitlements view. Drives the dashboard's upgrade CTAs and
+   * disables provider rows the merchant isn't allowed to connect. Cheap to
+   * call — derived from a single Merchant.findById + plan lookup.
+   */
+  getEntitlements: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    const m = await Merchant.findById(merchantId).select("subscription.tier").lean();
+    const tier = (m?.subscription?.tier ?? "starter") as PlanTier;
+    const view = entitlementsFor(tier);
+    const activeCount = await Integration.countDocuments({
+      merchantId,
+      status: { $in: ["pending", "connected"] },
+      provider: { $ne: "csv" },
+    });
+    return {
+      ...view,
+      activeIntegrationCount: activeCount,
+      remainingIntegrationSlots:
+        view.maxIntegrations <= 0
+          ? 0
+          : Math.max(0, view.maxIntegrations - activeCount),
+    };
+  }),
+
+  /**
+   * Manual webhook replay — reruns ingestion for a failed `WebhookInbox` row.
+   * Audit-logged with the merchant as the actor. Bypasses the worker's
+   * `nextRetryAt` gate so the merchant can debug interactively.
+   */
+  replayWebhook: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const inbox = await WebhookInbox.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+      }).select("_id status attempts");
+      if (!inbox) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "webhook not found" });
+      }
+      if (inbox.status === "succeeded") {
+        return { ok: true, status: "skipped" as const, attempts: inbox.attempts ?? 0 };
+      }
+      const result = await replayWebhookInbox({
+        inboxId: inbox._id,
+        actorId: merchantId,
+        manual: true,
+      });
+      return {
+        ok: result.ok,
+        status: result.status,
+        attempts: result.attempts,
+        orderId: result.orderId ?? null,
+        error: result.error ?? null,
+        duplicate: !!result.duplicate,
+      };
     }),
 });
 

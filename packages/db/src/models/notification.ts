@@ -12,6 +12,8 @@ export const NOTIFICATION_KINDS = [
   "fraud.rescored_high",
   "fraud.velocity_breach",
   "fraud.blocked_match",
+  "integration.webhook_failed",
+  "recovery.cart_pending",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
@@ -28,7 +30,7 @@ const notificationSchema = new Schema(
     /** Optional deep-link target (e.g. `/dashboard/fraud-review?id=…`). */
     link: { type: String, trim: true, maxlength: 500 },
     /** Subject reference — used for de-dup and UI badges. */
-    subjectType: { type: String, enum: ["order", "merchant"], default: "order" },
+    subjectType: { type: String, enum: ["order", "merchant", "integration"], default: "order" },
     subjectId: { type: Schema.Types.ObjectId },
     /** Arbitrary payload (risk score, COD value, matched signals, …). */
     meta: { type: Schema.Types.Mixed },

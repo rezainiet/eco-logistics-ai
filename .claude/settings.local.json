@@ -51,7 +51,8 @@
       "Bash(rm -rf .next)",
       "PowerShell($ids = @\\(11528, 16576, 24192, 24936, 25180, 27464, 28224, 29284, 34292\\); foreach \\($id in $ids\\) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; Write-Host \"Killed $id\" })",
       "Bash(npm --workspace packages/db run build)",
-      "Bash(npm --workspace apps/api run test -- --reporter=default)"
+      "Bash(npm --workspace apps/api run test -- --reporter=default)",
+      "Bash(chmod +x C:/devs/ecommerce-logistics/scripts/backup-mongo.sh)"
     ]
   }
 }

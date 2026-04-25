@@ -9,6 +9,11 @@ import {
 } from "../trpc.js";
 import { writeAudit } from "../../lib/audit.js";
 import { getPlan, PLAN_TIERS } from "../../lib/plans.js";
+import {
+  buildPaymentApprovedEmail,
+  sendEmail,
+  webUrl,
+} from "../../lib/email.js";
 
 const DEFAULT_PERIOD_DAYS = 30;
 
@@ -33,6 +38,8 @@ export const adminBillingRouter = router({
       const docs = await Payment.find({ status: input.status })
         .sort({ createdAt: -1 })
         .limit(input.limit)
+        // Skip the file blob in list views — the admin previews via getPaymentProof.
+        .select("-proofFile.data")
         .lean();
       const merchantIds = [...new Set(docs.map((d) => String(d.merchantId)))];
       const merchants = await Merchant.find({
@@ -54,9 +61,18 @@ export const adminBillingRouter = router({
           amount: p.amount,
           currency: p.currency,
           method: p.method,
+          provider: (p.provider as "manual" | "stripe" | undefined) ?? "manual",
           txnId: p.txnId ?? null,
           senderPhone: p.senderPhone ?? null,
           proofUrl: p.proofUrl ?? null,
+          hasProofFile: !!p.proofFile,
+          proofFile: p.proofFile
+            ? {
+                contentType: p.proofFile.contentType,
+                sizeBytes: p.proofFile.sizeBytes,
+                filename: p.proofFile.filename ?? null,
+              }
+            : null,
           notes: p.notes ?? null,
           status: p.status,
           createdAt: p.createdAt,
@@ -90,7 +106,9 @@ export const adminBillingRouter = router({
         });
       }
 
-      const merchant = await Merchant.findById(payment.merchantId).select("subscription");
+      const merchant = await Merchant.findById(payment.merchantId).select(
+        "subscription email businessName",
+      );
       if (!merchant) {
         throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
       }
@@ -145,6 +163,27 @@ export const adminBillingRouter = router({
         subjectId: merchant._id,
         meta: { tier: plan.tier, periodEnd },
       });
+
+      // Receipt email — fire-and-forget so admin approval never blocks on
+      // the email transport. The email service is itself a no-op when
+      // RESEND_API_KEY is unset, so dev/test runs are silent.
+      const tpl = buildPaymentApprovedEmail({
+        businessName: merchant.businessName,
+        planName: plan.name,
+        amount: payment.amount,
+        currency: payment.currency,
+        periodEnd,
+        dashboardUrl: webUrl("/dashboard"),
+      });
+      void sendEmail({
+        to: merchant.email,
+        subject: tpl.subject,
+        html: tpl.html,
+        text: tpl.text,
+        tag: "payment_approved",
+      }).catch((err) =>
+        console.error("[adminBilling] payment email send failed", (err as Error).message),
+      );
 
       return {
         id: String(payment._id),

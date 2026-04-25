@@ -125,6 +125,82 @@ function normalizeWooOrder(payload: WooOrderPayload): NormalizedOrder | null {
   };
 }
 
+/**
+ * Auto-register inbound order webhooks with WooCommerce. Uses the WC REST
+ * API's `/webhooks` endpoint with the integration's stored consumer key
+ * pair. We subscribe to `order.created` and `order.updated` and use the
+ * merchant's per-integration HMAC secret so deliveries verify against our
+ * existing collector. Idempotent — existing matching subscriptions are
+ * detected and skipped.
+ */
+export async function registerWooWebhooks(args: {
+  siteUrl: string;
+  consumerKey: string;
+  consumerSecret: string;
+  callbackUrl: string;
+  webhookSecret: string;
+  topics?: string[];
+  fetchImpl?: typeof fetch;
+}): Promise<{ registered: string[]; errors: string[] }> {
+  const fetcher = args.fetchImpl ?? fetch;
+  const base = args.siteUrl.replace(/\/$/, "");
+  const auth = "Basic " +
+    Buffer.from(`${args.consumerKey}:${args.consumerSecret}`).toString("base64");
+  const topics = args.topics ?? ["order.created", "order.updated"];
+  const registered: string[] = [];
+  const errors: string[] = [];
+
+  let existing: Map<string, string> = new Map();
+  try {
+    const listRes = await fetcher(`${base}/wp-json/wc/v3/webhooks?per_page=100`, {
+      headers: { Authorization: auth, Accept: "application/json" },
+    });
+    if (listRes.ok) {
+      const body = (await listRes.json()) as Array<{ topic?: string; delivery_url?: string; status?: string }>;
+      for (const w of body) {
+        if (w.delivery_url === args.callbackUrl && w.topic && w.status === "active") {
+          existing.set(w.topic, w.delivery_url);
+        }
+      }
+    }
+  } catch {
+    // Best-effort listing.
+  }
+
+  for (const topic of topics) {
+    if (existing.has(topic)) {
+      registered.push(topic);
+      continue;
+    }
+    try {
+      const res = await fetcher(`${base}/wp-json/wc/v3/webhooks`, {
+        method: "POST",
+        headers: {
+          Authorization: auth,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          name: `Logistics ${topic}`,
+          topic,
+          delivery_url: args.callbackUrl,
+          secret: args.webhookSecret,
+          status: "active",
+        }),
+      });
+      if (res.ok) {
+        registered.push(topic);
+      } else {
+        const detail = await res.text().catch(() => "");
+        errors.push(`${topic}: ${res.status} ${detail.slice(0, 120)}`);
+      }
+    } catch (err) {
+      errors.push(`${topic}: ${(err as Error).message}`);
+    }
+  }
+  return { registered, errors };
+}
+
 export const wooAdapter: IntegrationAdapter = {
   async testConnection(creds): Promise<ConnectionTestResult> {
     if (!creds.siteUrl || !creds.consumerKey || !creds.consumerSecret) {

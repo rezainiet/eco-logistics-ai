@@ -91,7 +91,11 @@ export const customApiAdapter: IntegrationAdapter = {
     return normalizeCustom(payload as CustomPayload);
   },
   verifyWebhookSignature({ rawBody, headers, secret }) {
-    if (!secret) return true; // optional — only enforced when a secret is configured
+    // Custom-API integrations always mint a webhook secret on connect, so a
+    // missing secret here means the row is malformed or the merchant rotated
+    // and never re-saved. We reject rather than silently accepting — there's
+    // no legitimate "unsigned" mode.
+    if (!secret) return false;
     const hdr = headers["x-ecom-signature"];
     const provided = Array.isArray(hdr) ? hdr[0] : hdr;
     if (!provided || typeof provided !== "string") return false;

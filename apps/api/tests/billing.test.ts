@@ -116,11 +116,45 @@ describe("billingRouter", () => {
     expect(res.total).toBe(0);
   });
 
-  it("past_due subscription blocks billable procedures", async () => {
-    const m = await createMerchant({ tier: "growth", status: "past_due" });
+  it("past_due subscription is allowed during grace, blocked after grace expires", async () => {
+    // past_due + grace still in the future = soft state, merchant keeps working.
+    const inGrace = await createMerchant({ tier: "growth", status: "past_due" });
+    await Merchant.updateOne(
+      { _id: inGrace._id },
+      {
+        $set: {
+          "subscription.gracePeriodEndsAt": new Date(Date.now() + 86400_000),
+        },
+      },
+    );
+    const callerInGrace = callerFor(authUserFor(inGrace));
+    await expect(callerInGrace.orders.createOrder(cleanOrder)).resolves.toBeDefined();
+
+    // past_due + grace already in the past = hard block.
+    const expired = await createMerchant({
+      tier: "growth",
+      status: "past_due",
+      email: `expired-${Date.now()}@test.com`,
+    });
+    await Merchant.updateOne(
+      { _id: expired._id },
+      {
+        $set: {
+          "subscription.gracePeriodEndsAt": new Date(Date.now() - 60_000),
+        },
+      },
+    );
+    const callerExpired = callerFor(authUserFor(expired));
+    await expect(callerExpired.orders.createOrder(cleanOrder)).rejects.toThrowError(
+      /subscription_grace_expired/i,
+    );
+  });
+
+  it("suspended subscription always blocks billable procedures", async () => {
+    const m = await createMerchant({ tier: "growth", status: "suspended" });
     const caller = callerFor(authUserFor(m));
     await expect(caller.orders.createOrder(cleanOrder)).rejects.toThrowError(
-      /subscription_past_due/i,
+      /subscription_suspended/i,
     );
   });
 

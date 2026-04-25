@@ -1,5 +1,6 @@
 "use client";
 
+import { cloneElement, isValidElement, useId } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -119,12 +120,19 @@ function Field({
   label: string;
   error?: string;
   className?: string;
-  children: React.ReactNode;
+  children: React.ReactElement;
 }) {
+  // Associate the label with the input — improves screen-reader behavior
+  // and lets Playwright's `getByLabel(...)` resolve the input reliably.
+  const reactId = useId();
+  const childId = (children.props as { id?: string }).id ?? reactId;
+  const enhancedChild = isValidElement(children)
+    ? cloneElement(children, { id: childId } as { id: string })
+    : children;
   return (
     <div className={`space-y-1.5 ${className ?? ""}`}>
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={childId}>{label}</Label>
+      {enhancedChild}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );

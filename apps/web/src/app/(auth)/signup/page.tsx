@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, Sparkles } from "lucide-react";
+import { isPlanTier, PLANS } from "@ecom/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,8 +26,11 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
-export default function SignupPage() {
+function SignupForm() {
   const router = useRouter();
+  const params = useSearchParams();
+  const planParam = params.get("plan");
+  const selectedPlan = isPlanTier(planParam) ? PLANS[planParam] : null;
   const [error, setError] = useState<string | null>(null);
 
   const {
@@ -71,6 +75,11 @@ export default function SignupPage() {
         <p className="text-sm text-fg-subtle">
           Start managing your logistics in under 60 seconds.
         </p>
+        {selectedPlan ? (
+          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand-subtle px-2.5 py-1 text-xs font-medium text-brand">
+            <Sparkles className="h-3 w-3" /> 14-day trial · {selectedPlan.name} plan when you upgrade
+          </p>
+        ) : null}
       </div>
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
         <div className="space-y-2">
@@ -141,6 +150,21 @@ export default function SignupPage() {
           Sign in
         </Link>
       </p>
+      <p className="mt-2 text-center text-xs text-fg-faint">
+        See plans on the{" "}
+        <Link href="/pricing" className="hover:text-fg">
+          pricing page
+        </Link>
+        .
+      </p>
     </div>
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense fallback={null}>
+      <SignupForm />
+    </Suspense>
   );
 }

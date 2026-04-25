@@ -10,3 +10,5 @@ export * from "./models/integration.js";
 export * from "./models/webhookInbox.js";
 export * from "./models/trackingEvent.js";
 export * from "./models/trackingSession.js";
+export * from "./models/importJob.js";
+export * from "./models/recoveryTask.js";

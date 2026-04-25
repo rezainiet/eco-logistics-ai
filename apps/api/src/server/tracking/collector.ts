@@ -11,6 +11,7 @@ import {
 } from "@ecom/db";
 import { resolveIdentityForOrder } from "../ingest.js";
 import { Order } from "@ecom/db";
+import { normalizePhoneOrRaw, phoneLookupVariants } from "../../lib/phone.js";
 
 /**
  * Behavior collector. Public endpoint hit by the storefront SDK with a
@@ -149,7 +150,8 @@ trackingRouter.post(
       if (firstAt === null || occurredAt < firstAt) firstAt = occurredAt;
       if (lastAt === null || occurredAt > lastAt) lastAt = occurredAt;
 
-      const phone = clamp(ev.phone, 32);
+      const rawPhone = clamp(ev.phone, 32);
+      const phone = rawPhone ? (normalizePhoneOrRaw(rawPhone) ?? rawPhone) : undefined;
       const email = clamp(ev.email, 200)?.toLowerCase();
       if (phone) identityPhone = phone;
       if (email) identityEmail = email;
@@ -366,7 +368,9 @@ async function stitchExistingOrder(args: {
     createdAt: { $gte: since },
   };
   if (args.phone) {
-    filter["customer.phone"] = args.phone;
+    const variants = phoneLookupVariants(args.phone);
+    filter["customer.phone"] =
+      variants.length > 1 ? { $in: variants } : args.phone;
   } else if (args.email) {
     filter["source.customerEmail"] = args.email;
   } else {

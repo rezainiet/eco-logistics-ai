@@ -1,14 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   CheckCircle2,
   Clock,
   CreditCard,
   Crown,
+  Download,
+  FileImage,
+  Loader2,
+  Paperclip,
   Receipt,
   Sparkles,
+  Upload,
   Zap,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -21,6 +27,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -78,20 +90,96 @@ function formatDate(d: Date | string | null): string {
 }
 
 export default function BillingPage() {
+  const params = useSearchParams();
   const plan = trpc.billing.getPlan.useQuery();
   const plans = trpc.billing.listPlans.useQuery();
   const usage = trpc.billing.getUsage.useQuery();
   const payments = trpc.billing.listPayments.useQuery({ limit: 25 });
   const utils = trpc.useUtils();
 
+  // Surface Stripe redirect outcome the moment the merchant lands back here.
+  // The webhook may not have fired yet — we still poll listPayments so the
+  // status flips to `approved` within a couple seconds of activation.
+  useEffect(() => {
+    const stripeFlag = params.get("stripe");
+    if (!stripeFlag) return;
+    if (stripeFlag === "success") {
+      toast.success(
+        "Payment received",
+        "We're activating your plan now. The new tier appears in a moment.",
+      );
+    } else if (stripeFlag === "cancel") {
+      toast.error("Checkout cancelled", "No charge was made.");
+    }
+    void utils.billing.getPlan.invalidate();
+    void utils.billing.listPayments.invalidate();
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("stripe");
+      url.searchParams.delete("payment");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, [params, utils]);
+
   const submitPayment = trpc.billing.submitPayment.useMutation({
-    onSuccess: () => {
+    onSuccess: async (created) => {
       toast.success("Payment submitted", "We'll email you once it's approved.");
-      utils.billing.getPlan.invalidate();
-      utils.billing.listPayments.invalidate();
+      await utils.billing.getPlan.invalidate();
+      await utils.billing.listPayments.invalidate();
+      const file = pendingProofRef.current;
+      if (file) {
+        try {
+          await uploadProof.mutateAsync({
+            paymentId: created.id,
+            ...(await readFileAsBase64(file)),
+          });
+          await utils.billing.listPayments.invalidate();
+        } catch (err) {
+          toast.error("Receipt saved, but proof upload failed", (err as Error).message);
+        } finally {
+          pendingProofRef.current = null;
+        }
+      }
       setForm({ plan: "growth", method: "bkash", amount: "", txnId: "", senderPhone: "", proofUrl: "", notes: "" });
+      setProofPreview(null);
     },
     onError: (err) => toast.error("Could not submit", err.message),
+  });
+
+  const uploadProof = trpc.billing.uploadPaymentProof.useMutation();
+
+  const stripeCheckout = trpc.billing.createCheckoutSession.useMutation({
+    onSuccess: (data) => {
+      if (data.mocked) {
+        toast.success(
+          "Stripe is in mock mode",
+          "STRIPE_SECRET_KEY isn't set — opening the success page directly.",
+        );
+      }
+      // Same-tab redirect so the merchant never sees a flash of the old page.
+      window.location.href = data.url;
+    },
+    onError: (err) => toast.error("Couldn't start checkout", err.message),
+  });
+
+  const subscribe = trpc.billing.createSubscriptionCheckout.useMutation({
+    onSuccess: (data) => {
+      if (data.mocked) {
+        toast.success(
+          "Stripe is in mock mode",
+          "STRIPE_SECRET_KEY isn't set — opening the success page directly.",
+        );
+      }
+      window.location.href = data.url;
+    },
+    onError: (err) => toast.error("Couldn't start subscription", err.message),
+  });
+
+  const openPortal = trpc.billing.createPortalSession.useMutation({
+    onSuccess: (data) => {
+      window.location.href = data.url;
+    },
+    onError: (err) => toast.error("Couldn't open billing portal", err.message),
   });
 
   const cancel = trpc.billing.cancel.useMutation({
@@ -110,6 +198,13 @@ export default function BillingPage() {
     proofUrl: "",
     notes: "",
   });
+  const pendingProofRef = useRef<File | null>(null);
+  const [proofPreview, setProofPreview] = useState<{
+    name: string;
+    size: number;
+    type: string;
+  } | null>(null);
+  const [viewingProofId, setViewingProofId] = useState<string | null>(null);
 
   const currentPlan = plan.data?.plan;
   const subscription = plan.data?.subscription;
@@ -172,8 +267,37 @@ export default function BillingPage() {
         <div className="flex items-start gap-3 rounded-md border border-danger/30 bg-danger/8 p-4">
           <AlertCircle className="mt-0.5 h-5 w-5 text-danger" />
           <div className="text-sm">
-            <div className="font-medium text-danger">Subscription is past due</div>
-            <p className="text-fg-subtle">Renew to restore access to billable features.</p>
+            <div className="font-medium text-danger">
+              Payment failed — {subscription.graceDaysLeft != null
+                ? subscription.graceDaysLeft <= 0
+                  ? "grace period expired, suspension imminent"
+                  : `${subscription.graceDaysLeft} day${subscription.graceDaysLeft === 1 ? "" : "s"} of grace remaining`
+                : "subscription is past due"}
+            </div>
+            <p className="text-fg-subtle">
+              Update your card via the customer portal to recover automatically.{" "}
+              {plan.data?.stripe?.hasCustomer ? (
+                <button
+                  type="button"
+                  onClick={() => openPortal.mutate()}
+                  className="font-medium underline underline-offset-2 hover:text-fg"
+                  disabled={openPortal.isPending}
+                >
+                  {openPortal.isPending ? "Opening…" : "Open portal →"}
+                </button>
+              ) : null}
+            </p>
+          </div>
+        </div>
+      ) : subscription?.status === "suspended" ? (
+        <div className="flex items-start gap-3 rounded-md border border-danger/30 bg-danger/8 p-4">
+          <AlertCircle className="mt-0.5 h-5 w-5 text-danger" />
+          <div className="text-sm">
+            <div className="font-medium text-danger">Account suspended</div>
+            <p className="text-fg-subtle">
+              We couldn't recover payment within the grace window. Update your card to reactivate
+              instantly.
+            </p>
           </div>
         </div>
       ) : null}
@@ -221,7 +345,23 @@ export default function BillingPage() {
                 Payment under review — we'll activate once approved.
               </div>
             ) : null}
-            {subscription?.status === "active" ? (
+            {plan.data?.stripe?.hasCustomer ? (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => openPortal.mutate()}
+                disabled={openPortal.isPending}
+              >
+                {openPortal.isPending ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CreditCard className="mr-2 h-4 w-4" />
+                )}
+                Manage billing
+              </Button>
+            ) : null}
+            {subscription?.status === "active" &&
+            subscription.billingProvider === "manual" ? (
               <Button
                 variant="outline"
                 className="w-full"
@@ -325,14 +465,39 @@ export default function BillingPage() {
                       </li>
                     ))}
                   </ul>
-                  <Button
-                    className="w-full"
-                    variant={isCurrent ? "outline" : "default"}
-                    onClick={() => setForm((f) => ({ ...f, plan: p.tier, amount: String(p.priceBDT) }))}
-                    disabled={isCurrent}
-                  >
-                    {isCurrent ? "Current plan" : "Choose plan"}
-                  </Button>
+                  <div className="space-y-2">
+                    <Button
+                      className="w-full"
+                      onClick={() => subscribe.mutate({ plan: p.tier })}
+                      disabled={isCurrent || subscribe.isPending}
+                    >
+                      {subscribe.isPending && subscribe.variables?.plan === p.tier ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <CreditCard className="mr-2 h-4 w-4" />
+                      )}
+                      {isCurrent ? "Current plan" : "Subscribe monthly"}
+                    </Button>
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      onClick={() => stripeCheckout.mutate({ plan: p.tier })}
+                      disabled={isCurrent || stripeCheckout.isPending}
+                    >
+                      {stripeCheckout.isPending && stripeCheckout.variables?.plan === p.tier ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      {isCurrent ? "—" : "Pay one-shot"}
+                    </Button>
+                    <Button
+                      className="w-full"
+                      variant="ghost"
+                      onClick={() => setForm((f) => ({ ...f, plan: p.tier, amount: String(p.priceBDT) }))}
+                      disabled={isCurrent}
+                    >
+                      {isCurrent ? "—" : "Pay manually (bKash/Nagad)"}
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             );
@@ -398,8 +563,9 @@ export default function BillingPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Transaction ID</Label>
+              <Label htmlFor="payment-txn-id">Transaction ID</Label>
               <Input
+                id="payment-txn-id"
                 value={form.txnId}
                 onChange={(e) => setForm((f) => ({ ...f, txnId: e.target.value }))}
                 placeholder="e.g. 9A3C8F21"
@@ -419,6 +585,28 @@ export default function BillingPage() {
                 value={form.proofUrl}
                 onChange={(e) => setForm((f) => ({ ...f, proofUrl: e.target.value }))}
                 placeholder="https://…/screenshot.png"
+              />
+              <p className="text-2xs text-fg-faint">
+                Or upload a screenshot below — uploads override the URL.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Upload screenshot (optional)</Label>
+              <ProofUploader
+                preview={proofPreview}
+                onPick={(file) => {
+                  if (!file) {
+                    pendingProofRef.current = null;
+                    setProofPreview(null);
+                    return;
+                  }
+                  if (file.size > 2_000_000) {
+                    toast.error("File too large", "Keep proof under 2MB.");
+                    return;
+                  }
+                  pendingProofRef.current = file;
+                  setProofPreview({ name: file.name, size: file.size, type: file.type });
+                }}
               />
             </div>
             <div className="space-y-1.5 md:col-span-2">
@@ -453,38 +641,81 @@ export default function BillingPage() {
                 <TableHead>Date</TableHead>
                 <TableHead>Plan</TableHead>
                 <TableHead>Method</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Txn ID</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Reference</TableHead>
+                <TableHead>Period</TableHead>
+                <TableHead>Proof</TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {payments.data?.length ? (
-                payments.data.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell>{formatDate(p.createdAt)}</TableCell>
-                    <TableCell className="capitalize">{p.plan}</TableCell>
-                    <TableCell className="capitalize">{p.method.replace("_", " ")}</TableCell>
-                    <TableCell>{formatBDT(p.amount)}</TableCell>
-                    <TableCell className="font-mono text-xs">{p.txnId ?? "—"}</TableCell>
-                    <TableCell>
-                      <Badge
-                        className={
-                          p.status === "approved"
-                            ? "bg-success-subtle text-success"
-                            : p.status === "rejected"
-                              ? "bg-danger-subtle text-danger"
-                              : "bg-warning-subtle text-warning"
-                        }
-                      >
-                        {p.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))
+                payments.data.map((p) => {
+                  const provider = p.provider ?? "manual";
+                  const reference =
+                    provider === "stripe"
+                      ? "Stripe"
+                      : p.txnId ?? "—";
+                  const periodLabel =
+                    p.periodStart && p.periodEnd
+                      ? `${formatDate(p.periodStart)} → ${formatDate(p.periodEnd)}`
+                      : "—";
+                  const hasProof = !!p.proofFile || !!p.proofUrl;
+                  return (
+                    <TableRow key={p.id}>
+                      <TableCell>{formatDate(p.createdAt)}</TableCell>
+                      <TableCell className="capitalize">{p.plan}</TableCell>
+                      <TableCell>
+                        <span className="inline-flex items-center gap-1.5 capitalize">
+                          {provider === "stripe" ? (
+                            <Badge className="border-transparent bg-info-subtle text-info">
+                              <CreditCard className="mr-1 h-3 w-3" /> Card
+                            </Badge>
+                          ) : (
+                            <span>{p.method.replace("_", " ")}</span>
+                          )}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs">
+                        {p.currency === "USD"
+                          ? `$${p.amount.toLocaleString()}`
+                          : formatBDT(p.amount)}
+                      </TableCell>
+                      <TableCell className="font-mono text-2xs">{reference}</TableCell>
+                      <TableCell className="text-xs text-fg-subtle">{periodLabel}</TableCell>
+                      <TableCell>
+                        {hasProof ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-2xs"
+                            onClick={() => setViewingProofId(p.id)}
+                          >
+                            <FileImage className="mr-1 h-3 w-3" /> View
+                          </Button>
+                        ) : (
+                          <span className="text-2xs text-fg-faint">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            p.status === "approved"
+                              ? "bg-success-subtle text-success"
+                              : p.status === "rejected"
+                                ? "bg-danger-subtle text-danger"
+                                : "bg-warning-subtle text-warning"
+                          }
+                        >
+                          {p.status}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-xs text-fg-faint">
+                  <TableCell colSpan={8} className="text-center text-xs text-fg-faint">
                     No payments yet
                   </TableCell>
                 </TableRow>
@@ -493,6 +724,179 @@ export default function BillingPage() {
           </Table>
         </CardContent>
       </Card>
+
+      <ProofViewerDialog
+        paymentId={viewingProofId}
+        onClose={() => setViewingProofId(null)}
+      />
     </div>
   );
+}
+
+function ProofUploader({
+  preview,
+  onPick,
+}: {
+  preview: { name: string; size: number; type: string } | null;
+  onPick: (file: File | null) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/jpg,image/webp,image/gif,application/pdf"
+        className="hidden"
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => inputRef.current?.click()}
+      >
+        <Upload className="mr-1.5 h-3.5 w-3.5" />
+        {preview ? "Replace file" : "Choose file"}
+      </Button>
+      {preview ? (
+        <div className="flex items-center gap-2 text-2xs text-fg-subtle">
+          <Paperclip className="h-3 w-3" />
+          <span className="font-medium text-fg">{preview.name}</span>
+          <span>{Math.round(preview.size / 1024)} KB</span>
+          <button
+            type="button"
+            onClick={() => onPick(null)}
+            className="text-danger underline-offset-4 hover:underline"
+          >
+            Remove
+          </button>
+        </div>
+      ) : (
+        <span className="text-2xs text-fg-faint">PNG, JPG, WebP or PDF · up to 2MB</span>
+      )}
+    </div>
+  );
+}
+
+function ProofViewerDialog({
+  paymentId,
+  onClose,
+}: {
+  paymentId: string | null;
+  onClose: () => void;
+}) {
+  const open = paymentId !== null;
+  const proof = trpc.billing.getPaymentProof.useQuery(
+    { paymentId: paymentId ?? "" },
+    { enabled: open, retry: false },
+  );
+  return (
+    <Dialog open={open} onOpenChange={(v) => (!v ? onClose() : null)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Proof of payment</DialogTitle>
+        </DialogHeader>
+        {proof.isLoading ? (
+          <div className="flex items-center justify-center py-10 text-fg-subtle">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </div>
+        ) : proof.error ? (
+          <p className="py-6 text-center text-sm text-fg-faint">
+            {proof.error.message ?? "No proof on file."}
+          </p>
+        ) : proof.data ? (
+          <ProofViewerBody data={proof.data} />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProofViewerBody({
+  data,
+}: {
+  data: {
+    kind: "inline" | "url";
+    contentType: string | null;
+    filename: string | null;
+    sizeBytes: number | null;
+    dataUrl: string | null;
+    uploadedAt: Date | string | null;
+  };
+}) {
+  if (!data.dataUrl) {
+    return <p className="py-6 text-center text-sm text-fg-faint">No proof on file.</p>;
+  }
+  const isPdf = data.contentType === "application/pdf";
+  const isImage = data.contentType?.startsWith("image/") ?? data.kind === "url";
+  return (
+    <div className="space-y-3 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <div className="space-y-0.5">
+          <p className="font-medium text-fg">
+            {data.filename ?? (data.kind === "url" ? "External URL" : "Uploaded receipt")}
+          </p>
+          <p className="text-fg-faint">
+            {data.contentType ?? "—"}
+            {data.sizeBytes ? ` · ${Math.round(data.sizeBytes / 1024)} KB` : ""}
+            {data.uploadedAt ? ` · ${new Date(data.uploadedAt).toLocaleString()}` : ""}
+          </p>
+        </div>
+        <a
+          href={data.dataUrl}
+          target="_blank"
+          rel="noreferrer"
+          download={data.filename ?? undefined}
+          className="inline-flex h-8 items-center gap-1 rounded-md border border-stroke/14 px-2.5 text-2xs text-fg hover:bg-surface-raised"
+        >
+          <Download className="h-3 w-3" />
+          {data.kind === "url" ? "Open" : "Download"}
+        </a>
+      </div>
+      {isPdf ? (
+        <iframe
+          src={data.dataUrl}
+          className="h-[480px] w-full rounded-md border border-stroke/12"
+          title="Payment proof"
+        />
+      ) : isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={data.dataUrl}
+          alt="Payment proof"
+          className="max-h-[480px] w-full rounded-md border border-stroke/12 object-contain"
+        />
+      ) : (
+        <p className="text-fg-subtle">
+          Preview not available — use the download button to inspect.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Read a file as base64 (no data: prefix). Strips header so the API gets a
+ * plain payload it can decode without parsing the data-URL form.
+ */
+async function readFileAsBase64(
+  file: File,
+): Promise<{ contentType: string; filename: string; data: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("read failed"));
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") return reject(new Error("unexpected reader result"));
+      const idx = result.indexOf(",");
+      const data = idx >= 0 ? result.slice(idx + 1) : result;
+      resolve({
+        contentType: file.type || "application/octet-stream",
+        filename: file.name,
+        data,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 }

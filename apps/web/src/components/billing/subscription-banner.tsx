@@ -26,13 +26,31 @@ export function SubscriptionBanner() {
   // > quota nearly exceeded.
 
   if (sub.status === "past_due") {
+    const days = sub.graceDaysLeft;
     return (
       <Banner tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        Your subscription is <strong>past due</strong>.{" "}
+        Payment failed —{" "}
+        <strong>
+          {days != null && days > 0
+            ? `${days} day${days === 1 ? "" : "s"} of grace remaining`
+            : "grace expired, suspension imminent"}
+        </strong>
+        .{" "}
         <Link href="/dashboard/billing" className="underline">
-          Submit a payment
+          Update payment
         </Link>{" "}
-        to restore access.
+        to recover instantly.
+      </Banner>
+    );
+  }
+  if (sub.status === "suspended") {
+    return (
+      <Banner tone="error" icon={<AlertCircle className="h-4 w-4" />}>
+        Your account is <strong>suspended</strong>.{" "}
+        <Link href="/dashboard/billing" className="underline">
+          Reactivate now
+        </Link>{" "}
+        — your data is intact.
       </Banner>
     );
   }

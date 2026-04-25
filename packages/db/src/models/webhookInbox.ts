@@ -36,6 +36,10 @@ const webhookInboxSchema = new Schema(
     payloadBytes: { type: Number, default: 0 },
     attempts: { type: Number, default: 0 },
     lastError: { type: String, trim: true, maxlength: 500 },
+    /** Earliest moment the retry worker is allowed to re-process a failed row. */
+    nextRetryAt: { type: Date },
+    /** Set once `attempts` hits the cap and we give up + alert the merchant. */
+    deadLetteredAt: { type: Date },
     /** Set once an Order has been created/updated as a result. */
     resolvedOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
     receivedAt: { type: Date, default: () => new Date() },
@@ -50,6 +54,11 @@ webhookInboxSchema.index(
   { unique: true },
 );
 webhookInboxSchema.index({ status: 1, receivedAt: 1 });
+// Retry worker pickup — failed rows ready for re-attempt, oldest first.
+webhookInboxSchema.index(
+  { status: 1, nextRetryAt: 1 },
+  { partialFilterExpression: { status: "failed" } },
+);
 
 export type WebhookInbox = InferSchemaType<typeof webhookInboxSchema> & {
   _id: Types.ObjectId;

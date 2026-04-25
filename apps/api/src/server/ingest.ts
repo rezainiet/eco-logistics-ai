@@ -3,10 +3,12 @@ import {
   Integration,
   Merchant,
   type MerchantFraudConfig,
+  Notification,
   Order,
   TrackingEvent,
   TrackingSession,
   WebhookInbox,
+  type IntegrationProvider,
 } from "@ecom/db";
 import {
   collectRiskHistory,
@@ -19,6 +21,8 @@ import { writeAudit } from "../lib/audit.js";
 import { releaseQuota, reserveQuota } from "../lib/usage.js";
 import { getPlan } from "../lib/plans.js";
 import { invalidate } from "../lib/cache.js";
+import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
+import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
 import type { NormalizedOrder } from "../lib/integrations/types.js";
 
 /**
@@ -63,6 +67,16 @@ export async function ingestNormalizedOrder(
   if (!normalized.customer?.phone) {
     return { ok: false, error: "missing customer phone" };
   }
+
+  // E.164-normalize at the ingestion seam so identity-resolution doesn't
+  // create duplicate buyers from "+8801711…", "8801711…", "01711…" variants.
+  // Falls back to the cleaned raw form when normalization is ambiguous.
+  const canonicalPhone =
+    normalizePhoneOrRaw(normalized.customer.phone) ?? normalized.customer.phone;
+  normalized = {
+    ...normalized,
+    customer: { ...normalized.customer, phone: canonicalPhone },
+  };
 
   // Duplicate guard — same merchant + same upstream id = no-op.
   const existing = await Order.findOne({
@@ -325,6 +339,9 @@ export async function processWebhookOnce(args: {
       },
     );
   } else {
+    // Schedule the first retry. Subsequent retries are scheduled by
+    // `replayWebhookInbox`, which keeps backoff state in one place.
+    const attempts = 1;
     await WebhookInbox.updateOne(
       { _id: inboxRow._id },
       {
@@ -332,6 +349,7 @@ export async function processWebhookOnce(args: {
           status: "failed",
           lastError: result.error?.slice(0, 500),
           processedAt: new Date(),
+          nextRetryAt: new Date(Date.now() + nextRetryDelayMs(attempts)),
         },
         $inc: { attempts: 1 },
       },
@@ -350,6 +368,226 @@ export async function processWebhookOnce(args: {
  * scan bounded; we only stitch sessions that don't already have a resolved
  * order.
  */
+/**
+ * Webhook retry policy. Failed inbox rows are picked up by the
+ * `webhook-retry` worker on this exponential schedule until `MAX_ATTEMPTS`,
+ * after which they're dead-lettered with a merchant-visible alert.
+ */
+export const WEBHOOK_RETRY_MAX_ATTEMPTS = 5;
+const RETRY_BACKOFF_MS = [
+  60_000, // 1m
+  5 * 60_000, // 5m
+  15 * 60_000, // 15m
+  30 * 60_000, // 30m
+  60 * 60_000, // 1h
+];
+
+/**
+ * Returns the delay before the next retry given how many failures have
+ * already occurred. `attempts=1` (first failure) → first delay (1m). The last
+ * slot is sticky so post-cap callers don't index out of range.
+ */
+export function nextRetryDelayMs(attempts: number): number {
+  const idx = Math.max(0, attempts - 1);
+  if (idx >= RETRY_BACKOFF_MS.length) {
+    return RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]!;
+  }
+  return RETRY_BACKOFF_MS[idx]!;
+}
+
+export interface ReplayWebhookResult {
+  ok: boolean;
+  duplicate?: boolean;
+  orderId?: string;
+  error?: string;
+  status: "succeeded" | "failed" | "dead_lettered" | "skipped";
+  attempts: number;
+}
+
+/**
+ * Re-run a previously-failed `WebhookInbox` row through the ingestion
+ * pipeline. Used by both the retry worker (background) and the merchant
+ * dashboard "replay" button (foreground).
+ *
+ * Behavior:
+ *  - If the row was already succeeded, it's a no-op (status: "skipped").
+ *  - On success: marks row succeeded, writes audit, returns the order id.
+ *  - On failure: increments attempts, schedules `nextRetryAt` via backoff.
+ *  - On the attempt that crosses `MAX_ATTEMPTS`: marks `deadLetteredAt`, fires
+ *    a Notification + audit so the merchant sees it in the inbox.
+ *
+ * The `manual` flag distinguishes UI-driven replays (which audit-log the
+ * actor and bypass the `nextRetryAt` gate) from worker-driven replays.
+ */
+export async function replayWebhookInbox(args: {
+  inboxId: Types.ObjectId;
+  actorId?: Types.ObjectId;
+  manual?: boolean;
+}): Promise<ReplayWebhookResult> {
+  const inbox = await WebhookInbox.findById(args.inboxId);
+  if (!inbox) {
+    return { ok: false, error: "inbox row not found", status: "skipped", attempts: 0 };
+  }
+  if (inbox.status === "succeeded") {
+    return {
+      ok: true,
+      duplicate: true,
+      orderId: inbox.resolvedOrderId ? String(inbox.resolvedOrderId) : undefined,
+      status: "skipped",
+      attempts: inbox.attempts ?? 0,
+    };
+  }
+
+  if (!hasAdapter(inbox.provider as IntegrationProvider)) {
+    return {
+      ok: false,
+      error: `unknown provider: ${inbox.provider}`,
+      status: "failed",
+      attempts: inbox.attempts ?? 0,
+    };
+  }
+  const adapter = adapterFor(inbox.provider as IntegrationProvider);
+  const normalized = adapter.normalizeWebhookPayload(inbox.topic, inbox.payload);
+
+  // No normalized payload means the topic is one we ignore — mark succeeded
+  // (matches the original processWebhookOnce behavior) so the row stops
+  // flapping in the retry queue.
+  if (!normalized) {
+    inbox.status = "succeeded";
+    inbox.processedAt = new Date();
+    inbox.lastError = "ignored on replay";
+    inbox.nextRetryAt = undefined;
+    await inbox.save();
+    return { ok: true, status: "succeeded", attempts: inbox.attempts ?? 0 };
+  }
+
+  const result = await ingestNormalizedOrder(normalized, {
+    merchantId: inbox.merchantId as Types.ObjectId,
+    source: inbox.provider as IngestSource,
+    channel: "webhook",
+    integrationId: inbox.integrationId as Types.ObjectId,
+  });
+
+  if (result.ok) {
+    inbox.status = "succeeded";
+    inbox.processedAt = new Date();
+    inbox.nextRetryAt = undefined;
+    if (result.orderId) {
+      inbox.resolvedOrderId = new Types.ObjectId(result.orderId);
+    }
+    inbox.lastError = result.duplicate ? "duplicate (idempotent)" : undefined;
+    await inbox.save();
+    if (args.manual) {
+      void writeAudit({
+        merchantId: inbox.merchantId as Types.ObjectId,
+        actorId: args.actorId ?? (inbox.merchantId as Types.ObjectId),
+        actorType: "merchant",
+        action: "integration.webhook_replayed",
+        subjectType: "integration",
+        subjectId: inbox.integrationId as Types.ObjectId,
+        meta: {
+          provider: inbox.provider,
+          externalId: inbox.externalId,
+          orderId: result.orderId,
+          duplicate: !!result.duplicate,
+        },
+      });
+    }
+    return {
+      ok: true,
+      duplicate: !!result.duplicate,
+      orderId: result.orderId,
+      status: "succeeded",
+      attempts: inbox.attempts ?? 0,
+    };
+  }
+
+  // Failure path — bump attempts, schedule next retry or dead-letter.
+  const attempts = (inbox.attempts ?? 0) + 1;
+  inbox.attempts = attempts;
+  inbox.lastError = result.error?.slice(0, 500);
+  inbox.processedAt = new Date();
+  inbox.status = "failed";
+  if (attempts >= WEBHOOK_RETRY_MAX_ATTEMPTS) {
+    inbox.deadLetteredAt = new Date();
+    inbox.nextRetryAt = undefined;
+    await inbox.save();
+    await fireWebhookDeadLetterAlert(inbox);
+    return {
+      ok: false,
+      error: result.error,
+      status: "dead_lettered",
+      attempts,
+    };
+  }
+  inbox.nextRetryAt = new Date(Date.now() + nextRetryDelayMs(attempts));
+  await inbox.save();
+  return {
+    ok: false,
+    error: result.error,
+    status: "failed",
+    attempts,
+  };
+}
+
+async function fireWebhookDeadLetterAlert(inbox: {
+  _id: Types.ObjectId;
+  merchantId: unknown;
+  integrationId?: unknown;
+  provider: string;
+  topic: string;
+  externalId: string;
+  lastError?: string | null;
+}): Promise<void> {
+  const merchantId = inbox.merchantId as Types.ObjectId;
+  const integrationId = inbox.integrationId as Types.ObjectId | undefined;
+  const dedupeKey = `webhook-dlq:${String(inbox._id)}`;
+  try {
+    await Notification.updateOne(
+      { merchantId, dedupeKey },
+      {
+        $setOnInsert: {
+          merchantId,
+          kind: "integration.webhook_failed",
+          severity: "critical",
+          title: `${inbox.provider} webhook permanently failed`,
+          body: `Topic ${inbox.topic} (id ${inbox.externalId}) hit the retry cap. Last error: ${inbox.lastError ?? "unknown"}`,
+          link: `/dashboard/integrations?inboxId=${String(inbox._id)}`,
+          subjectType: "integration" as const,
+          subjectId: integrationId ?? (inbox._id as Types.ObjectId),
+          meta: {
+            provider: inbox.provider,
+            topic: inbox.topic,
+            externalId: inbox.externalId,
+            lastError: inbox.lastError ?? null,
+          },
+          dedupeKey,
+        },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error(
+      "[webhook-retry] dead-letter notification failed",
+      (err as Error).message,
+    );
+  }
+  void writeAudit({
+    merchantId,
+    actorId: merchantId,
+    actorType: "system",
+    action: "integration.webhook_dead_lettered",
+    subjectType: "integration",
+    subjectId: integrationId ?? (inbox._id as Types.ObjectId),
+    meta: {
+      provider: inbox.provider,
+      topic: inbox.topic,
+      externalId: inbox.externalId,
+      lastError: inbox.lastError ?? null,
+    },
+  });
+}
+
 export async function resolveIdentityForOrder(args: {
   merchantId: Types.ObjectId;
   orderId: Types.ObjectId;
@@ -359,8 +597,13 @@ export async function resolveIdentityForOrder(args: {
   if (!args.phone && !args.email) return { stitchedSessions: 0, stitchedEvents: 0 };
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
+  // Match on every plausible phone variant so legacy sessions written before
+  // E.164-normalization rolled out still stitch to new orders.
   const orFilter: Array<Record<string, unknown>> = [];
-  if (args.phone) orFilter.push({ phone: args.phone });
+  if (args.phone) {
+    const variants = phoneLookupVariants(args.phone);
+    orFilter.push(variants.length > 1 ? { phone: { $in: variants } } : { phone: args.phone });
+  }
   if (args.email) orFilter.push({ email: args.email.toLowerCase() });
 
   const sessionUpdate = await TrackingSession.updateMany(

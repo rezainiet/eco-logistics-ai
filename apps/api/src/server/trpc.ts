@@ -16,10 +16,11 @@ export interface AuthUser {
 import type { PlanTier } from "../lib/plans.js";
 
 export interface SubscriptionSnapshot {
-  status: "trial" | "active" | "past_due" | "paused" | "cancelled";
+  status: "trial" | "active" | "past_due" | "paused" | "suspended" | "cancelled";
   tier: PlanTier;
   trialEndsAt: Date | null;
   currentPeriodEnd: Date | null;
+  gracePeriodEndsAt: Date | null;
 }
 
 const tokenCache = new LRUCache<string, AuthUser>({ max: 10_000, ttl: 60_000 });
@@ -83,7 +84,30 @@ export function createContext({ req }: CreateExpressContextOptions): {
 
 export type Context = Awaited<ReturnType<typeof createContext>>;
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<Context>().create({
+  errorFormatter({ shape, error, ctx }) {
+    // Forward any unexpected error (5xx-ish — internal server errors,
+    // failures inside handlers) to telemetry so we see them in Sentry. We
+    // intentionally skip 4xx-class TRPCErrors (UNAUTHORIZED, BAD_REQUEST,
+    // NOT_FOUND, FORBIDDEN, CONFLICT) — those are control-flow signals,
+    // not bugs.
+    const code = error.code;
+    const isInternal =
+      code === "INTERNAL_SERVER_ERROR" ||
+      (error.cause instanceof Error && code !== "BAD_REQUEST");
+    if (isInternal) {
+      // Lazy import keeps the worker bundle from pulling telemetry at load
+      // time when the env DSN is unset and the import is a no-op anyway.
+      void import("../lib/telemetry.js").then(({ captureException }) => {
+        captureException(error.cause ?? error, {
+          tags: { source: "trpc", code },
+          user: ctx?.user ? { id: ctx.user.id, email: ctx.user.email } : undefined,
+        });
+      });
+    }
+    return shape;
+  },
+});
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
@@ -108,7 +132,7 @@ async function loadSubscription(userId: string): Promise<SubscriptionSnapshot | 
   if (!Types.ObjectId.isValid(userId)) return null;
   const m = await Merchant.findById(userId)
     .select(
-      "subscription.status subscription.tier subscription.trialEndsAt subscription.currentPeriodEnd",
+      "subscription.status subscription.tier subscription.trialEndsAt subscription.currentPeriodEnd subscription.gracePeriodEndsAt",
     )
     .lean();
   if (!m) return null;
@@ -117,6 +141,8 @@ async function loadSubscription(userId: string): Promise<SubscriptionSnapshot | 
     tier: (m.subscription?.tier ?? "starter") as SubscriptionSnapshot["tier"],
     trialEndsAt: m.subscription?.trialEndsAt ?? null,
     currentPeriodEnd: m.subscription?.currentPeriodEnd ?? null,
+    gracePeriodEndsAt:
+      (m.subscription as { gracePeriodEndsAt?: Date } | undefined)?.gracePeriodEndsAt ?? null,
   };
   subCache.set(userId, snap);
   return snap;
@@ -152,6 +178,18 @@ export const billableProcedure = protectedProcedure.use(async ({ ctx, next }) =>
     return next({ ctx: { ...ctx, subscription: sub } });
   }
 
+  // past_due is a soft state — let the merchant keep working until the grace
+  // period closes. The billing UI shows a loud banner with the recovery CTA.
+  if (sub.status === "past_due") {
+    if (sub.gracePeriodEndsAt && sub.gracePeriodEndsAt.getTime() <= Date.now()) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "subscription_grace_expired",
+      });
+    }
+    return next({ ctx: { ...ctx, subscription: sub } });
+  }
+
   if (sub.status === "trial") {
     if (!sub.trialEndsAt || sub.trialEndsAt.getTime() > Date.now()) {
       return next({ ctx: { ...ctx, subscription: sub } });
@@ -162,6 +200,7 @@ export const billableProcedure = protectedProcedure.use(async ({ ctx, next }) =>
     });
   }
 
+  // suspended / paused / cancelled all hard-block billable work.
   throw new TRPCError({
     code: "FORBIDDEN",
     message: `subscription_${sub.status}`,

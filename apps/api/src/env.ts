@@ -41,6 +41,46 @@ const schema = z
       .enum(["0", "1"])
       .optional()
       .transform((v) => v === "1"),
+    // --- Transactional email (Resend) ---
+    RESEND_API_KEY: z.string().optional(),
+    EMAIL_FROM: z.string().optional(),
+    PUBLIC_WEB_URL: z.string().url().optional(),
+    // Trial-ending warning is sent once at this many days before expiry.
+    TRIAL_WARNING_DAYS: z.coerce.number().int().min(1).max(14).default(3),
+    // --- Stripe (card payments — manual bKash/Nagad still supported). ---
+    STRIPE_SECRET_KEY: z.string().optional(),
+    STRIPE_WEBHOOK_SECRET: z.string().optional(),
+    /**
+     * When true, card-method payments via Stripe Checkout charge in USD using
+     * each plan's `priceUSD`. When false, charge in BDT (Stripe supports BDT
+     * via international acquirer, but the merchant account must be approved).
+     */
+    STRIPE_USE_USD: z
+      .enum(["0", "1"])
+      .default("1")
+      .transform((v) => v === "1"),
+    /** Default subscription period (days) when a Stripe payment lands. */
+    STRIPE_PERIOD_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+    /**
+     * Days of grace after `invoice.payment_failed` before the grace worker
+     * suspends the merchant. Stripe smart-retry exhausts within ~3 weeks
+     * but we surface a tighter 7-day default so the merchant feels the
+     * pressure to update their card.
+     */
+    STRIPE_GRACE_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+    /**
+     * Stripe Price ids per plan tier. Optional in dev so the suite still
+     * boots when nobody has run `seedStripe` yet. The
+     * `createSubscriptionCheckout` mutation refuses to mint a session if
+     * the price for the requested tier is missing.
+     */
+    STRIPE_PRICE_STARTER: z.string().optional(),
+    STRIPE_PRICE_GROWTH: z.string().optional(),
+    STRIPE_PRICE_SCALE: z.string().optional(),
+    STRIPE_PRICE_ENTERPRISE: z.string().optional(),
+    // --- Telemetry (Sentry-compatible) ---
+    SENTRY_DSN: z.string().optional(),
+    SENTRY_RELEASE: z.string().optional(),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",

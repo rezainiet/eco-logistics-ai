@@ -8,6 +8,7 @@ import {
   BarChart3,
   CreditCard,
   LayoutDashboard,
+  LifeBuoy,
   Menu,
   Package,
   Phone,
@@ -42,6 +43,7 @@ const NAV: NavGroup[] = [
         badgeKey: "fraud",
       },
       { label: "Call customer", href: "/dashboard/call-customer", icon: Phone },
+      { label: "Recovery", href: "/dashboard/recovery", icon: LifeBuoy },
     ],
   },
   {

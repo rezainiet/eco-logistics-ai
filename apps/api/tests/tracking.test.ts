@@ -159,3 +159,80 @@ describe("behavior tracker collector", () => {
     expect(m2?.trackingKey).toBe(a);
   });
 });
+
+// ─── Sprint B — Behavior analytics plan gates ──────────────────────────
+
+describe("behavior analytics plan gates", () => {
+  beforeEach(resetDb);
+  afterAll(disconnectDb);
+
+  it("starter tier is blocked from behavior overview", async () => {
+    const m = await createMerchant({ tier: "starter" });
+    const caller = callerFor(authUserFor(m));
+    await expect(caller.tracking.overview({ days: 30 })).rejects.toThrow(
+      /entitlement_blocked:behavior_analytics_locked/,
+    );
+  });
+
+  it("growth tier may query overview but is capped at 90-day retention", async () => {
+    const m = await createMerchant({ tier: "growth" });
+    const caller = callerFor(authUserFor(m));
+    // Asking for 365 should not throw — clamped silently to 90.
+    const r = await caller.tracking.overview({ days: 365 });
+    expect(r).toBeDefined();
+  });
+
+  it("growth tier is blocked from advanced behavior tables (Scale+)", async () => {
+    const m = await createMerchant({ tier: "growth" });
+    const caller = callerFor(authUserFor(m));
+    await expect(
+      caller.tracking.highIntentSessions({ days: 7, limit: 10 }),
+    ).rejects.toThrow(/entitlement_blocked:advanced_behavior_tables_locked/);
+    await expect(
+      caller.tracking.suspiciousSessions({ days: 7, limit: 10 }),
+    ).rejects.toThrow(/entitlement_blocked:advanced_behavior_tables_locked/);
+  });
+
+  it("scale tier can query advanced tables", async () => {
+    const m = await createMerchant({ tier: "scale" });
+    const caller = callerFor(authUserFor(m));
+    const intent = await caller.tracking.highIntentSessions({ days: 7, limit: 10 });
+    const susp = await caller.tracking.suspiciousSessions({ days: 7, limit: 10 });
+    expect(Array.isArray(intent)).toBe(true);
+    expect(Array.isArray(susp)).toBe(true);
+  });
+
+  it("scale tier is blocked from data exports (Enterprise-only)", async () => {
+    const m = await createMerchant({ tier: "scale" });
+    const caller = callerFor(authUserFor(m));
+    await expect(
+      caller.tracking.exportData({ kind: "sessions", days: 30, limit: 100 }),
+    ).rejects.toThrow(/entitlement_blocked:behavior_exports_locked/);
+  });
+
+  it("enterprise tier exports sessions with custom retention", async () => {
+    const m = await createMerchant({ tier: "enterprise" });
+    const caller = callerFor(authUserFor(m));
+    const result = await caller.tracking.exportData({
+      kind: "sessions",
+      days: 365,
+      limit: 100,
+    });
+    expect(result.kind).toBe("sessions");
+    // Enterprise has unlimited retention — requested days flows through.
+    expect(result.windowDays).toBe(365);
+    expect(Array.isArray(result.rows)).toBe(true);
+  });
+
+  it("getEntitlements returns the merchant's behavior surface flags", async () => {
+    const m = await createMerchant({ tier: "growth" });
+    const caller = callerFor(authUserFor(m));
+    const ent = await caller.tracking.getEntitlements();
+    expect(ent.tier).toBe("growth");
+    expect(ent.behaviorAnalytics).toBe(true);
+    expect(ent.advancedBehaviorTables).toBe(false);
+    expect(ent.behaviorExports).toBe(false);
+    expect(ent.behaviorRetentionDays).toBe(90);
+    expect(ent.recommendedUpgradeTier).toBe("scale");
+  });
+});

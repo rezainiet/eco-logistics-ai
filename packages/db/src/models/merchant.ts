@@ -6,7 +6,26 @@ const PHONE_RE = /^\+?[0-9]{7,15}$/;
 const COUNTRIES = ["BD", "PK", "IN", "LK", "NP", "ID", "PH", "VN", "MY", "TH"] as const;
 const LANGUAGES = ["en", "bn", "ur", "hi", "ta", "id", "th", "vi", "ms"] as const;
 const TIERS = ["starter", "growth", "scale", "enterprise"] as const;
-const SUB_STATUS = ["trial", "active", "past_due", "paused", "cancelled"] as const;
+/**
+ * Subscription lifecycle states.
+ *
+ *   trial      — initial 14-day evaluation window
+ *   active     — paid (manual receipt approved OR Stripe subscription healthy)
+ *   past_due   — Stripe invoice failed; merchant has `gracePeriodEndsAt`
+ *                to recover before they get cut off
+ *   paused     — admin-initiated freeze (back-office workflow)
+ *   suspended  — past_due + grace expired; the grace worker flipped here
+ *   cancelled  — merchant cancelled (kept access until period end) or Stripe
+ *                fired customer.subscription.deleted at the end of the cycle
+ */
+const SUB_STATUS = [
+  "trial",
+  "active",
+  "past_due",
+  "paused",
+  "suspended",
+  "cancelled",
+] as const;
 
 const COURIER_PROVIDERS = ["pathao", "steadfast", "redx", "ecourier", "paperfly", "other"] as const;
 
@@ -76,6 +95,42 @@ const subscriptionSchema = new Schema(
     notes: { type: String, trim: true, maxlength: 500 },
     /** Provisional flag lit while a pending payment submission is awaiting admin approval. */
     pendingPaymentId: { type: Schema.Types.ObjectId, ref: "Payment" },
+    /**
+     * Set when Stripe fires `invoice.payment_failed`. The grace worker
+     * flips status to `suspended` once `Date.now() > gracePeriodEndsAt`.
+     * Cleared on a successful subsequent invoice (recovery path).
+     */
+    gracePeriodEndsAt: { type: Date },
+    /**
+     * "manual" = bKash/Nagad/bank receipt or one-shot Stripe Checkout
+     *            (legacy `mode=payment`). Renewal is admin-driven.
+     * "stripe_subscription" = recurring Stripe Subscription. Renewal is
+     *            automatic via invoice.payment_succeeded webhooks.
+     * Future: "card_pos", "wire", etc.
+     */
+    billingProvider: {
+      type: String,
+      enum: ["manual", "stripe_subscription"],
+      default: "manual",
+    },
+  },
+  { _id: false }
+);
+
+/**
+ * Single-use tokens we hash before storing. The plaintext is delivered to the
+ * merchant via email and never persisted; on consumption the API hashes the
+ * incoming token and compares against `hash`. Expiry + `consumedAt` keep the
+ * token strictly single-use.
+ */
+const tokenSchema = new Schema(
+  {
+    /** SHA-256 of the plaintext token (hex). */
+    hash: { type: String, required: true },
+    expiresAt: { type: Date, required: true },
+    requestedAt: { type: Date, default: () => new Date() },
+    requestedFromIp: { type: String, trim: true, maxlength: 64 },
+    consumedAt: { type: Date },
   },
   { _id: false }
 );
@@ -106,6 +161,28 @@ const merchantSchema = new Schema(
      * Auto-generated on first /track request that needs it.
      */
     trackingKey: { type: String, unique: true, sparse: true, trim: true, maxlength: 64 },
+    /**
+     * Stripe customer record. Created once on the first subscription checkout
+     * and reused for every later billing operation (subsequent checkouts,
+     * portal sessions, webhook lookups). Sparse-unique so legacy merchants
+     * without a Stripe profile don't trip the index.
+     */
+    stripeCustomerId: { type: String, trim: true, maxlength: 80 },
+    /** The merchant's most recent Stripe Subscription id (sub_…). */
+    stripeSubscriptionId: { type: String, trim: true, maxlength: 80 },
+    emailVerified: { type: Boolean, default: false },
+    emailVerification: { type: tokenSchema, default: undefined },
+    passwordReset: { type: tokenSchema, default: undefined },
+    /** Tracks one-shot transactional notifications so we don't re-fire them. */
+    notificationsSent: {
+      type: new Schema(
+        {
+          trialEndingAt: { type: Date },
+        },
+        { _id: false },
+      ),
+      default: () => ({}),
+    },
   },
   { timestamps: true }
 );
@@ -113,6 +190,26 @@ const merchantSchema = new Schema(
 merchantSchema.index({ country: 1, createdAt: -1 });
 merchantSchema.index({ "subscription.status": 1 });
 merchantSchema.index({ "subscription.status": 1, "subscription.trialEndsAt": 1 });
+// Sparse-unique on Stripe identifiers so legacy merchants (null) don't
+// collide and we can look up by id from a webhook in O(1).
+merchantSchema.index(
+  { stripeCustomerId: 1 },
+  { unique: true, partialFilterExpression: { stripeCustomerId: { $type: "string" } } },
+);
+merchantSchema.index(
+  { stripeSubscriptionId: 1 },
+  { unique: true, partialFilterExpression: { stripeSubscriptionId: { $type: "string" } } },
+);
+// Grace-expiry sweep — partial so we only scan rows that actually have a
+// grace deadline pending.
+merchantSchema.index(
+  { "subscription.status": 1, "subscription.gracePeriodEndsAt": 1 },
+  {
+    partialFilterExpression: {
+      "subscription.gracePeriodEndsAt": { $type: "date" },
+    },
+  },
+);
 
 export type Merchant = InferSchemaType<typeof merchantSchema> & { _id: Types.ObjectId };
 

@@ -36,6 +36,22 @@ export const signupLimiter = rateLimit({
   message: { error: "too many signups from this IP" },
 });
 
+/**
+ * Tighter limiter for password-reset and email-verify resends. Keyed on the
+ * email *and* IP so an attacker can't burn the budget for a victim by
+ * spamming requests for their address from many IPs.
+ */
+export const passwordResetLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) =>
+    `${ipKeyGenerator(req.ip ?? "unknown")}:${String(req.body?.email ?? "").toLowerCase()}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: redisStore(),
+  message: { error: "too many reset attempts — try again later" },
+});
+
 export const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 300,

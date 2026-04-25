@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import bcrypt from "bcryptjs";
 import { Types } from "mongoose";
 import { z } from "zod";
 import {
@@ -82,9 +83,54 @@ export const merchantsRouter = router({
       language: m.language,
       role: m.role,
       createdAt: m.createdAt,
+      emailVerified: m.emailVerified ?? false,
       billing: billingView(m.subscription),
     };
   }),
+
+  /**
+   * Logged-in password change. We require the current password to defend
+   * against a hijacked session swapping the credential silently. Reuses the
+   * same bcrypt(10) cost as signup for consistency.
+   */
+  changePassword: protectedProcedure
+    .input(
+      z.object({
+        currentPassword: z.string().min(8).max(200),
+        newPassword: z.string().min(8).max(200),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const m = await Merchant.findById(ctx.user.id);
+      if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+      const ok = await bcrypt.compare(input.currentPassword, m.passwordHash);
+      if (!ok) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "current password incorrect" });
+      }
+      if (input.currentPassword === input.newPassword) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "new password must be different",
+        });
+      }
+      m.passwordHash = await bcrypt.hash(input.newPassword, 10);
+      // Invalidate any in-flight reset link the moment the merchant changes
+      // their password from inside an authenticated session.
+      m.passwordReset = undefined;
+      await m.save();
+
+      void writeAudit({
+        merchantId: m._id,
+        actorId: m._id,
+        actorType: "merchant",
+        action: "auth.password_changed",
+        subjectType: "merchant",
+        subjectId: m._id,
+        meta: {},
+      });
+
+      return { ok: true };
+    }),
 
   updateProfile: protectedProcedure
     .input(

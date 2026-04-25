@@ -17,6 +17,15 @@ type AuditAction =
   | "payment.submitted"
   | "payment.approved"
   | "payment.rejected"
+  | "payment.checkout_started"
+  | "payment.checkout_completed"
+  | "payment.proof_uploaded"
+  | "subscription.checkout_started"
+  | "subscription.recurring_started"
+  | "subscription.synced"
+  | "subscription.payment_recovered"
+  | "subscription.payment_failed"
+  | "subscription.suspended"
   | "subscription.activated"
   | "subscription.cancelled"
   | "subscription.extended"
@@ -25,7 +34,14 @@ type AuditAction =
   | "integration.disconnected"
   | "integration.test"
   | "integration.webhook"
-  | "tracking.identified";
+  | "integration.webhook_replayed"
+  | "integration.webhook_dead_lettered"
+  | "integration.shopify_oauth"
+  | "tracking.identified"
+  | "auth.reset_requested"
+  | "auth.password_reset"
+  | "auth.password_changed"
+  | "auth.email_verified";
 
 type SubjectType =
   | "order"

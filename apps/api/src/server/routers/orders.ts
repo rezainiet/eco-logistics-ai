@@ -35,6 +35,7 @@ import { getPlan } from "../../lib/plans.js";
 import { fireFraudAlert } from "../../lib/alerts.js";
 import { enqueueRescore } from "../../workers/riskRecompute.js";
 import { resolveIdentityForOrder } from "../ingest.js";
+import { normalizePhoneOrRaw } from "../../lib/phone.js";
 
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
 const COUNT_TTL = 30;
@@ -390,11 +391,17 @@ export const ordersRouter = router({
       const total = input.total ?? input.items.reduce((s, i) => s + i.price * i.quantity, 0);
       const ip = requestIp(ctx) ?? undefined;
       const userAgent = requestUserAgent(ctx) ?? undefined;
-      const addressHash = hashAddress(input.customer.address, input.customer.district);
+      // Canonical-form the phone before the row hits Mongo so identity-
+      // resolution and fraud history join on a stable key.
+      const customer = {
+        ...input.customer,
+        phone: normalizePhoneOrRaw(input.customer.phone) ?? input.customer.phone,
+      };
+      const addressHash = hashAddress(customer.address, customer.district);
       const risk = await scoreOrderForCreate({
         merchantId,
         cod: input.cod,
-        customer: input.customer,
+        customer,
         ip,
         addressHash,
         scoring,
@@ -402,7 +409,7 @@ export const ordersRouter = router({
       const order = await Order.create({
         merchantId,
         orderNumber: input.orderNumber ?? generateOrderNumber(),
-        customer: input.customer,
+        customer,
         items: input.items,
         order: { cod: input.cod, total, status: "pending" },
         fraud: fraudDocFromRisk(risk),
@@ -693,6 +700,10 @@ export const ordersRouter = router({
           errors.push({ row: idx + 2, error: "invalid phone" });
           return;
         }
+        // Canonicalize before everything downstream sees it. We fall back to
+        // the raw value if normalization can't decide — phone validation has
+        // already rejected pure garbage by this point.
+        row.customerPhone = normalizePhoneOrRaw(row.customerPhone) ?? row.customerPhone;
         if (Number.isNaN(price) || Number.isNaN(cod) || Number.isNaN(quantity)) {
           errors.push({ row: idx + 2, error: "invalid number" });
           return;

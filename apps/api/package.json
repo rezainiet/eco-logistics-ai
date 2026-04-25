@@ -9,6 +9,8 @@
     "start": "node dist/index.js",
     "seed": "tsx src/scripts/seed.ts",
     "seed:wipe": "tsx src/scripts/seed.ts --wipe",
+    "db:sync-indexes": "tsx src/scripts/syncIndexes.ts",
+    "stripe:seed": "tsx src/scripts/seedStripe.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

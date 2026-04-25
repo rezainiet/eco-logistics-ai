@@ -12,7 +12,7 @@ describe("merchantsRouter", () => {
     const profile = await caller.merchants.getProfile();
     expect(profile.businessName).toBe("Acme");
     expect(profile.country).toBe("BD");
-    expect(profile.billing.tier).toBe("growth");
+    expect(profile.billing.tier).toBe("scale");
     expect(["trial", "active"]).toContain(profile.billing.status);
   });
 

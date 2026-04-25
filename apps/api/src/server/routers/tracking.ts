@@ -2,8 +2,16 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { Merchant, TrackingEvent, TrackingSession } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { billableProcedure, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
 import { ensureTrackingKey } from "../tracking/collector.js";
+import {
+  assertAdvancedBehaviorTables,
+  assertBehaviorAnalytics,
+  assertBehaviorExports,
+  clampBehaviorRetentionDays,
+  entitlementsFor,
+} from "../../lib/entitlements.js";
+import type { PlanTier } from "../../lib/plans.js";
 
 function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
   return new Types.ObjectId(ctx.user.id);
@@ -13,6 +21,17 @@ function sinceFor(days: number): Date {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
+function tierFromCtx(ctx: { subscription?: SubscriptionSnapshot | null | undefined }): PlanTier {
+  return (ctx.subscription?.tier ?? "starter") as PlanTier;
+}
+
+/**
+ * Behavior procedures all flow through `billableProcedure` so we have the
+ * subscription tier on the context. Each gate then asserts the specific
+ * entitlement and (where applicable) clamps the requested time window down
+ * to the plan's retention cap before the aggregation runs.
+ */
+
 export const trackingRouter = router({
   /** Returns the merchant's storefront tracking key + the SDK snippet to embed. */
   getInstallation: protectedProcedure.query(async ({ ctx }) => {
@@ -21,15 +40,69 @@ export const trackingRouter = router({
     const collector = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/track/collect`;
     const sdkUrl = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3000"}/sdk.js`;
     const snippet = `<script async src="${sdkUrl}" data-tracking-key="${key}" data-collector="${collector}"></script>`;
-    return { key, collector, sdkUrl, snippet };
+
+    // Install verification — single round-trip to MongoDB. We rely on the
+    // {merchantId, occurredAt} index; latest event wins and indicates the
+    // SDK is firing. `firstSeenAt` shows up the moment we see *any* event,
+    // even if it was a one-off curl test.
+    const [latestEvent, oldestEvent] = await Promise.all([
+      TrackingEvent.findOne({ merchantId })
+        .sort({ occurredAt: -1 })
+        .select("occurredAt type")
+        .lean(),
+      TrackingEvent.findOne({ merchantId })
+        .sort({ occurredAt: 1 })
+        .select("occurredAt")
+        .lean(),
+    ]);
+    const sessionCount = latestEvent
+      ? await TrackingSession.countDocuments({ merchantId })
+      : 0;
+    const lastSeenAt = latestEvent?.occurredAt ?? null;
+    const ageMs = lastSeenAt ? Date.now() - lastSeenAt.getTime() : null;
+    // Healthy = saw an event in the last 7 days. Stale rendering tells the
+    // merchant their snippet is silent before they ship a campaign.
+    const status: "not_installed" | "stale" | "healthy" = !latestEvent
+      ? "not_installed"
+      : ageMs !== null && ageMs > 7 * 24 * 60 * 60 * 1000
+        ? "stale"
+        : "healthy";
+
+    return {
+      key,
+      collector,
+      sdkUrl,
+      snippet,
+      install: {
+        status,
+        firstSeenAt: oldestEvent?.occurredAt ?? null,
+        lastSeenAt,
+        sessionCount,
+        latestEventType: latestEvent?.type ?? null,
+      },
+    };
+  }),
+
+  /**
+   * Plan-aware entitlements for the behavior surface — UI uses this to gate
+   * tabs, hide rows, and render upgrade CTAs without trial-and-error 403s.
+   */
+  getEntitlements: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    const m = await Merchant.findById(merchantId).select("subscription.tier").lean();
+    const tier = (m?.subscription?.tier ?? "starter") as PlanTier;
+    return entitlementsFor(tier);
   }),
 
   /** High-level KPIs powering the behavior analytics page. */
-  overview: protectedProcedure
-    .input(z.object({ days: z.number().int().min(1).max(90).default(30) }).default({ days: 30 }))
+  overview: billableProcedure
+    .input(z.object({ days: z.number().int().min(1).max(365).default(30) }).default({ days: 30 }))
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertBehaviorAnalytics(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const [agg] = await TrackingSession.aggregate<{
         sessions: number;
         repeatSessions: number;
@@ -92,11 +165,14 @@ export const trackingRouter = router({
     }),
 
   /** Event-funnel: page_view → product_view → add_to_cart → checkout_start → checkout_submit. */
-  funnel: protectedProcedure
-    .input(z.object({ days: z.number().int().min(1).max(90).default(30) }).default({ days: 30 }))
+  funnel: billableProcedure
+    .input(z.object({ days: z.number().int().min(1).max(365).default(30) }).default({ days: 30 }))
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertBehaviorAnalytics(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const rows = await TrackingEvent.aggregate<{ _id: string; sessions: number }>([
         { $match: { merchantId, occurredAt: { $gte: since } } },
         { $group: { _id: { type: "$type", session: "$sessionId" } } },
@@ -119,15 +195,18 @@ export const trackingRouter = router({
     }),
 
   /** Top viewed products, ranked by distinct sessions. */
-  topProducts: protectedProcedure
+  topProducts: billableProcedure
     .input(
       z
-        .object({ days: z.number().int().min(1).max(90).default(30), limit: z.number().int().min(1).max(50).default(10) })
+        .object({ days: z.number().int().min(1).max(365).default(30), limit: z.number().int().min(1).max(50).default(10) })
         .default({ days: 30, limit: 10 }),
     )
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertBehaviorAnalytics(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const rows = await TrackingEvent.aggregate<{
         _id: string;
         sessions: number;
@@ -196,16 +275,21 @@ export const trackingRouter = router({
    * Sessions sorted by descending intent score:
    *   intent = 4*checkout_start + 3*add_to_cart + 1*product_view (decayed)
    * Returns up to `limit` rows. UI pages /dashboard/analytics/behavior.
+   *
+   * Gated to Scale+ (advanced behavior tables).
    */
-  highIntentSessions: protectedProcedure
+  highIntentSessions: billableProcedure
     .input(
       z
-        .object({ days: z.number().int().min(1).max(30).default(7), limit: z.number().int().min(1).max(50).default(20) })
+        .object({ days: z.number().int().min(1).max(180).default(7), limit: z.number().int().min(1).max(50).default(20) })
         .default({ days: 7, limit: 20 }),
     )
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertAdvancedBehaviorTables(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const rows = await TrackingSession.aggregate<{
         _id: Types.ObjectId;
         sessionId: string;
@@ -258,12 +342,18 @@ export const trackingRouter = router({
       }));
     }),
 
-  /** Sessions flagged as suspicious — bot-like behavior, abnormal velocity, etc. */
-  suspiciousSessions: protectedProcedure
-    .input(z.object({ days: z.number().int().min(1).max(30).default(7), limit: z.number().int().min(1).max(50).default(20) }).default({ days: 7, limit: 20 }))
+  /**
+   * Sessions flagged as suspicious — bot-like behavior, abnormal velocity, etc.
+   * Gated to Scale+ (advanced behavior tables).
+   */
+  suspiciousSessions: billableProcedure
+    .input(z.object({ days: z.number().int().min(1).max(180).default(7), limit: z.number().int().min(1).max(50).default(20) }).default({ days: 7, limit: 20 }))
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertAdvancedBehaviorTables(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const rows = await TrackingSession.aggregate<{
         _id: Types.ObjectId;
         sessionId: string;
@@ -339,11 +429,14 @@ export const trackingRouter = router({
     }),
 
   /** Unique repeat visitors over the window. */
-  repeatVisitors: protectedProcedure
-    .input(z.object({ days: z.number().int().min(1).max(90).default(30) }).default({ days: 30 }))
+  repeatVisitors: billableProcedure
+    .input(z.object({ days: z.number().int().min(1).max(365).default(30) }).default({ days: 30 }))
     .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertBehaviorAnalytics(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
       const merchantId = merchantObjectId(ctx);
-      const since = sinceFor(input.days);
+      const since = sinceFor(days);
       const [agg] = await TrackingSession.aggregate<{
         repeatAnonIds: number;
         totalAnonIds: number;
@@ -414,4 +507,92 @@ export const trackingRouter = router({
     const key = await ensureTrackingKey(merchantId);
     return { key };
   }),
+
+  /**
+   * Behavior data export (Enterprise-only). Returns up to `limit` rows of
+   * either sessions or raw events as JSON — the UI wraps the payload into a
+   * downloadable file. Capped at 5,000 rows so a click can't OOM the server.
+   *
+   * Custom retention applies: an enterprise merchant may pull whatever window
+   * they ask for, bounded only by the hard MAX_DAYS sanity ceiling.
+   */
+  exportData: billableProcedure
+    .input(
+      z.object({
+        kind: z.enum(["sessions", "events"]).default("sessions"),
+        days: z.number().int().min(1).max(3650).default(30),
+        limit: z.number().int().min(1).max(5000).default(1000),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const tier = tierFromCtx(ctx);
+      assertBehaviorExports(tier);
+      const days = clampBehaviorRetentionDays(tier, input.days);
+      const merchantId = merchantObjectId(ctx);
+      const since = sinceFor(days);
+      if (input.kind === "events") {
+        const rows = await TrackingEvent.find({
+          merchantId,
+          occurredAt: { $gte: since },
+        })
+          .sort({ occurredAt: -1 })
+          .limit(input.limit)
+          .lean();
+        return {
+          kind: "events" as const,
+          count: rows.length,
+          windowDays: days,
+          rows: rows.map((r) => ({
+            id: String(r._id),
+            sessionId: r.sessionId,
+            anonId: r.anonId ?? null,
+            type: r.type,
+            url: r.url ?? null,
+            path: r.path ?? null,
+            referrer: r.referrer ?? null,
+            campaign: r.campaign ?? null,
+            device: r.device ?? null,
+            properties: r.properties ?? null,
+            phone: r.phone ?? null,
+            email: r.email ?? null,
+            occurredAt: r.occurredAt,
+          })),
+        };
+      }
+      const rows = await TrackingSession.find({
+        merchantId,
+        lastSeenAt: { $gte: since },
+      })
+        .sort({ lastSeenAt: -1 })
+        .limit(input.limit)
+        .lean();
+      return {
+        kind: "sessions" as const,
+        count: rows.length,
+        windowDays: days,
+        rows: rows.map((s) => ({
+          id: String(s._id),
+          sessionId: s.sessionId,
+          anonId: s.anonId ?? null,
+          phone: s.phone ?? null,
+          email: s.email ?? null,
+          firstSeenAt: s.firstSeenAt,
+          lastSeenAt: s.lastSeenAt,
+          durationMs: s.durationMs,
+          pageViews: s.pageViews,
+          productViews: s.productViews,
+          addToCartCount: s.addToCartCount,
+          checkoutStartCount: s.checkoutStartCount,
+          checkoutSubmitCount: s.checkoutSubmitCount,
+          repeatVisitor: s.repeatVisitor,
+          converted: s.converted,
+          abandonedCart: s.abandonedCart,
+          landingPath: s.landingPath ?? null,
+          referrer: s.referrer ?? null,
+          campaign: s.campaign ?? null,
+          device: s.device ?? null,
+          resolvedOrderId: s.resolvedOrderId ? String(s.resolvedOrderId) : null,
+        })),
+      };
+    }),
 });
