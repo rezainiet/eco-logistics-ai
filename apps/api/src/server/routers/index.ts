@@ -8,6 +8,8 @@ import { fraudRouter } from "./fraud.js";
 import { billingRouter } from "./billing.js";
 import { adminBillingRouter } from "./adminBilling.js";
 import { notificationsRouter } from "./notifications.js";
+import { integrationsRouter } from "./integrations.js";
+import { trackingRouter } from "./tracking.js";
 
 export const appRouter = router({
   health: publicProcedure.query(() => ({ ok: true, ts: Date.now() })),
@@ -21,6 +23,8 @@ export const appRouter = router({
   billing: billingRouter,
   adminBilling: adminBillingRouter,
   notifications: notificationsRouter,
+  integrations: integrationsRouter,
+  tracking: trackingRouter,
 });
 
 export type AppRouter = typeof appRouter;

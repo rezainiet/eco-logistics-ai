@@ -139,41 +139,41 @@ export default function BillingPage() {
   return (
     <div className="space-y-6">
       <header>
-        <h1 className="text-2xl font-semibold text-[#F3F4F6]">Billing &amp; subscription</h1>
-        <p className="text-sm text-[#9CA3AF]">
+        <h1 className="text-2xl font-semibold text-fg">Billing &amp; subscription</h1>
+        <p className="text-sm text-fg-subtle">
           Manage your plan, track monthly usage, and submit payments.
         </p>
       </header>
 
       {/* Banners */}
       {subscription?.trialExpired ? (
-        <div className="flex items-start gap-3 rounded-md border border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.08)] p-4">
-          <AlertCircle className="mt-0.5 h-5 w-5 text-[#F87171]" />
+        <div className="flex items-start gap-3 rounded-md border border-danger/30 bg-danger/8 p-4">
+          <AlertCircle className="mt-0.5 h-5 w-5 text-danger" />
           <div className="text-sm">
-            <div className="font-medium text-[#F87171]">Your trial has ended</div>
-            <p className="text-[#9CA3AF]">
+            <div className="font-medium text-danger">Your trial has ended</div>
+            <p className="text-fg-subtle">
               Upgrade to continue creating orders, booking shipments, and running fraud reviews.
             </p>
           </div>
         </div>
       ) : subscription?.status === "trial" && (subscription.trialDaysLeft ?? 0) <= 3 ? (
-        <div className="flex items-start gap-3 rounded-md border border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.08)] p-4">
-          <Clock className="mt-0.5 h-5 w-5 text-[#FBBF24]" />
+        <div className="flex items-start gap-3 rounded-md border border-warning/30 bg-warning/8 p-4">
+          <Clock className="mt-0.5 h-5 w-5 text-warning" />
           <div className="text-sm">
-            <div className="font-medium text-[#FBBF24]">
+            <div className="font-medium text-warning">
               Trial ends in {subscription.trialDaysLeft} day{subscription.trialDaysLeft === 1 ? "" : "s"}
             </div>
-            <p className="text-[#9CA3AF]">
+            <p className="text-fg-subtle">
               Submit a payment below to keep your account active.
             </p>
           </div>
         </div>
       ) : subscription?.status === "past_due" ? (
-        <div className="flex items-start gap-3 rounded-md border border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.08)] p-4">
-          <AlertCircle className="mt-0.5 h-5 w-5 text-[#F87171]" />
+        <div className="flex items-start gap-3 rounded-md border border-danger/30 bg-danger/8 p-4">
+          <AlertCircle className="mt-0.5 h-5 w-5 text-danger" />
           <div className="text-sm">
-            <div className="font-medium text-[#F87171]">Subscription is past due</div>
-            <p className="text-[#9CA3AF]">Renew to restore access to billable features.</p>
+            <div className="font-medium text-danger">Subscription is past due</div>
+            <p className="text-fg-subtle">Renew to restore access to billable features.</p>
           </div>
         </div>
       ) : null}
@@ -182,42 +182,42 @@ export default function BillingPage() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="md:col-span-1">
           <CardHeader>
-            <CardDescription className="uppercase tracking-[0.4px] text-[#6B7280] text-[11px]">
+            <CardDescription className="uppercase tracking-[0.4px] text-fg-faint text-[11px]">
               Current plan
             </CardDescription>
-            <CardTitle className="text-xl text-[#F3F4F6]">
+            <CardTitle className="text-xl text-fg">
               {currentPlan?.name ?? "Loading..."}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-[#9CA3AF]">Status</span>
+              <span className="text-fg-subtle">Status</span>
               <Badge
                 className={
                   subscription?.status === "active"
-                    ? "bg-[rgba(16,185,129,0.15)] text-[#34D399]"
+                    ? "bg-success-subtle text-success"
                     : subscription?.status === "trial"
-                      ? "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]"
-                      : "bg-[rgba(239,68,68,0.15)] text-[#F87171]"
+                      ? "bg-warning-subtle text-warning"
+                      : "bg-danger-subtle text-danger"
                 }
               >
                 {subscription?.status ?? "—"}
               </Badge>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[#9CA3AF]">Price</span>
-              <span className="text-[#F3F4F6]">{currentPlan ? formatBDT(currentPlan.priceBDT) : "—"} / mo</span>
+              <span className="text-fg-subtle">Price</span>
+              <span className="text-fg">{currentPlan ? formatBDT(currentPlan.priceBDT) : "—"} / mo</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[#9CA3AF]">Trial ends</span>
-              <span className="text-[#F3F4F6]">{formatDate(subscription?.trialEndsAt ?? null)}</span>
+              <span className="text-fg-subtle">Trial ends</span>
+              <span className="text-fg">{formatDate(subscription?.trialEndsAt ?? null)}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-[#9CA3AF]">Next renewal</span>
-              <span className="text-[#F3F4F6]">{formatDate(subscription?.currentPeriodEnd ?? null)}</span>
+              <span className="text-fg-subtle">Next renewal</span>
+              <span className="text-fg">{formatDate(subscription?.currentPeriodEnd ?? null)}</span>
             </div>
             {subscription?.pendingPaymentId ? (
-              <div className="rounded-md border border-[rgba(59,130,246,0.3)] bg-[rgba(59,130,246,0.08)] p-2 text-xs text-[#93C5FD]">
+              <div className="rounded-md border border-info/30 bg-info/8 p-2 text-xs text-info">
                 Payment under review — we'll activate once approved.
               </div>
             ) : null}
@@ -240,8 +240,8 @@ export default function BillingPage() {
 
         <Card className="md:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base text-[#F3F4F6]">Usage this month</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardTitle className="text-base text-fg">Usage this month</CardTitle>
+            <CardDescription className="text-fg-subtle">
               Period {usage.data?.period ?? "—"}
             </CardDescription>
           </CardHeader>
@@ -252,27 +252,27 @@ export default function BillingPage() {
               return (
                 <div key={m.metric}>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-[#D1D5DB]">{label}</span>
+                    <span className="text-fg-muted">{label}</span>
                     <span
                       className={
                         m.blocked
-                          ? "text-[#F87171]"
+                          ? "text-danger"
                           : m.warning
-                            ? "text-[#FBBF24]"
-                            : "text-[#9CA3AF]"
+                            ? "text-warning"
+                            : "text-fg-subtle"
                       }
                     >
                       {m.used.toLocaleString()} / {limitLabel}
                     </span>
                   </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[#1A1D2E]">
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface">
                     <div
                       className={
                         m.blocked
-                          ? "h-full bg-[#EF4444]"
+                          ? "h-full bg-danger"
                           : m.warning
-                            ? "h-full bg-[#F59E0B]"
-                            : "h-full bg-[#0084D4]"
+                            ? "h-full bg-warning"
+                            : "h-full bg-brand"
                       }
                       style={{ width: `${Math.round(m.ratio * 100)}%` }}
                     />
@@ -281,7 +281,7 @@ export default function BillingPage() {
               );
             })}
             {!usage.data?.meters.length && (
-              <div className="text-xs text-[#6B7280]">Loading usage…</div>
+              <div className="text-xs text-fg-faint">Loading usage…</div>
             )}
           </CardContent>
         </Card>
@@ -289,7 +289,7 @@ export default function BillingPage() {
 
       {/* Upgrade cards */}
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.4px] text-[#9CA3AF]">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.4px] text-fg-subtle">
           Plans
         </h2>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -301,26 +301,26 @@ export default function BillingPage() {
                 key={p.tier}
                 className={
                   isCurrent
-                    ? "border-[#0084D4] shadow-[0_0_12px_rgba(0,132,212,0.15)]"
+                    ? "border-brand shadow-[0_0_12px_rgba(0,132,212,0.15)]"
                     : ""
                 }
               >
                 <CardHeader>
                   <div className="flex items-center gap-2">
-                    <Icon className="h-4 w-4 text-[#0084D4]" />
+                    <Icon className="h-4 w-4 text-brand" />
                     <CardTitle className="text-base">{p.name}</CardTitle>
                   </div>
-                  <CardDescription className="text-[#9CA3AF]">{p.tagline}</CardDescription>
+                  <CardDescription className="text-fg-subtle">{p.tagline}</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
-                  <div className="text-2xl font-semibold text-[#F3F4F6]">
+                  <div className="text-2xl font-semibold text-fg">
                     {formatBDT(p.priceBDT)}
-                    <span className="ml-1 text-xs text-[#9CA3AF]">/ month</span>
+                    <span className="ml-1 text-xs text-fg-subtle">/ month</span>
                   </div>
-                  <ul className="space-y-1 text-xs text-[#D1D5DB]">
+                  <ul className="space-y-1 text-xs text-fg-muted">
                     {p.highlights.map((h) => (
                       <li key={h} className="flex items-start gap-2">
-                        <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-[#10B981]" />
+                        <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0 text-success" />
                         <span>{h}</span>
                       </li>
                     ))}
@@ -344,7 +344,7 @@ export default function BillingPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Submit payment</CardTitle>
-          <CardDescription className="text-[#9CA3AF]">
+          <CardDescription className="text-fg-subtle">
             Bangladesh-ready manual payments. Pay via bKash / Nagad / Bank, then submit the transaction id.
           </CardDescription>
         </CardHeader>
@@ -385,7 +385,7 @@ export default function BillingPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-[#6B7280]">{METHOD_HELP[form.method]?.hint}</p>
+              <p className="text-xs text-fg-faint">{METHOD_HELP[form.method]?.hint}</p>
             </div>
             <div className="space-y-1.5">
               <Label>Amount (BDT)</Label>
@@ -442,7 +442,7 @@ export default function BillingPage() {
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Receipt className="h-4 w-4 text-[#9CA3AF]" />
+            <Receipt className="h-4 w-4 text-fg-subtle" />
             <CardTitle className="text-base">Payment history</CardTitle>
           </div>
         </CardHeader>
@@ -471,10 +471,10 @@ export default function BillingPage() {
                       <Badge
                         className={
                           p.status === "approved"
-                            ? "bg-[rgba(16,185,129,0.15)] text-[#34D399]"
+                            ? "bg-success-subtle text-success"
                             : p.status === "rejected"
-                              ? "bg-[rgba(239,68,68,0.15)] text-[#F87171]"
-                              : "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]"
+                              ? "bg-danger-subtle text-danger"
+                              : "bg-warning-subtle text-warning"
                         }
                       >
                         {p.status}
@@ -484,7 +484,7 @@ export default function BillingPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-xs text-[#6B7280]">
+                  <TableCell colSpan={6} className="text-center text-xs text-fg-faint">
                     No payments yet
                   </TableCell>
                 </TableRow>

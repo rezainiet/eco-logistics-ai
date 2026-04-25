@@ -155,6 +155,16 @@ const sourceSchema = new Schema(
       enum: ["dashboard", "bulk_upload", "api", "webhook", "system"],
       default: "dashboard",
     },
+    /** Upstream id (Shopify/Woo/custom) used for ingestion idempotency. */
+    externalId: { type: String, trim: true, maxlength: 200 },
+    /** Provider that delivered this order — null for dashboard-created. */
+    sourceProvider: {
+      type: String,
+      enum: ["shopify", "woocommerce", "custom_api", "csv", "dashboard"],
+    },
+    integrationId: { type: Schema.Types.ObjectId, ref: "Integration" },
+    customerEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
+    placedAt: { type: Date },
   },
   { _id: false }
 );
@@ -194,6 +204,14 @@ orderSchema.index(
 orderSchema.index(
   { merchantId: 1, "source.addressHash": 1, createdAt: -1 },
   { partialFilterExpression: { "source.addressHash": { $exists: true, $type: "string" } } },
+);
+// Webhook idempotency — duplicate inbound orders short-circuit here.
+orderSchema.index(
+  { merchantId: 1, "source.externalId": 1 },
+  {
+    unique: true,
+    partialFilterExpression: { "source.externalId": { $exists: true, $type: "string" } },
+  },
 );
 // Sync worker: find active shipments that need polling, oldest first.
 orderSchema.index(

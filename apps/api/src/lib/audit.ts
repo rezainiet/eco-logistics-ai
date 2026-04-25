@@ -11,6 +11,7 @@ type AuditAction =
   | "review.reopened"
   | "order.booked"
   | "order.cancelled"
+  | "order.ingested"
   | "courier.configured"
   | "fraud.config_updated"
   | "payment.submitted"
@@ -19,9 +20,21 @@ type AuditAction =
   | "subscription.activated"
   | "subscription.cancelled"
   | "subscription.extended"
-  | "subscription.plan_changed";
+  | "subscription.plan_changed"
+  | "integration.connected"
+  | "integration.disconnected"
+  | "integration.test"
+  | "integration.webhook"
+  | "tracking.identified";
 
-type SubjectType = "order" | "merchant" | "courier" | "call" | "payment";
+type SubjectType =
+  | "order"
+  | "merchant"
+  | "courier"
+  | "call"
+  | "payment"
+  | "integration"
+  | "session";
 
 export interface AuditEntry {
   merchantId: Types.ObjectId;

@@ -11,6 +11,8 @@ import { createContext } from "./server/trpc.js";
 import { authRouter } from "./server/auth.js";
 import { adminRouter } from "./server/admin.js";
 import { twilioWebhookRouter } from "./server/webhooks/twilio.js";
+import { integrationsWebhookRouter } from "./server/webhooks/integrations.js";
+import { trackingRouter as trackingCollectorRouter } from "./server/tracking/collector.js";
 import { globalLimiter } from "./middleware/rateLimit.js";
 import { registerTrackingSyncWorker, scheduleTrackingSync } from "./workers/trackingSync.js";
 import { registerRiskRecomputeWorker } from "./workers/riskRecompute.js";
@@ -38,6 +40,15 @@ async function main() {
   app.use("/auth", authRouter);
   app.use("/admin", adminRouter);
   app.use("/api/webhooks/twilio", twilioWebhookRouter);
+  app.use("/api/integrations/webhook", integrationsWebhookRouter);
+  // Behavior tracker collector. CORS is wide-open so storefronts on any
+  // origin can post events; they prove ownership via the merchant's
+  // public tracking key.
+  app.use(
+    "/track",
+    cors({ origin: true, credentials: false, methods: ["POST", "OPTIONS"] }),
+    trackingCollectorRouter,
+  );
 
   app.use(
     "/trpc",

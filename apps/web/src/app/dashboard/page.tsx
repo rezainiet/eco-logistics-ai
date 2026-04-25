@@ -21,32 +21,35 @@ import {
   PackageCheck,
   PackageX,
   ShieldAlert,
+  Sparkles,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatCard } from "@/components/ui/stat-card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ChartCard } from "@/components/charts/chart-card";
+import { OnboardingChecklist } from "@/components/onboarding/onboarding-checklist";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  CHART_AXIS_STROKE,
+  CHART_COLORS,
+  CHART_CURSOR_FILL,
+  CHART_GRID_STROKE,
+  CHART_LEGEND_STYLE,
+  CHART_TOOLTIP_STYLE,
+} from "@/components/charts/chart-style";
+import { formatBDT } from "@/lib/formatters";
 
-const STATUS_COLORS = {
-  delivered: "#10B981",
-  pending: "#F59E0B",
-  rto: "#EF4444",
-} as const;
-
-const TOOLTIP_STYLE = {
-  backgroundColor: "#111318",
-  border: "1px solid rgba(209,213,219,0.12)",
-  borderRadius: "8px",
-  color: "#F3F4F6",
-};
-
-function formatBDT(n: number): string {
-  return `৳ ${n.toLocaleString()}`;
+function trendDelta(series: number[]): number {
+  if (!series.length) return 0;
+  const half = Math.max(1, Math.floor(series.length / 2));
+  const first = series.slice(0, half);
+  const second = series.slice(-half);
+  const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
+  const a = sum(first);
+  const b = sum(second);
+  if (a === 0) return b > 0 ? 100 : 0;
+  return ((b - a) / a) * 100;
 }
 
 export default function DashboardPage() {
@@ -55,175 +58,187 @@ export default function DashboardPage() {
   const fraudStats = trpc.fraud.getReviewStats.useQuery({ days: 7 });
 
   const d = dashboard.data;
-  const rtoRate = ((d?.rtoRate ?? 0) * 100).toFixed(1);
+  const rtoRate = ((d?.rtoRate ?? 0) * 100);
   const queue = fraudStats.data?.queue ?? { pending: 0, noAnswer: 0 };
   const queueTotal = queue.pending + queue.noAnswer;
 
-  const stats = [
-    {
-      title: "Total orders",
-      value: dashboard.isLoading ? "…" : (d?.totalOrders ?? 0).toLocaleString(),
-      icon: Package,
-      color: "#0084D4",
-    },
-    {
-      title: "Delivered",
-      value: dashboard.isLoading ? "…" : (d?.delivered ?? 0).toLocaleString(),
-      icon: PackageCheck,
-      color: "#10B981",
-    },
-    {
-      title: "RTO rate",
-      value: dashboard.isLoading ? "…" : `${rtoRate}%`,
-      icon: PackageX,
-      color: "#EF4444",
-    },
-    {
-      title: "Revenue today",
-      value: dashboard.isLoading ? "…" : formatBDT(d?.revenueToday ?? 0),
-      icon: BadgeDollarSign,
-      color: "#8B5CF6",
-    },
-  ];
+  const last = last7.data ?? [];
+  const totalSpark = last.map((x) => x.total);
+  const deliveredSpark = last.map((x) => x.delivered);
+  const rtoRateSpark = last.map((x) => (x.total > 0 ? (x.rto / x.total) * 100 : 0));
 
-  const chartData = (last7.data ?? []).map((d) => ({
-    name: d.date.slice(5),
-    Orders: d.total,
-    Delivered: d.delivered,
-    RTO: d.rto,
+  const totalDelta = trendDelta(totalSpark);
+  const deliveredDelta = trendDelta(deliveredSpark);
+  const rtoDelta = trendDelta(rtoRateSpark);
+
+  const chartData = last.map((x) => ({
+    name: x.date.slice(5),
+    Orders: x.total,
+    Delivered: x.delivered,
+    RTO: x.rto,
   }));
 
   const statusData = d
     ? [
-        { name: "Delivered", value: d.delivered, color: STATUS_COLORS.delivered },
-        { name: "Pending", value: d.pending, color: STATUS_COLORS.pending },
-        { name: "RTO", value: d.rto, color: STATUS_COLORS.rto },
+        { name: "Delivered", value: d.delivered, color: CHART_COLORS.success },
+        { name: "Pending", value: d.pending, color: CHART_COLORS.warning },
+        { name: "RTO", value: d.rto, color: CHART_COLORS.danger },
       ].filter((s) => s.value > 0)
     : [];
 
+  const loading = dashboard.isLoading;
+
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-[#F3F4F6]">Welcome back</h1>
-          <p className="mt-1 text-sm text-[#9CA3AF]">Your business at a glance.</p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          {queueTotal > 0 && (
-            <Button
-              asChild
-              variant="outline"
-              className="border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.08)] text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.15)]"
-            >
-              <Link href="/dashboard/fraud-review">
-                <ShieldAlert className="mr-2 h-4 w-4" />
-                {queueTotal} to review
+      <PageHeader
+        eyebrow="Overview"
+        title="Welcome back"
+        description="Your logistics operations at a glance — last 7 days trend included on every KPI."
+        actions={
+          <>
+            {queueTotal > 0 ? (
+              <Button asChild variant="outline" className="border-danger-border bg-danger-subtle text-danger hover:bg-danger/20 hover:text-danger">
+                <Link href="/dashboard/fraud-review">
+                  <ShieldAlert className="mr-2 h-4 w-4" />
+                  {queueTotal} to review
+                </Link>
+              </Button>
+            ) : null}
+            <Button asChild className="bg-brand text-white hover:bg-brand-hover">
+              <Link href="/dashboard/orders">
+                View orders
+                <ArrowUpRight className="ml-1.5 h-4 w-4" />
               </Link>
             </Button>
+          </>
+        }
+      />
+
+      <OnboardingChecklist />
+
+      <section aria-label="Key metrics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Total orders"
+          value={loading ? "—" : (d?.totalOrders ?? 0).toLocaleString()}
+          icon={Package}
+          tone="brand"
+          sparkData={totalSpark}
+          delta={last.length >= 2 ? { value: totalDelta, label: "vs last period" } : undefined}
+          loading={loading}
+        />
+        <StatCard
+          label="Delivered"
+          value={loading ? "—" : (d?.delivered ?? 0).toLocaleString()}
+          icon={PackageCheck}
+          tone="success"
+          sparkData={deliveredSpark}
+          delta={last.length >= 2 ? { value: deliveredDelta, label: "vs last period" } : undefined}
+          loading={loading}
+        />
+        <StatCard
+          label="RTO rate"
+          value={loading ? "—" : `${rtoRate.toFixed(1)}%`}
+          icon={PackageX}
+          tone="danger"
+          sparkData={rtoRateSpark}
+          delta={last.length >= 2 ? { value: rtoDelta, label: "vs last period" } : undefined}
+          invertDelta
+          loading={loading}
+        />
+        <StatCard
+          label="Revenue today"
+          value={loading ? "—" : formatBDT(d?.revenueToday ?? 0)}
+          icon={BadgeDollarSign}
+          tone="violet"
+          footer="Delivered orders · today"
+          loading={loading}
+        />
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <ChartCard
+          className="lg:col-span-2"
+          title="Orders — last 7 days"
+          description="Volume, deliveries and returns by day"
+          action={
+            <div className="inline-flex rounded-md border border-stroke/12 bg-surface-raised p-0.5 text-xs text-fg-subtle">
+              <span className="rounded-sm bg-surface px-2 py-1 font-medium text-fg shadow-card">7d</span>
+              <span className="cursor-not-allowed px-2 py-1 opacity-60" title="Coming soon">30d</span>
+              <span className="cursor-not-allowed px-2 py-1 opacity-60" title="Coming soon">90d</span>
+            </div>
+          }
+        >
+          {last7.isLoading ? (
+            <div className="h-72 animate-shimmer rounded-md" />
+          ) : chartData.length === 0 ? (
+            <EmptyState
+              icon={Sparkles}
+              title="No activity yet"
+              description="Create your first order to see daily trends here."
+              className="my-4"
+            />
+          ) : (
+            <ResponsiveContainer width="100%" height={288}>
+              <BarChart data={chartData} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} />
+                <XAxis
+                  dataKey="name"
+                  stroke={CHART_AXIS_STROKE}
+                  fontSize={11}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <YAxis
+                  stroke={CHART_AXIS_STROKE}
+                  fontSize={11}
+                  allowDecimals={false}
+                  tickLine={false}
+                  axisLine={false}
+                  width={28}
+                />
+                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={{ fill: CHART_CURSOR_FILL }} />
+                <Legend wrapperStyle={CHART_LEGEND_STYLE} iconType="circle" iconSize={7} />
+                <Bar dataKey="Orders" fill={CHART_COLORS.brand} radius={[6, 6, 0, 0]} maxBarSize={42} />
+                <Bar dataKey="Delivered" fill={CHART_COLORS.success} radius={[6, 6, 0, 0]} maxBarSize={42} />
+                <Bar dataKey="RTO" fill={CHART_COLORS.danger} radius={[6, 6, 0, 0]} maxBarSize={42} />
+              </BarChart>
+            </ResponsiveContainer>
           )}
-          <Button asChild className="w-full bg-[#0084D4] text-white hover:bg-[#0072BB] md:w-auto">
-            <Link href="/dashboard/orders">
-              View orders
-              <ArrowUpRight className="ml-2 h-4 w-4" />
-            </Link>
-          </Button>
-        </div>
-      </div>
+        </ChartCard>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {stats.map((s) => {
-          const Icon = s.icon;
-          return (
-            <Card
-              key={s.title}
-              className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6] transition-colors hover:border-[rgba(209,213,219,0.2)]"
-            >
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-xs font-medium uppercase tracking-[0.4px] text-[#9CA3AF]">
-                  {s.title}
-                </CardTitle>
-                <div
-                  className="flex h-8 w-8 items-center justify-center rounded-lg"
-                  style={{ backgroundColor: `${s.color}22` }}
+        <ChartCard title="Order status" description="Lifetime distribution">
+          {dashboard.isLoading ? (
+            <div className="h-72 animate-shimmer rounded-md" />
+          ) : statusData.length === 0 ? (
+            <EmptyState
+              icon={Package}
+              title="No orders yet"
+              description="Your fulfilment breakdown appears here once orders flow in."
+              className="my-4"
+            />
+          ) : (
+            <ResponsiveContainer width="100%" height={288}>
+              <PieChart>
+                <Pie
+                  data={statusData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={92}
+                  paddingAngle={2}
+                  dataKey="value"
                 >
-                  <Icon className="h-4 w-4" style={{ color: s.color }} />
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-2xl font-semibold text-[#F3F4F6]">{s.value}</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6] lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Orders — last 7 days</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
-              Orders, deliveries and RTOs by day
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {last7.isLoading ? (
-              <div className="h-72 animate-shimmer rounded-md" />
-            ) : (
-              <ResponsiveContainer width="100%" height={288}>
-                <BarChart data={chartData} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(209,213,219,0.08)" />
-                  <XAxis dataKey="name" stroke="#9CA3AF" fontSize={12} />
-                  <YAxis stroke="#9CA3AF" fontSize={12} allowDecimals={false} />
-                  <Tooltip
-                    contentStyle={TOOLTIP_STYLE}
-                    cursor={{ fill: "rgba(0,132,212,0.08)" }}
-                  />
-                  <Legend wrapperStyle={{ color: "#9CA3AF", fontSize: 12 }} />
-                  <Bar dataKey="Orders" fill="#0084D4" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="Delivered" fill="#10B981" radius={[6, 6, 0, 0]} />
-                  <Bar dataKey="RTO" fill="#EF4444" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
-          <CardHeader>
-            <CardTitle className="text-lg font-semibold">Order status</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">Lifetime distribution</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {dashboard.isLoading ? (
-              <div className="h-72 animate-shimmer rounded-md" />
-            ) : statusData.length === 0 ? (
-              <div className="flex h-72 items-center justify-center text-sm text-[#9CA3AF]">
-                No orders yet.
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={288}>
-                <PieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={56}
-                    outerRadius={88}
-                    paddingAngle={2}
-                    dataKey="value"
-                  >
-                    {statusData.map((entry) => (
-                      <Cell key={entry.name} fill={entry.color} stroke="#111318" strokeWidth={2} />
-                    ))}
-                  </Pie>
-                  <Tooltip contentStyle={TOOLTIP_STYLE} />
-                  <Legend wrapperStyle={{ color: "#9CA3AF", fontSize: 12 }} />
-                </PieChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+                  {statusData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} stroke="hsl(228 30% 11%)" strokeWidth={3} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+                <Legend wrapperStyle={CHART_LEGEND_STYLE} iconType="circle" iconSize={7} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </ChartCard>
+      </section>
     </div>
   );
 }

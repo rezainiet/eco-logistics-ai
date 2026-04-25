@@ -34,6 +34,7 @@ import { releaseQuota, reserveQuota } from "../../lib/usage.js";
 import { getPlan } from "../../lib/plans.js";
 import { fireFraudAlert } from "../../lib/alerts.js";
 import { enqueueRescore } from "../../workers/riskRecompute.js";
+import { resolveIdentityForOrder } from "../ingest.js";
 
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
 const COUNT_TTL = 30;
@@ -434,6 +435,11 @@ export const ordersRouter = router({
           kind: "fraud.pending_review",
         });
       }
+      void resolveIdentityForOrder({
+        merchantId,
+        orderId: order._id,
+        phone: order.customer.phone,
+      }).catch((err) => console.error("[orders.create] identity stitch failed", err));
       return {
         id: String(order._id),
         orderNumber: order.orderNumber,

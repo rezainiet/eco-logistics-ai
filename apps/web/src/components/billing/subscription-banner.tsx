@@ -102,13 +102,13 @@ function Banner({
 }) {
   const styles =
     tone === "error"
-      ? "border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.08)] text-[#F87171]"
+      ? "border-danger-border bg-danger-subtle text-danger"
       : tone === "warning"
-        ? "border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.08)] text-[#FBBF24]"
-        : "border-[rgba(59,130,246,0.3)] bg-[rgba(59,130,246,0.08)] text-[#93C5FD]";
+        ? "border-warning-border bg-warning-subtle text-warning"
+        : "border-info-border bg-info-subtle text-info";
   return (
-    <div className={`mb-4 flex items-start gap-2 rounded-md border ${styles} px-3 py-2 text-sm`}>
-      <span className="mt-0.5">{icon}</span>
+    <div className={`mb-5 flex items-start gap-2 rounded-lg border ${styles} px-3.5 py-2.5 text-sm animate-fade-in`}>
+      <span className="mt-0.5 shrink-0">{icon}</span>
       <span>{children}</span>
     </div>
   );

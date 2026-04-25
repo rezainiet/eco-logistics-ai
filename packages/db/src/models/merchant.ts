@@ -99,6 +99,13 @@ const merchantSchema = new Schema(
     subscription: { type: subscriptionSchema, default: () => ({}) },
     couriers: { type: [courierSchema], default: [] },
     fraudConfig: { type: fraudConfigSchema, default: () => ({}) },
+    /**
+     * Public tracking key embedded in the JS SDK on the merchant's storefront.
+     * Resolves to merchantId server-side at the collector boundary. Safe to
+     * expose — it can only write events for this merchant, never read.
+     * Auto-generated on first /track request that needs it.
+     */
+    trackingKey: { type: String, unique: true, sparse: true, trim: true, maxlength: 64 },
   },
   { timestamps: true }
 );

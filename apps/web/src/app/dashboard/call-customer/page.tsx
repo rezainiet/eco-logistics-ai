@@ -25,20 +25,20 @@ import { Label } from "@/components/ui/label";
 const LIVE_STATUSES = new Set(["queued", "initiated", "ringing", "in-progress"]);
 
 const STATUS_STYLES: Record<string, string> = {
-  queued: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
-  initiated: "bg-[rgba(59,130,246,0.15)] text-[#60A5FA]",
-  ringing: "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]",
-  "in-progress": "bg-[rgba(16,185,129,0.15)] text-[#34D399]",
-  completed: "bg-[rgba(16,185,129,0.15)] text-[#34D399]",
-  busy: "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]",
-  "no-answer": "bg-[rgba(239,68,68,0.15)] text-[#F87171]",
-  failed: "bg-[rgba(239,68,68,0.15)] text-[#F87171]",
-  canceled: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
+  queued: "bg-surface-raised text-fg-muted",
+  initiated: "bg-info-subtle text-info",
+  ringing: "bg-warning-subtle text-warning",
+  "in-progress": "bg-success-subtle text-success",
+  completed: "bg-success-subtle text-success",
+  busy: "bg-warning-subtle text-warning",
+  "no-answer": "bg-danger-subtle text-danger",
+  failed: "bg-danger-subtle text-danger",
+  canceled: "bg-surface-raised text-fg-muted",
 };
 
 function statusClass(status: string | null): string {
-  if (!status) return "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]";
-  return STATUS_STYLES[status] ?? "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]";
+  if (!status) return "bg-surface-raised text-fg-muted";
+  return STATUS_STYLES[status] ?? "bg-surface-raised text-fg-muted";
 }
 
 function formatDuration(seconds: number): string {
@@ -134,22 +134,22 @@ export default function CallCustomerPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-[#F3F4F6]">Call customer</h1>
-        <p className="mt-1 text-sm text-[#9CA3AF]">
+        <h1 className="text-3xl font-semibold tracking-tight text-fg">Call customer</h1>
+        <p className="mt-1 text-sm text-fg-subtle">
           Place outbound calls via Twilio and track status in real time.
         </p>
       </div>
 
       {configured.isSuccess && !configured.data?.configured && (
-        <Card className="border-[rgba(245,158,11,0.3)] bg-[rgba(245,158,11,0.08)] text-[#F3F4F6]">
+        <Card className="border-warning/30 bg-warning/8 text-fg">
           <CardContent className="flex items-start gap-3 p-4">
-            <AlertCircle className="h-5 w-5 shrink-0 text-[#FBBF24]" />
+            <AlertCircle className="h-5 w-5 shrink-0 text-warning" />
             <div className="text-sm">
-              <p className="font-medium text-[#FBBF24]">Twilio not configured</p>
-              <p className="text-[#D1D5DB]">
-                Set <code className="rounded bg-[#111318] px-1 py-0.5 text-xs">TWILIO_ACCOUNT_SID</code>,{" "}
-                <code className="rounded bg-[#111318] px-1 py-0.5 text-xs">TWILIO_AUTH_TOKEN</code>, and{" "}
-                <code className="rounded bg-[#111318] px-1 py-0.5 text-xs">TWILIO_PHONE_NUMBER</code>{" "}
+              <p className="font-medium text-warning">Twilio not configured</p>
+              <p className="text-fg-muted">
+                Set <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_ACCOUNT_SID</code>,{" "}
+                <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_AUTH_TOKEN</code>, and{" "}
+                <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_PHONE_NUMBER</code>{" "}
                 in the API env to enable calling.
               </p>
             </div>
@@ -158,16 +158,16 @@ export default function CallCustomerPage() {
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+        <Card className="border-stroke/10 bg-surface text-fg">
           <CardHeader>
             <CardTitle className="text-lg font-semibold">New call</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               Enter a customer number to start an outbound call.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="call-name" className="text-[#9CA3AF]">
+              <Label htmlFor="call-name" className="text-fg-subtle">
                 Customer name
               </Label>
               <Input
@@ -175,12 +175,12 @@ export default function CallCustomerPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Optional"
-                className="border-[rgba(209,213,219,0.15)] bg-[#111318] text-[#F3F4F6] placeholder:text-[#6B7280]"
+                className="border-stroke/14 bg-surface-overlay text-fg placeholder:text-fg-faint"
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="call-phone" className="text-[#9CA3AF]">
+              <Label htmlFor="call-phone" className="text-fg-subtle">
                 Phone number
               </Label>
               <Input
@@ -188,12 +188,12 @@ export default function CallCustomerPage() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="+8801…"
-                className="border-[rgba(209,213,219,0.15)] bg-[#111318] font-mono text-[#F3F4F6] placeholder:text-[#6B7280]"
+                className="border-stroke/14 bg-surface-overlay font-mono text-fg placeholder:text-fg-faint"
               />
             </div>
 
             {error && (
-              <div className="flex items-start gap-2 rounded-md border border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.08)] p-3 text-sm text-[#FCA5A5]">
+              <div className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/8 p-3 text-sm text-danger">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>{error}</span>
               </div>
@@ -201,7 +201,7 @@ export default function CallCustomerPage() {
 
             <div className="flex gap-2">
               <Button
-                className="flex-1 bg-[#10B981] text-white hover:bg-[#059669] disabled:bg-[#1A1D2E] disabled:text-[#6B7280]"
+                className="flex-1 bg-success text-white hover:bg-success/90 disabled:bg-surface disabled:text-fg-faint"
                 disabled={!canCall}
                 onClick={onCall}
               >
@@ -210,7 +210,7 @@ export default function CallCustomerPage() {
               </Button>
               <Button
                 variant="outline"
-                className="flex-1 border-[rgba(239,68,68,0.4)] bg-transparent text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.1)] disabled:opacity-40"
+                className="flex-1 border-danger/40 bg-transparent text-danger hover:bg-danger-subtle disabled:opacity-40"
                 disabled={!isLive || hangup.isPending}
                 onClick={onHangup}
               >
@@ -221,23 +221,23 @@ export default function CallCustomerPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+        <Card className="border-stroke/10 bg-surface text-fg">
           <CardHeader>
             <CardTitle className="text-lg font-semibold">Live status</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               {activeSid ? "Updates every 2 seconds while the call is active." : "No active call."}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {!activeSid ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-8 text-center text-sm text-[#9CA3AF]">
-                <Phone className="h-6 w-6 text-[#6B7280]" />
+              <div className="flex flex-col items-center justify-center gap-2 py-8 text-center text-sm text-fg-subtle">
+                <Phone className="h-6 w-6 text-fg-faint" />
                 Place a call to see live status here.
               </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">Status</span>
+                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">Status</span>
                   <Badge
                     variant="outline"
                     className={`border-transparent ${statusClass(liveStatus.data?.status ?? null)}`}
@@ -246,19 +246,19 @@ export default function CallCustomerPage() {
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">
+                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
                     To
                   </span>
-                  <span className="font-mono text-sm text-[#F3F4F6]">
+                  <span className="font-mono text-sm text-fg">
                     {liveStatus.data?.customerPhone ?? "—"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">
+                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
                     Duration
                   </span>
-                  <span className="flex items-center gap-1.5 text-sm text-[#F3F4F6]">
-                    <Timer className="h-3.5 w-3.5 text-[#9CA3AF]" />
+                  <span className="flex items-center gap-1.5 text-sm text-fg">
+                    <Timer className="h-3.5 w-3.5 text-fg-subtle" />
                     {formatDuration(liveStatus.data?.duration ?? 0)}
                   </span>
                 </div>
@@ -267,7 +267,7 @@ export default function CallCustomerPage() {
                     href={liveStatus.data.recordingUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block text-sm text-[#0084D4] hover:underline"
+                    className="block text-sm text-brand hover:underline"
                   >
                     Play recording →
                   </a>
@@ -278,10 +278,10 @@ export default function CallCustomerPage() {
         </Card>
       </div>
 
-      <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+      <Card className="border-stroke/10 bg-surface text-fg">
         <CardHeader>
           <CardTitle className="text-lg font-semibold">Recent calls</CardTitle>
-          <CardDescription className="text-[#9CA3AF]">Your last 20 outbound calls</CardDescription>
+          <CardDescription className="text-fg-subtle">Your last 20 outbound calls</CardDescription>
         </CardHeader>
         <CardContent>
           {recent.isLoading ? (
@@ -292,28 +292,28 @@ export default function CallCustomerPage() {
             </div>
           ) : calls.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-              <PhoneCall className="h-5 w-5 text-[#6B7280]" />
-              <p className="text-sm text-[#9CA3AF]">No calls yet.</p>
+              <PhoneCall className="h-5 w-5 text-fg-faint" />
+              <p className="text-sm text-fg-subtle">No calls yet.</p>
             </div>
           ) : (
             <ul className="divide-y divide-[rgba(209,213,219,0.08)]">
               {calls.map((c) => (
                 <li key={c.id} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[rgba(0,132,212,0.1)] text-[#60A5FA]">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-brand-subtle text-info">
                     <User className="h-4 w-4" />
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium text-[#F3F4F6]">
+                      <span className="truncate text-sm font-medium text-fg">
                         {c.customerName ?? "Unknown"}
                       </span>
-                      <span className="truncate font-mono text-xs text-[#9CA3AF]">
+                      <span className="truncate font-mono text-xs text-fg-subtle">
                         {c.customerPhone ?? "—"}
                       </span>
                     </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-[#9CA3AF]">
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-fg-subtle">
                       <span>{formatRelative(c.timestamp)}</span>
-                      <span className="text-[#4B5563]">·</span>
+                      <span className="text-fg-faint">·</span>
                       <span>{formatDuration(c.duration)}</span>
                     </div>
                   </div>

@@ -11,6 +11,7 @@ export const AUDIT_ACTIONS = [
   "review.reopened",
   "order.booked",
   "order.cancelled",
+  "order.ingested",
   "courier.configured",
   "fraud.config_updated",
   "payment.submitted",
@@ -20,9 +21,22 @@ export const AUDIT_ACTIONS = [
   "subscription.cancelled",
   "subscription.extended",
   "subscription.plan_changed",
+  "integration.connected",
+  "integration.disconnected",
+  "integration.test",
+  "integration.webhook",
+  "tracking.identified",
 ] as const;
 
-export const AUDIT_SUBJECT_TYPES = ["order", "merchant", "courier", "call", "payment"] as const;
+export const AUDIT_SUBJECT_TYPES = [
+  "order",
+  "merchant",
+  "courier",
+  "call",
+  "payment",
+  "integration",
+  "session",
+] as const;
 
 const auditLogSchema = new Schema(
   {

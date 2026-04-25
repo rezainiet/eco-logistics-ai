@@ -20,6 +20,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { StatCard } from "@/components/ui/stat-card";
 import {
   Select,
   SelectContent,
@@ -28,6 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
+import { formatBDT, formatRelative } from "@/lib/formatters";
 
 type FilterValue = "all_open" | "pending_call" | "no_answer";
 
@@ -46,36 +50,18 @@ type QueueItem = {
 };
 
 const LEVEL_CLASS: Record<QueueItem["level"], string> = {
-  low: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
-  medium: "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]",
-  high: "bg-[rgba(239,68,68,0.15)] text-[#F87171]",
+  low: "bg-surface-raised text-fg-muted",
+  medium: "bg-warning-subtle text-warning",
+  high: "bg-danger-subtle text-danger",
 };
 
 const STATUS_CLASS: Record<QueueItem["reviewStatus"], string> = {
-  not_required: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
-  pending_call: "bg-[rgba(245,158,11,0.15)] text-[#FBBF24]",
-  no_answer: "bg-[rgba(239,68,68,0.15)] text-[#F87171]",
-  verified: "bg-[rgba(16,185,129,0.15)] text-[#34D399]",
-  rejected: "bg-[rgba(239,68,68,0.15)] text-[#F87171]",
+  not_required: "bg-surface-raised text-fg-muted",
+  pending_call: "bg-warning-subtle text-warning",
+  no_answer: "bg-danger-subtle text-danger",
+  verified: "bg-success-subtle text-success",
+  rejected: "bg-danger-subtle text-danger",
 };
-
-function formatBDT(n: number): string {
-  return `৳ ${n.toLocaleString()}`;
-}
-
-function formatRelative(date: Date | string | null): string {
-  if (!date) return "—";
-  const d = typeof date === "string" ? new Date(date) : date;
-  const diff = Date.now() - d.getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return d.toLocaleDateString();
-}
 
 export default function FraudReviewPage() {
   const [filter, setFilter] = useState<FilterValue>("all_open");
@@ -152,43 +138,40 @@ export default function FraudReviewPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-[#F3F4F6]">
-          Fraud review queue
-        </h1>
-        <p className="mt-1 text-sm text-[#9CA3AF]">
-          Call risky customers to verify COD orders before booking shipment.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Risk operations"
+        title="Fraud review queue"
+        description="Call risky customers to verify COD orders before booking shipment."
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="In queue" value={total.toLocaleString()} icon={ShieldAlert} accent="#EF4444" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="In queue" value={total.toLocaleString()} icon={ShieldAlert} tone="danger" />
         <StatCard
           label="Verified today"
           value={today.verified.toLocaleString()}
           icon={ShieldCheck}
-          accent="#10B981"
+          tone="success"
         />
         <StatCard
           label="Rejected today"
           value={today.rejected.toLocaleString()}
           icon={XCircle}
-          accent="#F59E0B"
+          tone="warning"
         />
         <StatCard
           label="COD saved today"
           value={formatBDT(today.codSaved)}
           icon={CheckCircle2}
-          accent="#8B5CF6"
+          tone="violet"
         />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-5">
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6] lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <Card className="lg:col-span-2">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <div>
               <CardTitle className="text-base font-semibold">Queue</CardTitle>
-              <CardDescription className="text-[#9CA3AF]">
+              <CardDescription>
                 Sorted by risk score (highest first)
               </CardDescription>
             </div>
@@ -211,13 +194,15 @@ export default function FraudReviewPage() {
                 ))}
               </div>
             ) : items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-                <ShieldCheck className="h-6 w-6 text-[#34D399]" />
-                <p className="text-sm font-medium text-[#F3F4F6]">Queue is clear</p>
-                <p className="text-xs text-[#9CA3AF]">No orders are waiting on review.</p>
-              </div>
+              <EmptyState
+                icon={ShieldCheck}
+                tone="success"
+                title="Queue is clear"
+                description="No orders are waiting on review. New risky orders will appear here automatically."
+                className="m-4 border-0 bg-transparent"
+              />
             ) : (
-              <ul className="max-h-[600px] divide-y divide-[rgba(209,213,219,0.06)] overflow-auto">
+              <ul className="max-h-[600px] divide-y divide-stroke/6 overflow-auto">
                 {items.map((it) => {
                   const active = it.id === selectedId;
                   return (
@@ -227,12 +212,12 @@ export default function FraudReviewPage() {
                         onClick={() => setSelectedId(it.id)}
                         className={`flex w-full flex-col gap-1 border-l-2 px-4 py-3 text-left transition-colors ${
                           active
-                            ? "border-[#0084D4] bg-[rgba(0,132,212,0.08)]"
-                            : "border-transparent hover:bg-[rgba(26,29,46,0.6)]"
+                            ? "border-brand bg-brand-subtle"
+                            : "border-transparent hover:bg-surface-raised/60"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-sm font-medium text-[#F3F4F6]">
+                          <span className="truncate text-sm font-medium text-fg">
                             {it.customer.name}
                           </span>
                           <Badge
@@ -242,12 +227,12 @@ export default function FraudReviewPage() {
                             {it.riskScore}
                           </Badge>
                         </div>
-                        <div className="flex items-center gap-2 text-xs text-[#9CA3AF]">
+                        <div className="flex items-center gap-2 text-xs text-fg-subtle">
                           <span className="font-mono">{it.customer.phone}</span>
-                          <span className="text-[#4B5563]">·</span>
+                          <span className="text-fg-faint">·</span>
                           <span>{formatBDT(it.cod)}</span>
                         </div>
-                        <div className="flex items-center justify-between gap-2 text-xs text-[#9CA3AF]">
+                        <div className="flex items-center justify-between gap-2 text-xs text-fg-subtle">
                           <span className="truncate">{it.orderNumber}</span>
                           <Badge
                             variant="outline"
@@ -265,12 +250,12 @@ export default function FraudReviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6] lg:col-span-3">
+        <Card className="lg:col-span-3">
           <CardHeader>
             <CardTitle className="text-base font-semibold">
               {detail.data ? `Order ${detail.data.orderNumber}` : "Select an order"}
             </CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription>
               {detail.data
                 ? `Scored ${formatRelative(detail.data.fraud.scoredAt ?? null)}`
                 : "Pick an order from the queue to review its risk signals."}
@@ -278,7 +263,7 @@ export default function FraudReviewPage() {
           </CardHeader>
           <CardContent className="space-y-5">
             {!selectedId ? (
-              <div className="flex items-center justify-center py-12 text-sm text-[#9CA3AF]">
+              <div className="flex items-center justify-center py-12 text-sm text-fg-subtle">
                 No order selected.
               </div>
             ) : detail.isLoading || !detail.data ? (
@@ -304,9 +289,9 @@ export default function FraudReviewPage() {
                   />
                 </div>
 
-                <div className="rounded-lg border border-[rgba(209,213,219,0.08)] bg-[#111318] p-4">
+                <div className="rounded-lg border border-stroke/8 bg-surface-overlay p-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">
+                    <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
                       Risk score
                     </span>
                     <Badge
@@ -321,30 +306,30 @@ export default function FraudReviewPage() {
                       {detail.data.fraud.signals.map((sig) => (
                         <li
                           key={sig.key}
-                          className="flex items-start gap-2 text-xs text-[#D1D5DB]"
+                          className="flex items-start gap-2 text-xs text-fg-muted"
                         >
-                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#FBBF24]" />
+                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
                           <div className="flex-1">
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-medium">{sig.key.replace(/_/g, " ")}</span>
-                              <span className="text-[#6B7280]">+{sig.weight}</span>
+                              <span className="text-fg-faint">+{sig.weight}</span>
                             </div>
                             {sig.detail ? (
-                              <p className="text-[#9CA3AF]">{sig.detail}</p>
+                              <p className="text-fg-subtle">{sig.detail}</p>
                             ) : null}
                           </div>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="mt-3 text-xs text-[#9CA3AF]">No signals recorded.</p>
+                    <p className="mt-3 text-xs text-fg-subtle">No signals recorded.</p>
                   )}
                 </div>
 
                 <div className="space-y-1.5">
                   <label
                     htmlFor="review-notes"
-                    className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]"
+                    className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle"
                   >
                     Notes (optional)
                   </label>
@@ -355,13 +340,13 @@ export default function FraudReviewPage() {
                     rows={3}
                     maxLength={1000}
                     placeholder="Customer confirmed address / said wrong number / won't answer…"
-                    className="w-full resize-none rounded-md border border-[rgba(209,213,219,0.15)] bg-[#111318] px-3 py-2 text-sm text-[#F3F4F6] placeholder:text-[#6B7280] focus:border-[#0084D4] focus:outline-none"
+                    className="w-full resize-none rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg placeholder:text-fg-faint focus:border-brand/50 focus:outline-none focus:ring-2 focus:ring-brand/30"
                   />
                 </div>
 
-                <div className="flex flex-col gap-2 border-t border-[rgba(209,213,219,0.08)] pt-4 sm:flex-row">
+                <div className="flex flex-col gap-2 border-t border-stroke/8 pt-4 sm:flex-row">
                   <Button
-                    className="flex-1 bg-[#0084D4] text-white hover:bg-[#0072BB] disabled:opacity-60"
+                    className="flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60"
                     disabled={
                       !callConfigured.data?.configured || initiateCall.isPending
                     }
@@ -377,7 +362,7 @@ export default function FraudReviewPage() {
                     Call customer
                   </Button>
                   <Button
-                    className="flex-1 bg-[#10B981] text-white hover:bg-[#059669] disabled:opacity-60"
+                    className="flex-1 bg-success text-white hover:bg-success/90 disabled:opacity-60"
                     disabled={verify.isPending}
                     onClick={() =>
                       verify.mutate({
@@ -391,7 +376,7 @@ export default function FraudReviewPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.08)] text-[#FBBF24] hover:bg-[rgba(245,158,11,0.15)] disabled:opacity-60"
+                    className="flex-1 border-warning-border bg-warning-subtle text-warning hover:bg-warning/20 hover:text-warning disabled:opacity-60"
                     disabled={noAnswer.isPending}
                     onClick={() =>
                       noAnswer.mutate({
@@ -405,7 +390,7 @@ export default function FraudReviewPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 border-[rgba(239,68,68,0.4)] bg-[rgba(239,68,68,0.08)] text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.15)] disabled:opacity-60"
+                    className="flex-1 border-danger-border bg-danger-subtle text-danger hover:bg-danger/20 hover:text-danger disabled:opacity-60"
                     disabled={reject.isPending}
                     onClick={() =>
                       reject.mutate({
@@ -427,42 +412,13 @@ export default function FraudReviewPage() {
   );
 }
 
-function StatCard({
-  label,
-  value,
-  icon: Icon,
-  accent,
-}: {
-  label: string;
-  value: string;
-  icon: typeof ShieldAlert;
-  accent: string;
-}) {
-  return (
-    <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-xs font-medium uppercase tracking-[0.4px] text-[#9CA3AF]">
-          {label}
-        </CardTitle>
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-lg"
-          style={{ backgroundColor: `${accent}22` }}
-        >
-          <Icon className="h-4 w-4" style={{ color: accent }} />
-        </div>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-semibold text-[#F3F4F6]">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-start justify-between gap-3 border-b border-[rgba(209,213,219,0.06)] pb-2 last:border-b-0">
-      <span className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">{label}</span>
-      <span className={`text-right text-sm text-[#F3F4F6] ${mono ? "font-mono" : ""}`}>
+    <div className="flex items-start justify-between gap-3 border-b border-stroke/6 pb-2 last:border-b-0">
+      <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
+        {label}
+      </span>
+      <span className={`text-right text-sm text-fg ${mono ? "font-mono" : ""}`}>
         {value}
       </span>
     </div>

@@ -168,6 +168,109 @@ export const analyticsRouter = router({
     return days;
   }),
 
+  getCourierPerformance: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    const since = new Date(Date.now() - NINETY_DAYS_MS);
+
+    type Row = {
+      _id: string | null;
+      shipments: number;
+      delivered: number;
+      rto: number;
+      inTransit: number;
+      pending: number;
+      codSum: number;
+      revenueDelivered: number;
+      avgTransitDays: number | null;
+    };
+
+    const rows = await Order.aggregate<Row>([
+      {
+        $match: {
+          merchantId,
+          createdAt: { $gte: since },
+          "logistics.courier": { $exists: true, $ne: null, $nin: ["", null] },
+        },
+      },
+      {
+        $group: {
+          _id: "$logistics.courier",
+          shipments: { $sum: 1 },
+          delivered: {
+            $sum: { $cond: [{ $eq: ["$order.status", "delivered"] }, 1, 0] },
+          },
+          rto: { $sum: { $cond: [{ $eq: ["$order.status", "rto"] }, 1, 0] } },
+          inTransit: {
+            $sum: {
+              $cond: [
+                { $in: ["$order.status", ["shipped", "in_transit"]] },
+                1,
+                0,
+              ],
+            },
+          },
+          pending: {
+            $sum: {
+              $cond: [
+                { $in: ["$order.status", ["pending", "confirmed", "packed"]] },
+                1,
+                0,
+              ],
+            },
+          },
+          codSum: { $sum: "$order.cod" },
+          revenueDelivered: {
+            $sum: {
+              $cond: [{ $eq: ["$order.status", "delivered"] }, "$order.cod", 0],
+            },
+          },
+          avgTransitDays: {
+            $avg: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$order.status", "delivered"] },
+                    { $ne: ["$logistics.deliveredAt", null] },
+                  ],
+                },
+                {
+                  $divide: [
+                    { $subtract: ["$logistics.deliveredAt", "$createdAt"] },
+                    1000 * 60 * 60 * 24,
+                  ],
+                },
+                null,
+              ],
+            },
+          },
+        },
+      },
+      { $sort: { shipments: -1 } },
+    ]);
+
+    return rows.map((r) => {
+      const courier = r._id ?? "unknown";
+      const shipments = r.shipments;
+      const finished = r.delivered + r.rto;
+      return {
+        courier,
+        shipments,
+        delivered: r.delivered,
+        rto: r.rto,
+        inTransit: r.inTransit,
+        pending: r.pending,
+        deliveryRate: finished > 0 ? r.delivered / finished : 0,
+        rtoRate: finished > 0 ? r.rto / finished : 0,
+        avgCod: shipments > 0 ? r.codSum / shipments : 0,
+        revenueDelivered: r.revenueDelivered,
+        avgTransitDays:
+          typeof r.avgTransitDays === "number" && Number.isFinite(r.avgTransitDays)
+            ? r.avgTransitDays
+            : null,
+      };
+    });
+  }),
+
   getRTOMetrics: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
     await requireAnalyticsLevel(merchantId, ctx.user.role, "advanced");

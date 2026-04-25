@@ -6,3 +6,7 @@ export * from "./models/auditLog.js";
 export * from "./models/payment.js";
 export * from "./models/usage.js";
 export * from "./models/notification.js";
+export * from "./models/integration.js";
+export * from "./models/webhookInbox.js";
+export * from "./models/trackingEvent.js";
+export * from "./models/trackingSession.js";

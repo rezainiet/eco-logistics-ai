@@ -98,14 +98,14 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-col gap-2">
-        <h1 className="text-3xl font-semibold tracking-tight text-[#F3F4F6]">Settings</h1>
-        <p className="text-sm text-[#9CA3AF]">
+        <h1 className="text-3xl font-semibold tracking-tight text-fg">Settings</h1>
+        <p className="text-sm text-fg-subtle">
           Manage your business profile, courier credentials, and billing.
         </p>
       </header>
 
       <nav
-        className="flex gap-1 rounded-lg border border-[rgba(209,213,219,0.08)] bg-[#111318] p-1"
+        className="flex gap-1 rounded-lg border border-stroke/8 bg-surface-overlay p-1"
         role="tablist"
         aria-label="Settings sections"
       >
@@ -120,8 +120,8 @@ export default function SettingsPage() {
               onClick={() => setTab(t.key)}
               className={`flex flex-1 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                 active
-                  ? "bg-[#1A1D2E] text-[#F3F4F6] shadow-[0_1px_3px_0_rgba(0,0,0,0.2)]"
-                  : "text-[#9CA3AF] hover:text-[#F3F4F6]"
+                  ? "bg-surface text-fg shadow-[0_1px_3px_0_rgba(0,0,0,0.2)]"
+                  : "text-fg-subtle hover:text-fg"
               }`}
             >
               <Icon className="h-4 w-4" />
@@ -189,15 +189,15 @@ function ProfileSection() {
     : "—";
 
   return (
-    <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+    <Card className="border-stroke/10 bg-surface text-fg">
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(0,132,212,0.12)]">
-            <Building2 className="h-5 w-5 text-[#0084D4]" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/14">
+            <Building2 className="h-5 w-5 text-brand" />
           </div>
           <div className="flex-1">
             <CardTitle className="text-lg font-semibold">Business profile</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               How your business appears across the platform.
             </CardDescription>
           </div>
@@ -221,7 +221,7 @@ function ProfileSection() {
             </Field>
             <Field label="Email" htmlFor="email" hint="Contact support to change this.">
               <div className="relative">
-                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B7280]" />
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-faint" />
                 <Input
                   id="email"
                   value={email}
@@ -232,7 +232,7 @@ function ProfileSection() {
             </Field>
             <Field label="Phone" htmlFor="phone" hint="International format, e.g. +8801712345678">
               <div className="relative">
-                <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6B7280]" />
+                <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-faint" />
                 <Input
                   id="phone"
                   value={phone}
@@ -295,12 +295,12 @@ function ProfileSection() {
             <FormError message={mutation.error.message} />
           )}
 
-          <div className="flex items-center justify-between border-t border-[rgba(209,213,219,0.08)] pt-4">
-            <p className="text-xs text-[#6B7280]">Changes are encrypted and saved immediately.</p>
+          <div className="flex items-center justify-between border-t border-stroke/8 pt-4">
+            <p className="text-xs text-fg-faint">Changes are encrypted and saved immediately.</p>
             <Button
               type="submit"
               disabled={!canSubmit}
-              className="bg-[#0084D4] text-white hover:bg-[#0072BB]"
+              className="bg-brand text-white hover:bg-brand-hover"
             >
               {mutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save changes
@@ -336,22 +336,22 @@ function CouriersSection() {
     editing != null ? configured.find((c) => c.name === editing) ?? null : null;
 
   return (
-    <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+    <Card className="border-stroke/10 bg-surface text-fg">
       <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(16,185,129,0.12)]">
-            <Truck className="h-5 w-5 text-[#10B981]" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-success-subtle">
+            <Truck className="h-5 w-5 text-success" />
           </div>
           <div>
             <CardTitle className="text-lg font-semibold">Courier credentials</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               Keys are encrypted with AES-256-GCM before they touch the database.
             </CardDescription>
           </div>
         </div>
         <Button
           onClick={openNew}
-          className="bg-[#0084D4] text-white hover:bg-[#0072BB]"
+          className="bg-brand text-white hover:bg-brand-hover"
         >
           Add courier
         </Button>
@@ -362,7 +362,7 @@ function CouriersSection() {
             {[0, 1].map((i) => (
               <div
                 key={i}
-                className="h-16 animate-pulse rounded-md border border-[rgba(209,213,219,0.06)] bg-[rgba(255,255,255,0.02)]"
+                className="h-16 animate-pulse rounded-md border border-stroke/6 bg-white/5"
               />
             ))}
           </div>
@@ -373,7 +373,7 @@ function CouriersSection() {
             title="No couriers connected yet"
             description="Add Pathao or Steadfast credentials to start booking pickups and pulling tracking events."
             cta={
-              <Button onClick={openNew} className="bg-[#0084D4] text-white hover:bg-[#0072BB]">
+              <Button onClick={openNew} className="bg-brand text-white hover:bg-brand-hover">
                 Connect first courier
               </Button>
             }
@@ -384,34 +384,34 @@ function CouriersSection() {
           return (
             <div
               key={c.name}
-              className="flex flex-col gap-3 rounded-lg border border-[rgba(209,213,219,0.08)] bg-[rgba(255,255,255,0.02)] p-4 sm:flex-row sm:items-center sm:justify-between"
+              className="flex flex-col gap-3 rounded-lg border border-stroke/8 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex items-start gap-3">
-                <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-md bg-[#111318] text-xs font-bold uppercase text-[#0084D4]">
+                <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-md bg-surface-overlay text-xs font-bold uppercase text-brand">
                   {(meta?.label ?? c.name).slice(0, 2)}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-[#F3F4F6]">
+                    <span className="font-medium text-fg">
                       {meta?.label ?? c.name}
                     </span>
                     {c.enabled ? (
                       <Badge
                         variant="outline"
-                        className="border-transparent bg-[rgba(16,185,129,0.12)] text-[#34D399]"
+                        className="border-transparent bg-success-subtle text-success"
                       >
                         Enabled
                       </Badge>
                     ) : (
                       <Badge
                         variant="outline"
-                        className="border-transparent bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]"
+                        className="border-transparent bg-surface-raised text-fg-muted"
                       >
                         Disabled
                       </Badge>
                     )}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-[#9CA3AF]">
+                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
                     <span className="inline-flex items-center gap-1.5">
                       <Key className="h-3 w-3" />
                       {c.apiKeyMasked || "••••"}
@@ -425,7 +425,7 @@ function CouriersSection() {
                     )}
                   </div>
                   {c.validationError && (
-                    <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-[#F87171]">
+                    <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-danger">
                       <AlertCircle className="h-3 w-3" /> {c.validationError}
                     </p>
                   )}
@@ -436,7 +436,7 @@ function CouriersSection() {
                   variant="outline"
                   size="sm"
                   onClick={() => openEdit(c.name as CourierId)}
-                  className="border-[rgba(209,213,219,0.15)] bg-[#111318] text-[#D1D5DB] hover:bg-[#1A1D2E]"
+                  className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface"
                 >
                   <Pencil className="mr-1.5 h-3.5 w-3.5" />
                   Edit
@@ -486,16 +486,16 @@ function RemoveCourierButton({
         variant="outline"
         size="sm"
         onClick={() => setConfirm(true)}
-        className="border-[rgba(239,68,68,0.2)] bg-[rgba(239,68,68,0.06)] text-[#F87171] hover:bg-[rgba(239,68,68,0.12)]"
+        className="border-danger/25 bg-danger/6 text-danger hover:bg-danger/14"
       >
         <X className="mr-1.5 h-3.5 w-3.5" />
         Remove
       </Button>
       <Dialog open={confirm} onOpenChange={setConfirm}>
-        <DialogContent className="border border-[rgba(209,213,219,0.15)] bg-[#1A1D2E] text-[#F3F4F6]">
+        <DialogContent className="border border-stroke/14 bg-surface text-fg">
           <DialogHeader>
             <DialogTitle>Remove {name}?</DialogTitle>
-            <DialogDescription className="text-[#9CA3AF]">
+            <DialogDescription className="text-fg-subtle">
               Stored credentials will be deleted. Past orders remain untouched.
             </DialogDescription>
           </DialogHeader>
@@ -504,14 +504,14 @@ function RemoveCourierButton({
             <Button
               variant="outline"
               onClick={() => setConfirm(false)}
-              className="border-[rgba(209,213,219,0.15)] bg-[#111318] text-[#D1D5DB] hover:bg-[#232738]"
+              className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface-hover"
             >
               Cancel
             </Button>
             <Button
               onClick={() => mutation.mutate({ name })}
               disabled={mutation.isLoading}
-              className="bg-[#EF4444] text-white hover:bg-[#DC2626]"
+              className="bg-danger text-white hover:bg-danger/90"
             >
               {mutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Remove courier
@@ -593,10 +593,10 @@ function CourierDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border border-[rgba(209,213,219,0.15)] bg-[#1A1D2E] text-[#F3F4F6] sm:max-w-xl">
+      <DialogContent className="border border-stroke/14 bg-surface text-fg sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit courier" : "Connect courier"}</DialogTitle>
-          <DialogDescription className="text-[#9CA3AF]">
+          <DialogDescription className="text-fg-subtle">
             Credentials are encrypted before storage. We never log raw API keys.
           </DialogDescription>
         </DialogHeader>
@@ -627,7 +627,7 @@ function CourierDialog({
                 href={providerMeta.docs}
                 target="_blank"
                 rel="noreferrer"
-                className="mt-1 inline-flex items-center gap-1 text-xs text-[#0084D4] hover:underline"
+                className="mt-1 inline-flex items-center gap-1 text-xs text-brand hover:underline"
               >
                 {providerMeta.label} merchant portal <ExternalLink className="h-3 w-3" />
               </a>
@@ -721,14 +721,14 @@ function CourierDialog({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              className="border-[rgba(209,213,219,0.15)] bg-[#111318] text-[#D1D5DB] hover:bg-[#232738]"
+              className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface-hover"
             >
               Cancel
             </Button>
             <Button
               type="submit"
               disabled={mutation.isLoading || !accountId.trim() || !apiKey.trim()}
-              className="bg-[#0084D4] text-white hover:bg-[#0072BB]"
+              className="bg-brand text-white hover:bg-brand-hover"
             >
               {mutation.isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {isEdit ? "Update credentials" : "Save courier"}
@@ -752,24 +752,24 @@ function BillingSection() {
       return {
         icon: CheckCircle2,
         label: "Active",
-        className: "bg-[rgba(16,185,129,0.12)] text-[#34D399]",
+        className: "bg-success-subtle text-success",
       };
     if (s === "trial")
       return {
         icon: Clock,
         label: "Trial",
-        className: "bg-[rgba(245,158,11,0.12)] text-[#FBBF24]",
+        className: "bg-warning-subtle text-warning",
       };
     if (s === "past_due")
       return {
         icon: AlertCircle,
         label: "Past due",
-        className: "bg-[rgba(239,68,68,0.12)] text-[#F87171]",
+        className: "bg-danger/14 text-danger",
       };
     return {
       icon: AlertCircle,
       label: s.replace("_", " "),
-      className: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
+      className: "bg-surface-raised text-fg-muted",
     };
   }, [billing?.status]);
 
@@ -779,29 +779,29 @@ function BillingSection() {
     : null;
 
   return (
-    <Card className="border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
+    <Card className="border-stroke/10 bg-surface text-fg">
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(139,92,246,0.12)]">
-            <CreditCard className="h-5 w-5 text-[#8B5CF6]" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[hsl(262_83%_62%/0.14)]">
+            <CreditCard className="h-5 w-5 text-[hsl(262_83%_72%)]" />
           </div>
           <div>
             <CardTitle className="text-lg font-semibold">Plan & billing</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               Your subscription status and trial information.
             </CardDescription>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
-        {profile.isLoading && <div className="h-28 animate-pulse rounded-md bg-[rgba(255,255,255,0.02)]" />}
+        {profile.isLoading && <div className="h-28 animate-pulse rounded-md bg-white/5" />}
 
         {billing && (
           <>
-            <div className="flex flex-col gap-4 rounded-lg border border-[rgba(209,213,219,0.08)] bg-[rgba(255,255,255,0.02)] p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-4 rounded-lg border border-stroke/8 bg-white/5 p-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-[0.4px] text-[#9CA3AF]">
+                  <span className="text-xs font-semibold uppercase tracking-[0.4px] text-fg-subtle">
                     Current plan
                   </span>
                   <Badge
@@ -812,10 +812,10 @@ function BillingSection() {
                     {statusBadge.label}
                   </Badge>
                 </div>
-                <p className="mt-2 text-2xl font-semibold capitalize text-[#F3F4F6]">
+                <p className="mt-2 text-2xl font-semibold capitalize text-fg">
                   {billing.tier}
                 </p>
-                <p className="text-sm text-[#9CA3AF]">
+                <p className="text-sm text-fg-subtle">
                   {currency}
                   {billing.rate.toLocaleString()} / month
                 </p>
@@ -823,13 +823,13 @@ function BillingSection() {
               <div className="text-right">
                 {billing.status === "trial" && trialEndsAtLabel && (
                   <>
-                    <p className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">
+                    <p className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
                       Trial ends
                     </p>
-                    <p className="mt-1 text-lg font-semibold text-[#F3F4F6]">
+                    <p className="mt-1 text-lg font-semibold text-fg">
                       {trialEndsAtLabel}
                     </p>
-                    <p className="mt-1 text-sm text-[#FBBF24]">
+                    <p className="mt-1 text-sm text-warning">
                       {billing.trialExpired
                         ? "Expired — upgrade to continue"
                         : billing.trialDaysLeft === null
@@ -842,10 +842,10 @@ function BillingSection() {
                 )}
                 {billing.status === "active" && billing.activatedAt && (
                   <>
-                    <p className="text-xs uppercase tracking-[0.4px] text-[#9CA3AF]">
+                    <p className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
                       Activated
                     </p>
-                    <p className="mt-1 text-lg font-semibold text-[#F3F4F6]">
+                    <p className="mt-1 text-lg font-semibold text-fg">
                       {new Date(billing.activatedAt).toLocaleDateString()}
                     </p>
                   </>
@@ -854,20 +854,20 @@ function BillingSection() {
             </div>
 
             {(billing.status === "trial" || billing.status === "past_due") && (
-              <div className="rounded-lg border border-[rgba(0,132,212,0.25)] bg-[rgba(0,132,212,0.08)] p-4">
+              <div className="rounded-lg border border-brand/25 bg-brand/8 p-4">
                 <div className="flex items-start gap-3">
-                  <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#0084D4]" />
+                  <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
                   <div className="flex-1">
-                    <p className="font-medium text-[#F3F4F6]">
+                    <p className="font-medium text-fg">
                       Ready to continue past the trial?
                     </p>
-                    <p className="mt-1 text-sm text-[#9CA3AF]">
+                    <p className="mt-1 text-sm text-fg-subtle">
                       Pay via bKash / Nagad and message us the transaction ID on WhatsApp — your
                       account is activated within minutes.
                     </p>
                     <Button
                       asChild
-                      className="mt-3 bg-[#0084D4] text-white hover:bg-[#0072BB]"
+                      className="mt-3 bg-brand text-white hover:bg-brand-hover"
                     >
                       <a
                         href="https://wa.me/8801700000000"
@@ -925,12 +925,12 @@ function BillingFactsGrid({
       {facts.map((f) => (
         <div
           key={f.label}
-          className="rounded-md border border-[rgba(209,213,219,0.08)] bg-[rgba(255,255,255,0.02)] px-3 py-3"
+          className="rounded-md border border-stroke/8 bg-white/5 px-3 py-3"
         >
-          <p className="text-[11px] font-semibold uppercase tracking-[0.4px] text-[#6B7280]">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.4px] text-fg-faint">
             {f.label}
           </p>
-          <p className="mt-1 text-sm text-[#F3F4F6] capitalize">{f.value}</p>
+          <p className="mt-1 text-sm text-fg capitalize">{f.value}</p>
         </div>
       ))}
     </div>
@@ -942,15 +942,15 @@ function BillingFactsGrid({
 function DangerZone() {
   const [open, setOpen] = useState(false);
   return (
-    <Card className="border-[rgba(239,68,68,0.15)] bg-[#1A1D2E] text-[#F3F4F6]">
+    <Card className="border-danger/20 bg-surface text-fg">
       <CardHeader>
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[rgba(239,68,68,0.1)]">
-            <LogOut className="h-5 w-5 text-[#F87171]" />
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-danger-subtle">
+            <LogOut className="h-5 w-5 text-danger" />
           </div>
           <div>
             <CardTitle className="text-lg font-semibold">Session</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardDescription className="text-fg-subtle">
               Sign out from this device. You can sign back in any time.
             </CardDescription>
           </div>
@@ -960,17 +960,17 @@ function DangerZone() {
         <Button
           variant="outline"
           onClick={() => setOpen(true)}
-          className="border-[rgba(239,68,68,0.25)] bg-[rgba(239,68,68,0.06)] text-[#F87171] hover:bg-[rgba(239,68,68,0.12)]"
+          className="border-danger/30 bg-danger/6 text-danger hover:bg-danger/14"
         >
           <LogOut className="mr-2 h-4 w-4" />
           Sign out
         </Button>
       </CardContent>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="border border-[rgba(209,213,219,0.15)] bg-[#1A1D2E] text-[#F3F4F6]">
+        <DialogContent className="border border-stroke/14 bg-surface text-fg">
           <DialogHeader>
             <DialogTitle>Sign out?</DialogTitle>
-            <DialogDescription className="text-[#9CA3AF]">
+            <DialogDescription className="text-fg-subtle">
               You will be returned to the login page.
             </DialogDescription>
           </DialogHeader>
@@ -978,13 +978,13 @@ function DangerZone() {
             <Button
               variant="outline"
               onClick={() => setOpen(false)}
-              className="border-[rgba(209,213,219,0.15)] bg-[#111318] text-[#D1D5DB] hover:bg-[#232738]"
+              className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface-hover"
             >
               Stay signed in
             </Button>
             <Button
               onClick={() => void signOut({ callbackUrl: "/login" })}
-              className="bg-[#EF4444] text-white hover:bg-[#DC2626]"
+              className="bg-danger text-white hover:bg-danger/90"
             >
               Sign out
             </Button>
@@ -1012,12 +1012,12 @@ function Field({
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={htmlFor} className="text-[#D1D5DB]">
+      <Label htmlFor={htmlFor} className="text-fg-muted">
         {label}
-        {required && <span className="ml-1 text-[#F87171]">*</span>}
+        {required && <span className="ml-1 text-danger">*</span>}
       </Label>
       {children}
-      {hint && <p className="text-xs text-[#6B7280]">{hint}</p>}
+      {hint && <p className="text-xs text-fg-faint">{hint}</p>}
     </div>
   );
 }
@@ -1026,7 +1026,7 @@ function FormError({ message }: { message: string }) {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 rounded-md border border-[rgba(239,68,68,0.2)] bg-[rgba(239,68,68,0.08)] px-3 py-2 text-sm text-[#FCA5A5]"
+      className="flex items-start gap-2 rounded-md border border-danger/25 bg-danger/8 px-3 py-2 text-sm text-danger"
     >
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
@@ -1046,13 +1046,13 @@ function EmptyState({
   cta?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-[rgba(209,213,219,0.12)] px-6 py-10 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[rgba(0,132,212,0.1)]">
-        <Icon className="h-5 w-5 text-[#0084D4]" />
+    <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-stroke/12 px-6 py-10 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-subtle">
+        <Icon className="h-5 w-5 text-brand" />
       </div>
       <div>
-        <p className="font-medium text-[#F3F4F6]">{title}</p>
-        <p className="mt-1 text-sm text-[#9CA3AF]">{description}</p>
+        <p className="font-medium text-fg">{title}</p>
+        <p className="mt-1 text-sm text-fg-subtle">{description}</p>
       </div>
       {cta}
     </div>

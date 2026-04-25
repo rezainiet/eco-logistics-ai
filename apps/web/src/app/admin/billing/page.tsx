@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ExternalLink, Inbox, XCircle } from "lucide-react";
+import { CheckCircle2, ExternalLink, Inbox, Loader2, XCircle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Select,
   SelectContent,
@@ -30,21 +40,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
+import { formatBDT, formatDateTime } from "@/lib/formatters";
 
-function formatBDT(n: number): string {
-  return `৳ ${n.toLocaleString()}`;
-}
-function formatDate(d: Date | string | null): string {
-  if (!d) return "—";
-  const date = typeof d === "string" ? new Date(d) : d;
-  return date.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+type PendingPayment = {
+  id: string;
+  createdAt: Date | string;
+  merchantName: string;
+  merchantEmail: string;
+  plan: string;
+  currentTier: string;
+  method: string;
+  amount: number;
+  txnId: string | null;
+  proofUrl: string | null;
+  status: "pending" | "approved" | "rejected";
+};
+
+type ApproveState = { open: boolean; payment: PendingPayment | null; days: string };
+type RejectState = { open: boolean; payment: PendingPayment | null; reason: string };
 
 export default function AdminBillingPage() {
   const [status, setStatus] = useState<"pending" | "approved" | "rejected">("pending");
@@ -54,6 +67,16 @@ export default function AdminBillingPage() {
     tier: "growth" as "starter" | "growth" | "scale" | "enterprise",
     note: "",
   });
+  const [approveState, setApproveState] = useState<ApproveState>({
+    open: false,
+    payment: null,
+    days: "30",
+  });
+  const [rejectState, setRejectState] = useState<RejectState>({
+    open: false,
+    payment: null,
+    reason: "",
+  });
 
   const list = trpc.adminBilling.listPendingPayments.useQuery({ status, limit: 100 });
   const utils = trpc.useUtils();
@@ -61,6 +84,7 @@ export default function AdminBillingPage() {
   const approve = trpc.adminBilling.approvePayment.useMutation({
     onSuccess: () => {
       toast.success("Approved", "Subscription activated.");
+      setApproveState({ open: false, payment: null, days: "30" });
       utils.adminBilling.listPendingPayments.invalidate();
     },
     onError: (err) => toast.error("Approval failed", err.message),
@@ -68,12 +92,14 @@ export default function AdminBillingPage() {
   const reject = trpc.adminBilling.rejectPayment.useMutation({
     onSuccess: () => {
       toast.success("Rejected");
+      setRejectState({ open: false, payment: null, reason: "" });
       utils.adminBilling.listPendingPayments.invalidate();
     },
     onError: (err) => toast.error("Rejection failed", err.message),
   });
   const extend = trpc.adminBilling.extendSubscription.useMutation({
-    onSuccess: (res) => toast.success("Extended", `New period end: ${formatDate(res.currentPeriodEnd)}`),
+    onSuccess: (res) =>
+      toast.success("Extended", `New period end: ${formatDateTime(res.currentPeriodEnd)}`),
     onError: (err) => toast.error("Extend failed", err.message),
   });
   const change = trpc.adminBilling.changePlan.useMutation({
@@ -81,21 +107,22 @@ export default function AdminBillingPage() {
     onError: (err) => toast.error("Change failed", err.message),
   });
 
+  const payments = (list.data ?? []) as PendingPayment[];
+
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold text-[#F3F4F6]">Billing approvals</h1>
-        <p className="text-sm text-[#9CA3AF]">
-          Approve or reject manual payment submissions and manage merchant subscriptions.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Admin"
+        title="Billing approvals"
+        description="Approve or reject manual payment submissions and manage merchant subscriptions."
+      />
 
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Inbox className="h-4 w-4 text-[#9CA3AF]" />
-              <CardTitle className="text-base">Payments</CardTitle>
+              <Inbox className="h-4 w-4 text-fg-subtle" />
+              <CardTitle>Payments</CardTitle>
             </div>
             <div className="w-40">
               <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
@@ -112,107 +139,148 @@ export default function AdminBillingPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Submitted</TableHead>
-                <TableHead>Merchant</TableHead>
-                <TableHead>Plan</TableHead>
-                <TableHead>Method</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Txn ID</TableHead>
-                <TableHead>Proof</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {list.data?.length ? (
-                list.data.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="text-xs text-[#9CA3AF]">{formatDate(p.createdAt)}</TableCell>
-                    <TableCell>
-                      <div className="text-sm text-[#F3F4F6]">{p.merchantName}</div>
-                      <div className="text-xs text-[#9CA3AF]">{p.merchantEmail}</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="capitalize">{p.plan}</div>
-                      <div className="text-xs text-[#9CA3AF]">current: {p.currentTier}</div>
-                    </TableCell>
-                    <TableCell className="capitalize">{p.method.replace("_", " ")}</TableCell>
-                    <TableCell>{formatBDT(p.amount)}</TableCell>
-                    <TableCell className="font-mono text-xs">{p.txnId ?? "—"}</TableCell>
-                    <TableCell>
-                      {p.proofUrl ? (
-                        <a
-                          href={p.proofUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-[#0084D4] hover:underline"
-                        >
-                          View <ExternalLink className="h-3 w-3" />
-                        </a>
-                      ) : (
-                        <span className="text-xs text-[#6B7280]">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {p.status === "pending" ? (
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              const days = Number(prompt("Period length in days?", "30") ?? "30");
-                              if (!Number.isFinite(days) || days <= 0) return;
-                              approve.mutate({ paymentId: p.id, periodDays: days });
-                            }}
-                            disabled={approve.isPending}
+          <div className="-mx-5 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-stroke/8 bg-surface-raised/40">
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Submitted
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Merchant
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Plan
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Method
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Amount
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Txn ID
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Proof
+                  </TableHead>
+                  <TableHead className="h-11 px-3 text-right text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                    Actions
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {list.isLoading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <TableRow key={i} className="border-stroke/6">
+                      <TableCell colSpan={8} className="py-3">
+                        <div className="h-4 w-full animate-shimmer rounded" />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : payments.length > 0 ? (
+                  payments.map((p) => (
+                    <TableRow key={p.id} className="border-stroke/6 hover:bg-surface-raised/40">
+                      <TableCell className="px-3 py-3 text-xs text-fg-subtle">
+                        {formatDateTime(p.createdAt)}
+                      </TableCell>
+                      <TableCell className="px-3 py-3">
+                        <div className="text-sm font-medium text-fg">{p.merchantName}</div>
+                        <div className="text-xs text-fg-subtle">{p.merchantEmail}</div>
+                      </TableCell>
+                      <TableCell className="px-3 py-3">
+                        <div className="capitalize text-sm text-fg">{p.plan}</div>
+                        <div className="text-xs text-fg-subtle">current: {p.currentTier}</div>
+                      </TableCell>
+                      <TableCell className="px-3 py-3 capitalize text-sm text-fg-muted">
+                        {p.method.replace("_", " ")}
+                      </TableCell>
+                      <TableCell className="px-3 py-3 font-mono text-sm tabular-nums text-fg">
+                        {formatBDT(p.amount)}
+                      </TableCell>
+                      <TableCell className="px-3 py-3 font-mono text-xs text-fg-muted">
+                        {p.txnId ?? "—"}
+                      </TableCell>
+                      <TableCell className="px-3 py-3">
+                        {p.proofUrl ? (
+                          <a
+                            href={p.proofUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
                           >
-                            <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => {
-                              const reason = prompt("Reason for rejection?");
-                              if (!reason) return;
-                              reject.mutate({ paymentId: p.id, reason });
-                            }}
-                            disabled={reject.isPending}
+                            View <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span className="text-xs text-fg-faint">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-3 py-3 text-right">
+                        {p.status === "pending" ? (
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              size="sm"
+                              className="bg-success text-white hover:bg-success/90"
+                              onClick={() =>
+                                setApproveState({ open: true, payment: p, days: "30" })
+                              }
+                              disabled={approve.isPending}
+                            >
+                              <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() =>
+                                setRejectState({ open: true, payment: p, reason: "" })
+                              }
+                              disabled={reject.isPending}
+                            >
+                              <XCircle className="mr-1 h-3 w-3" /> Reject
+                            </Button>
+                          </div>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className={
+                              p.status === "approved"
+                                ? "border-transparent bg-success-subtle text-success"
+                                : "border-transparent bg-danger-subtle text-danger"
+                            }
                           >
-                            <XCircle className="mr-1 h-3 w-3" /> Reject
-                          </Button>
-                        </div>
-                      ) : (
-                        <Badge
-                          className={
-                            p.status === "approved"
-                              ? "bg-[rgba(16,185,129,0.15)] text-[#34D399]"
-                              : "bg-[rgba(239,68,68,0.15)] text-[#F87171]"
-                          }
-                        >
-                          {p.status}
-                        </Badge>
-                      )}
+                            {p.status}
+                          </Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={8} className="p-0">
+                      <EmptyState
+                        icon={Inbox}
+                        title={`No ${status} payments`}
+                        description={
+                          status === "pending"
+                            ? "New manual payment submissions will appear here for review."
+                            : `Switch the filter to see other payment states.`
+                        }
+                        className="m-4 border-0 bg-transparent"
+                      />
                     </TableCell>
                   </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center text-xs text-[#6B7280]">
-                    No {status} payments
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                )}
+              </TableBody>
+            </Table>
+          </div>
         </CardContent>
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Extend subscription</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardTitle>Extend subscription</CardTitle>
+            <CardDescription>
               Push a merchant's currentPeriodEnd forward by N days (comp extension).
             </CardDescription>
           </CardHeader>
@@ -241,6 +309,7 @@ export default function AdminBillingPage() {
               />
             </div>
             <Button
+              className="bg-brand text-white hover:bg-brand-hover"
               onClick={() => {
                 const days = Number(extendForm.days);
                 if (!extendForm.merchantId || !Number.isFinite(days) || days <= 0) {
@@ -255,6 +324,7 @@ export default function AdminBillingPage() {
               }}
               disabled={extend.isPending}
             >
+              {extend.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Extend
             </Button>
           </CardContent>
@@ -262,8 +332,8 @@ export default function AdminBillingPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Change plan</CardTitle>
-            <CardDescription className="text-[#9CA3AF]">
+            <CardTitle>Change plan</CardTitle>
+            <CardDescription>
               Force a merchant onto a different plan without creating a payment record.
             </CardDescription>
           </CardHeader>
@@ -300,6 +370,7 @@ export default function AdminBillingPage() {
               />
             </div>
             <Button
+              className="bg-brand text-white hover:bg-brand-hover"
               onClick={() => {
                 if (!changeForm.merchantId) {
                   toast.error("Provide a merchant id");
@@ -313,11 +384,153 @@ export default function AdminBillingPage() {
               }}
               disabled={change.isPending}
             >
+              {change.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Change plan
             </Button>
           </CardContent>
         </Card>
       </div>
+
+      {/* Approve payment dialog */}
+      <Dialog
+        open={approveState.open}
+        onOpenChange={(v) => {
+          if (!v && !approve.isPending) {
+            setApproveState({ open: false, payment: null, days: "30" });
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve payment</DialogTitle>
+            <DialogDescription>
+              {approveState.payment
+                ? `${approveState.payment.merchantName} — ${formatBDT(
+                    approveState.payment.amount,
+                  )} for ${approveState.payment.plan}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="approve-days">Billing period length (days)</Label>
+            <Input
+              id="approve-days"
+              type="number"
+              min={1}
+              value={approveState.days}
+              onChange={(e) =>
+                setApproveState((s) => ({ ...s, days: e.target.value }))
+              }
+            />
+            <p className="text-xs text-fg-subtle">
+              Subscription will be activated and currentPeriodEnd set to{" "}
+              <span className="font-medium text-fg">today + days</span>.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="border-stroke/14 bg-transparent text-fg hover:bg-surface-raised"
+              onClick={() =>
+                setApproveState({ open: false, payment: null, days: "30" })
+              }
+              disabled={approve.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-success text-white hover:bg-success/90"
+              onClick={() => {
+                const days = Number(approveState.days);
+                if (!approveState.payment || !Number.isFinite(days) || days <= 0) {
+                  toast.error("Enter a positive number of days");
+                  return;
+                }
+                approve.mutate({
+                  paymentId: approveState.payment.id,
+                  periodDays: days,
+                });
+              }}
+              disabled={approve.isPending}
+            >
+              {approve.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="mr-2 h-4 w-4" />
+              )}
+              Approve &amp; activate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject payment dialog */}
+      <Dialog
+        open={rejectState.open}
+        onOpenChange={(v) => {
+          if (!v && !reject.isPending) {
+            setRejectState({ open: false, payment: null, reason: "" });
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject payment</DialogTitle>
+            <DialogDescription>
+              {rejectState.payment
+                ? `${rejectState.payment.merchantName} — ${formatBDT(
+                    rejectState.payment.amount,
+                  )}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reject-reason">Reason (shown to the merchant)</Label>
+            <textarea
+              id="reject-reason"
+              className="flex min-h-[84px] w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg placeholder:text-fg-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+              placeholder="e.g., Transaction ID doesn't match our bank records."
+              value={rejectState.reason}
+              onChange={(e) => setRejectState((s) => ({ ...s, reason: e.target.value }))}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              className="border-stroke/14 bg-transparent text-fg hover:bg-surface-raised"
+              onClick={() =>
+                setRejectState({ open: false, payment: null, reason: "" })
+              }
+              disabled={reject.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (!rejectState.payment) return;
+                const trimmed = rejectState.reason.trim();
+                if (!trimmed) {
+                  toast.error("Enter a rejection reason");
+                  return;
+                }
+                reject.mutate({
+                  paymentId: rejectState.payment.id,
+                  reason: trimmed,
+                });
+              }}
+              disabled={reject.isPending}
+            >
+              {reject.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="mr-2 h-4 w-4" />
+              )}
+              Reject payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
