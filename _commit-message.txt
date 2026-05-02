@@ -1,35 +1,70 @@
-security(auth): harden every auth form against native GET fallback
+fix(shopify-oauth): unblock pending integrations stuck in canonicalize loop
 
-Saw this in dev stdout while debugging an unrelated Shopify install:
+Three compounding bugs caused real merchant Shopify installs to land
+on Shopify's side but stay `pending` forever in our dashboard. Saw it
+in real logs:
 
-    GET /Login?email=masudreza%40gmail.com&password=Masud2003 200 in 325ms
+    [shopify-oauth] callback received (no installStartedAt) { shop: 'dwykhp-en...' }
+    [shopify-oauth] canonicalizing accountKey { from: 'devs-9807...', to: 'dwykhp-en...' }
+    ...same two lines repeating with no transition to `connected`...
 
-If React hasn't hydrated when the user clicks Submit (slow first
-compile, hydration error, JS disabled), the browser falls back to a
-native form submission. The default method is GET, which serializes
-every named field into the URL — credentials end up in the URL bar,
-browser history, every reverse-proxy access log, and our own dev
-server stdout.
+Root causes:
 
-Same defence-in-depth applied to all five auth-adjacent forms so the
-pattern is uniform and easy to audit:
+1. `installStartedAt` was missing from the Integration schema.
+   Mongoose strict mode silently dropped every write of the dot-set
+   `credentials.installStartedAt`, so every callback logged
+   "(no installStartedAt)" and we lost the single best signal for
+   diagnosing slow installs ("is it Shopify or us?"). The whole
+   long-install timing UX we built was running blind.
 
-  1. method="post" — even on native fallback, no fields go in the URL
-  2. action="/api/auth/__nope" — non-existent endpoint, so a native
-     fall-through gets a loud 404 instead of silently reloading with
-     credentials still in memory
-  3. onSubmit's first line is e.preventDefault() — runs unconditionally,
-     before react-hook-form's handleSubmit can succeed or throw
+2. The connect mutation did the install nonce + timestamp in a
+   SECOND `updateOne` after the upsert, using dot-notation. That was
+   broken in two ways: bug #1 above made `installStartedAt` a no-op,
+   and the brief gap between writes was a real race window where a
+   callback could land on a row with no nonce → "integration_not_found".
+   Refactored to a single atomic upsert that includes nonce +
+   installStartedAt in the same write.
 
-Forms hardened:
-  - apps/web/src/app/(auth)/login/page.tsx
-  - apps/web/src/app/(auth)/signup/page.tsx
-  - apps/web/src/app/reset-password/page.tsx
-  - apps/web/src/app/forgot-password/page.tsx (lower-stakes — only
-    takes an email — but applied for consistency so there's no
-    exception that could miss a future field)
-  - apps/web/src/app/dashboard/settings/page.tsx (change-password form)
+3. THE BIG ONE — canonicalization save crashed with E11000.
+   When Shopify rewrites the shop hostname (vanity → canonical, e.g.
+   `devs-9807` → `dwykhp-en`), the callback updates `accountKey` and
+   saves. But the unique index `(merchantId, provider, accountKey)`
+   refused the write whenever a stale `disconnected` row from a
+   previous install/uninstall cycle already held the canonical key.
+   The exception fell through unhandled, the row stayed `pending`,
+   the merchant clicked Connect again, and we looped forever.
 
-Note for whoever rotates secrets: the password "Masud2003" appeared
-in dev stdout (and in screenshots taken during the debug session), so
-the local dev account credentials should be rotated.
+   Fixed in two layers:
+   - Before re-keying, `Integration.deleteMany` for any
+     status:"disconnected" row holding the canonical accountKey for
+     this merchant + provider. Connected rows are NEVER touched —
+     we'd rather E11000 than silently overwrite a working integration.
+   - Wrapped `integration.save()` in try/catch. Any future
+     constraint surprise lands as a friendly
+     `?error=callback_save_failed` redirect with an audit-log entry,
+     not a hung tab.
+
+Files:
+  - packages/db/src/models/integration.ts        (+7 lines, schema)
+  - apps/api/src/server/routers/integrations.ts  (atomic upsert)
+  - apps/api/src/server/webhooks/integrations.ts (orphan cleanup + save try/catch)
+
+---
+
+Bonus from the same debugging session:
+
+- apps/web/src/app/dashboard/integrations/page.tsx — added
+  aria-label="Disconnect integration" + matching title to the
+  icon-only trash button on each Connections row. Without it the
+  button has no accessible name (screen readers say just "button"
+  with no context). Also makes Playwright role-based queries find it.
+
+- apps/web/e2e/shopify-connect.spec.ts — new Playwright spec
+  covering the merchant-facing connect surface end-to-end:
+  signup → open dialog → domain validation → fill Advanced creds →
+  integration appears connected → admin-bump to Scale tier →
+  one-shop-per-provider UI guard fires (card flips to disabled
+  "Connected") → disconnect → reconnect different shop succeeds.
+  The OAuth callback path itself isn't covered (would require
+  intercepting outbound HTTPS to Shopify) — covered by API
+  integration tests instead.
