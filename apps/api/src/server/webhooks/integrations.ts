@@ -306,15 +306,22 @@ shopifyOauthRouter.get(
       return fail("invalid_shop");
     }
 
+    // Look up the pending integration by the install nonce we minted at
+    // install-start. Going via the nonce instead of the shop domain dodges
+    // a Shopify quirk: stores can have multiple myshopify.com hostnames
+    // (a vanity one like `devs-9807.myshopify.com` and a canonical one
+    // like `dwykhp-en.myshopify.com`). The merchant types the vanity in
+    // our connect modal, we mint the install URL pointing at the vanity,
+    // but Shopify rewrites the callback `shop` param to the canonical
+    // form. Looking up by accountKey+shop would miss the row; looking up
+    // by the install nonce is exact and incidentally tightens CSRF
+    // (only the issuer of this nonce gets to redeem it).
     const integration = await Integration.findOne({
       provider: "shopify",
-      accountKey: normalizedShop,
+      "credentials.installNonce": state,
       status: "pending",
     });
     if (!integration) {
-      // Log the lookup so we can diagnose stuck installs without grepping
-      // every redirect. Surfaced in apps/api stdout — never in the merchant
-      // URL bar.
       console.warn("[shopify-oauth] integration_not_found", {
         rawShop: shop,
         normalizedShop,
@@ -323,9 +330,26 @@ shopifyOauthRouter.get(
       return fail("integration_not_found");
     }
 
+    // Belt-and-braces nonce check — protects against the (vanishingly
+    // rare) case where two pending integrations collide on the same
+    // 16-byte random nonce. Mongo would have returned one arbitrarily;
+    // we make sure it really is the one we minted.
     const storedNonce = integration.credentials?.installNonce;
     if (!storedNonce || !safeStringEqual(state, storedNonce)) {
       return fail("state_mismatch");
+    }
+
+    // If Shopify rewrote the shop to a canonical hostname different from
+    // what the merchant typed, persist the canonical form so all
+    // subsequent webhooks (which Shopify also sends with the canonical
+    // shop) match this row, and so the dashboard surfaces the real shop
+    // identifier in the Connections panel.
+    if (integration.accountKey !== normalizedShop) {
+      console.log("[shopify-oauth] canonicalizing accountKey", {
+        from: integration.accountKey,
+        to: normalizedShop,
+      });
+      integration.accountKey = normalizedShop;
     }
 
     let apiKey: string;

@@ -38,7 +38,7 @@ import { Label } from "@/components/ui/label";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PageHeader } from "@/components/ui/page-header";
 import { toast } from "@/components/ui/toast";
-import { formatRelative } from "@/lib/formatters";
+import { formatLastSync, formatRelative, formatRelativeOr } from "@/lib/formatters";
 import { InlineLockedFeature } from "@/components/billing/locked-feature";
 import { TrackerInstallBadge } from "@/components/integrations/tracker-install-badge";
 import { ImportProgressDialog } from "@/components/integrations/import-progress-dialog";
@@ -554,7 +554,7 @@ export default function IntegrationsPage() {
                     ? "Manual upload · always available"
                     : list.length === 0
                       ? "Not connected"
-                      : `Last sync: ${formatRelative(list[0]?.lastSyncAt)}`}
+                      : formatLastSync(list[0]?.lastSyncAt, list[0]?.connectedAt)}
                 </span>
                 {oneShopBlocked ? (
                   // Already connected to a store on this provider — surface
@@ -633,7 +633,14 @@ export default function IntegrationsPage() {
                         </div>
                         <p className="text-xs text-fg-subtle">{it.accountKey}</p>
                         <p className="text-2xs text-fg-faint">
-                          {it.counts.ordersImported} imported · {it.counts.ordersFailed} failed · last update {it.webhookStatus.lastEventAt ? formatRelative(it.webhookStatus.lastEventAt) : "—"}
+                          {it.counts.ordersImported === 0 &&
+                          it.counts.ordersFailed === 0 &&
+                          !it.webhookStatus.lastEventAt
+                            ? "Waiting for the first event — usually within a minute of a real order"
+                            : `${it.counts.ordersImported} imported · ${it.counts.ordersFailed} failed · last update ${formatRelativeOr(
+                                it.webhookStatus.lastEventAt,
+                                "—",
+                              )}`}
                         </p>
                       </div>
                     </div>

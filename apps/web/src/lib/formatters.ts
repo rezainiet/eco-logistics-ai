@@ -37,6 +37,51 @@ export function formatRelative(iso: string | Date | undefined | null): string {
   return d.toLocaleDateString();
 }
 
+/**
+ * Same as formatRelative, but lets the caller pick the empty-state
+ * copy instead of bare "—". Use this anywhere the merchant might see
+ * "—" right after a confidence-building action (Connect, Save,
+ * Upload) — a literal em-dash there reads as broken even though the
+ * value just hasn't arrived yet.
+ */
+export function formatRelativeOr(
+  iso: string | Date | undefined | null,
+  fallback: string,
+): string {
+  if (!iso) return fallback;
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  if (Number.isNaN(d.getTime())) return fallback;
+  return formatRelative(d);
+}
+
+/**
+ * Smart "Last sync" label for integrations / connectors. Chooses
+ * between three states depending on what data is actually available:
+ *   - Has lastSyncAt          → "Last sync: 5m ago"
+ *   - No lastSyncAt yet, just
+ *     connected (< 5 min)     → "Just connected · syncing soon"
+ *   - No lastSyncAt, older    → "Awaiting first sync"
+ *
+ * Pass the connectedAt timestamp so a freshly-installed integration
+ * doesn't read like a broken one.
+ */
+export function formatLastSync(
+  lastSyncAt: string | Date | null | undefined,
+  connectedAt?: string | Date | null,
+): string {
+  if (lastSyncAt) return `Last sync: ${formatRelative(lastSyncAt)}`;
+  if (connectedAt) {
+    const c = typeof connectedAt === "string" ? new Date(connectedAt) : connectedAt;
+    if (!Number.isNaN(c.getTime())) {
+      const ageMs = Date.now() - c.getTime();
+      if (ageMs >= 0 && ageMs < 5 * 60_000) {
+        return "Just connected · syncing soon";
+      }
+    }
+  }
+  return "Awaiting first sync";
+}
+
 export function formatDate(iso: string | Date | undefined | null): string {
   if (!iso) return "—";
   const d = typeof iso === "string" ? new Date(iso) : iso;

@@ -467,10 +467,22 @@ export const integrationsRouter = router({
           { _id: integration._id },
           { $set: { "credentials.installNonce": state } },
         );
+        const redirectUri = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/oauth/shopify/callback`;
+        // Surface the install-URL parameters to API stdout so a stuck
+        // OAuth flow is debuggable without reproducing it. If Shopify
+        // silently bounces, the merchant URL bar is silent — these logs
+        // tell us what scopes/redirect we asked for.
+        console.log("[shopify-oauth] start install", {
+          shop: accountKey,
+          appKeyPrefix: resolvedShopifyAppKey.slice(0, 8) + "...",
+          redirectUri,
+          scopes: input.scopes,
+          statePrefix: state.slice(0, 6) + "...",
+        });
         result.installUrl = buildShopifyInstallUrl({
           shopDomain: accountKey,
           apiKey: resolvedShopifyAppKey,
-          redirectUri: `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/oauth/shopify/callback`,
+          redirectUri,
           scopes: input.scopes,
           state,
         });
