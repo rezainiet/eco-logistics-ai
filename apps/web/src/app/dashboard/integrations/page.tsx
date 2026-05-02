@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -76,6 +77,168 @@ const PROVIDER_META: Record<
   },
 };
 
+/**
+ * Banners shown above the Integrations page when the OAuth callback
+ * just redirected here. Three flavours:
+ *   - success only       → green "Connected" banner (auto-dismiss-able)
+ *   - warnings present   → yellow card per warning code, with action
+ *                          buttons where applicable (Retry webhooks etc.)
+ *
+ * Reads ?connected=, ?shop=, ?warning= from the URL. Only renders when
+ * `connected` is set, so navigating to the page directly is unaffected.
+ */
+function PostConnectBanners({
+  provider,
+  shop,
+  warnings,
+  shopifyIntegrationId,
+}: {
+  provider: string | null;
+  shop: string | null;
+  warnings: string[];
+  shopifyIntegrationId: string | null;
+}) {
+  const utils = trpc.useUtils();
+  const [dismissed, setDismissed] = useState(false);
+  const retryWebhooks = trpc.integrations.retryShopifyWebhooks.useMutation({
+    onSuccess: (r) => {
+      if (r.ok) {
+        toast.success("Webhooks registered", `Topics: ${r.registered.join(", ")}`);
+      } else {
+        toast.error(
+          "Some webhook topics still failed",
+          r.errors.join("; ").slice(0, 200),
+        );
+      }
+      void utils.integrations.list.invalidate();
+    },
+    onError: (err) => toast.error("Webhook retry failed", err.message),
+  });
+  if (!provider || dismissed) return null;
+  const hasWarnings = warnings.length > 0;
+  return (
+    <div className="space-y-3">
+      {!hasWarnings ? (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-success-border/60 bg-success-subtle/50 p-4 text-sm text-fg">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-success" aria-hidden />
+            <div>
+              <p className="font-semibold">Connected to {shop ?? provider}</p>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                Real-time order sync is wired up. Pull your last 25 orders below to fill the dashboard immediately.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            className="text-xs text-fg-faint hover:text-fg"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : (
+        warnings.map((code) => (
+          <PostConnectWarning
+            key={code}
+            code={code}
+            shop={shop}
+            shopifyIntegrationId={shopifyIntegrationId}
+            onRetryWebhooks={
+              shopifyIntegrationId
+                ? () => retryWebhooks.mutate({ id: shopifyIntegrationId })
+                : null
+            }
+            retryPending={retryWebhooks.isPending}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** Per-warning copy + action. Kept as a switch so adding a new warning
+ *  code in the API is a one-line addition here. */
+function PostConnectWarning({
+  code,
+  shop,
+  shopifyIntegrationId,
+  onRetryWebhooks,
+  retryPending,
+}: {
+  code: string;
+  shop: string | null;
+  shopifyIntegrationId: string | null;
+  onRetryWebhooks: (() => void) | null;
+  retryPending: boolean;
+}) {
+  let title = "Heads up";
+  let body = "Your connection completed but with one caveat — see details on the connection card.";
+  let action: React.ReactNode = null;
+  switch (code) {
+    case "webhooks_not_registered":
+      title = "Connected, but real-time sync isn't running yet";
+      body =
+        "Shopify accepted the install but rejected our webhook subscription. Existing orders can still be imported manually; new orders won't arrive in real time until this clears. This is usually transient.";
+      action = onRetryWebhooks ? (
+        <Button
+          size="sm"
+          onClick={onRetryWebhooks}
+          disabled={retryPending}
+          className="bg-warning text-white hover:bg-warning/90"
+        >
+          {retryPending ? "Retrying…" : "Retry webhook registration"}
+        </Button>
+      ) : null;
+      break;
+    case "webhooks_partially_registered":
+      title = "Some webhook topics didn't register";
+      body =
+        "Most webhooks are subscribed but a few failed. Real-time sync may miss certain order events (e.g. refunds) until you retry.";
+      action = onRetryWebhooks ? (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onRetryWebhooks}
+          disabled={retryPending}
+        >
+          {retryPending ? "Retrying…" : "Retry"}
+        </Button>
+      ) : null;
+      break;
+    case "scope_subset_granted":
+      title = "Shopify granted fewer permissions than we asked for";
+      body =
+        "The connection works for what was approved, but some features (product names, fulfillment status) won't populate. Disconnect and reconnect to grant the missing scopes.";
+      break;
+    case "token_unusable":
+      title = "Token check failed — connection may be broken";
+      body =
+        "Shopify issued a token but our smoke test against /shop.json was rejected. This usually means scopes weren't granted. Disconnect and reconnect.";
+      break;
+    default:
+      title = "Connected, but with a warning";
+      body = `Warning code: ${code}. Open the connection details for more.`;
+  }
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-warning-border/60 bg-warning-subtle/40 p-4 text-sm text-fg">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden />
+        <div>
+          <p className="font-semibold">{title}</p>
+          <p className="mt-0.5 text-xs text-fg-muted">{body}</p>
+          {shop ? (
+            <p className="mt-1 text-2xs text-fg-faint">
+              Shop: <span className="font-mono">{shop}</span>
+            </p>
+          ) : null}
+        </div>
+      </div>
+      {action}
+    </div>
+  );
+}
+
 function StatusPill({ status, healthOk }: { status: string; healthOk: boolean }) {
   const tone =
     status === "connected" && healthOk
@@ -107,6 +270,52 @@ export default function IntegrationsPage() {
   const [openProvider, setOpenProvider] = useState<ProviderKey | null>(null);
   const [inspectId, setInspectId] = useState<string | null>(null);
   const utils = trpc.useUtils();
+
+  // The OAuth callback redirects with `?warning=` carrying semicolon-
+  // joined codes when the install completed but in a degraded state
+  // (webhooks didn't register, scopes were partial, etc). Surface those
+  // as inline yellow banners — see PostConnectBanners below — so the
+  // merchant doesn't walk away thinking everything's wired.
+  const sp = useSearchParams();
+  const connectedProvider = sp?.get("connected") ?? null;
+  const connectedShop = sp?.get("shop") ?? null;
+  const errorCode = sp?.get("error") ?? null;
+  const warningCodes = (sp?.get("warning") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // When the merchant lands back here from Shopify (success OR error),
+  // pull the install-start timestamp out of sessionStorage and log how
+  // long the round-trip took. Pairs with the [shopify-oauth] callback
+  // received { elapsedMs } line on the API stdout so frontend + backend
+  // numbers can be cross-checked.
+  useEffect(() => {
+    if (!connectedProvider && !errorCode) return;
+    let startedAt: number | null = null;
+    let shop: string | null = null;
+    try {
+      const raw = sessionStorage.getItem("shopify-install:lastStartedAt");
+      if (raw) startedAt = Number(raw);
+      shop = sessionStorage.getItem("shopify-install:lastShop");
+      sessionStorage.removeItem("shopify-install:lastStartedAt");
+      sessionStorage.removeItem("shopify-install:lastShop");
+    } catch {
+      /* private mode */
+    }
+    const roundTripMs =
+      startedAt && Number.isFinite(startedAt) ? Date.now() - startedAt : null;
+    // eslint-disable-next-line no-console
+    console.info("[shopify-install] returned from Shopify", {
+      provider: connectedProvider,
+      shopFromInstall: shop,
+      shopFromCallback: connectedShop,
+      errorCode,
+      warningCodes,
+      roundTripMs,
+      slow: roundTripMs != null && roundTripMs > 15_000,
+    });
+  }, [connectedProvider, errorCode, connectedShop, warningCodes]);
 
   // Inline state for the post-connect "Open Shopify install" fallback
   // card. Always-visible install URL means popup-blockers can't strand
@@ -147,6 +356,31 @@ export default function IntegrationsPage() {
       if (data.installUrl && variables.provider === "shopify") {
         const shop =
           (variables as { shopDomain?: string }).shopDomain ?? "your store";
+        // Mark the install start time so the merchant can later see a
+        // hint if Shopify's grant page hangs (e.g. ">15s elapsed,
+        // try opening the link in a new tab"), and so post-install
+        // logs can compute round-trip time client-side too. Survives
+        // the navigation to Shopify and back via sessionStorage.
+        const installStartedAt = Date.now();
+        try {
+          sessionStorage.setItem(
+            "shopify-install:lastStartedAt",
+            String(installStartedAt),
+          );
+          sessionStorage.setItem("shopify-install:lastShop", shop);
+        } catch {
+          /* private mode / quota — non-critical */
+        }
+        // eslint-disable-next-line no-console
+        console.info(
+          "[shopify-install] connect mutation completed, opening install URL",
+          {
+            integrationId: data.id,
+            shop,
+            installUrl: data.installUrl,
+            installStartedAt: new Date(installStartedAt).toISOString(),
+          },
+        );
         setPendingInstall({
           integrationId: data.id,
           installUrl: data.installUrl,
@@ -472,6 +706,14 @@ export default function IntegrationsPage() {
 
   return (
     <div className="space-y-8">
+      <PostConnectBanners
+        provider={connectedProvider}
+        shop={connectedShop}
+        warnings={warningCodes}
+        shopifyIntegrationId={
+          providersByKey.shopify[0]?.id ?? null
+        }
+      />
       <PageHeader
         eyebrow="Connectivity"
         title="Integrations"
@@ -1321,7 +1563,22 @@ function ShopifyInstallFallback({
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  // Track elapsed time since the modal opened. After 15s without the
+  // merchant returning to this tab from Shopify, surface a hint that
+  // Shopify itself may be slow + suggest the manual paste path. The
+  // tab/window will navigate away once the OAuth callback redirects
+  // back, so this state is naturally short-lived.
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!state) return;
+    const startedAt = Date.now();
+    const t = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(t);
+  }, [state]);
   if (!state) return null;
+  const slow = elapsedSec >= 15;
   return (
     <Dialog open={true} onOpenChange={(v) => (!v ? onClose() : null)}>
       <DialogContent>
@@ -1335,14 +1592,44 @@ function ShopifyInstallFallback({
             installing the connection for{" "}
             <span className="font-medium text-fg">{state.shop}</span>.
           </p>
+          {slow ? (
+            <div className="flex items-start gap-2 rounded-md border border-warning-border/60 bg-warning-subtle/40 p-3 text-xs text-fg-muted">
+              <AlertTriangle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning"
+                aria-hidden
+              />
+              <div className="space-y-1">
+                <p className="font-medium text-fg">
+                  Shopify is taking longer than usual ({elapsedSec}s).
+                </p>
+                <p>
+                  Their <code>admin/oauth/authorize</code> sometimes hangs on
+                  first install for a dev store. Try copying the link below
+                  and opening it in a fresh tab. If it still hangs, check{" "}
+                  <a
+                    href="https://www.shopifystatus.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  >
+                    shopifystatus.com
+                  </a>{" "}
+                  for incidents.
+                </p>
+              </div>
+            </div>
+          ) : null}
           <Button asChild className="w-full">
             <a
               href={state.installUrl}
               target="_blank"
               rel="noopener noreferrer"
               onClick={() => {
-                // Best-effort: bump the cache when the merchant comes
-                // back so a returning tab doesn't show stale state.
+                // eslint-disable-next-line no-console
+                console.info("[shopify-install] Open Shopify install clicked", {
+                  installUrl: state.installUrl,
+                  at: new Date().toISOString(),
+                });
               }}
             >
               <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open Shopify install

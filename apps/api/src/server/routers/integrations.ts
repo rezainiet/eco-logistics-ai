@@ -23,6 +23,7 @@ import {
 import type { PlanTier } from "../../lib/plans.js";
 import {
   buildShopifyInstallUrl,
+  registerShopifyWebhooks,
 } from "../../lib/integrations/shopify.js";
 import { registerWooWebhooks } from "../../lib/integrations/woocommerce.js";
 import type { IntegrationCredentials } from "../../lib/integrations/types.js";
@@ -463,21 +464,32 @@ export const integrationsRouter = router({
       }
       if (input.provider === "shopify" && status === "pending") {
         const state = randomBytes(16).toString("hex");
+        const installStartedAt = new Date();
+        // Persist the install timestamp on the credentials blob so the
+        // OAuth callback can compute and log "callback arrived Xs after
+        // install start". That number is the cleanest signal we have for
+        // "Shopify itself is slow" vs "merchant clicked away" vs "our
+        // callback handler is slow" — three very different debugging
+        // paths.
         await Integration.updateOne(
           { _id: integration._id },
-          { $set: { "credentials.installNonce": state } },
+          {
+            $set: {
+              "credentials.installNonce": state,
+              "credentials.installStartedAt": installStartedAt.toISOString(),
+            },
+          },
         );
         const redirectUri = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/oauth/shopify/callback`;
         // Surface the install-URL parameters to API stdout so a stuck
-        // OAuth flow is debuggable without reproducing it. If Shopify
-        // silently bounces, the merchant URL bar is silent — these logs
-        // tell us what scopes/redirect we asked for.
+        // OAuth flow is debuggable without reproducing it.
         console.log("[shopify-oauth] start install", {
           shop: accountKey,
           appKeyPrefix: resolvedShopifyAppKey.slice(0, 8) + "...",
           redirectUri,
           scopes: input.scopes,
           statePrefix: state.slice(0, 6) + "...",
+          installStartedAt: installStartedAt.toISOString(),
         });
         result.installUrl = buildShopifyInstallUrl({
           shopDomain: accountKey,
@@ -772,6 +784,88 @@ export const integrationsRouter = router({
         meta: { provider: integration.provider },
       });
       return { id: String(integration._id), disconnected: true };
+    }),
+
+  /**
+   * Retry Shopify webhook auto-registration on a connected integration.
+   * Surfaced to the merchant as a "Retry webhooks" button when the
+   * post-OAuth callback flagged `?warning=webhooks_not_registered` (e.g.
+   * because Shopify rate-limited the webhook subscribe call right after
+   * the install). Idempotent — uses the same dedup pass as the original
+   * registration so a successful first call won't pile up duplicates.
+   *
+   * Cheap to call: bounded by SHOPIFY_FETCH_TIMEOUT_MS per topic, fire
+   * one POST per missing topic at most. No background queue needed.
+   */
+  retryShopifyWebhooks: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const integration = await Integration.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+        provider: "shopify",
+      });
+      if (!integration) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "integration not found" });
+      }
+      if (integration.status !== "connected") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Integration must be connected before webhooks can be registered.",
+        });
+      }
+      const accessTokenEnc = integration.credentials?.accessToken as string | undefined;
+      if (!accessTokenEnc) {
+        throw new TRPCError({
+          code: "FAILED_PRECONDITION",
+          message: "Access token missing — disconnect and reconnect.",
+        });
+      }
+      let accessToken: string;
+      try {
+        accessToken = decryptSecret(accessTokenEnc);
+      } catch {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not read stored credentials. Disconnect and reconnect.",
+        });
+      }
+      const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/shopify/${String(integration._id)}`;
+      const reg = await registerShopifyWebhooks({
+        shopDomain: integration.accountKey,
+        accessToken,
+        callbackUrl,
+      });
+      const allRegistered = reg.errors.length === 0;
+      integration.webhookStatus = {
+        registered: reg.registered.length > 0,
+        lastEventAt: integration.webhookStatus?.lastEventAt,
+        failures: integration.webhookStatus?.failures ?? 0,
+        lastError:
+          reg.errors.length > 0 ? reg.errors.join("; ").slice(0, 500) : undefined,
+      };
+      await integration.save();
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        action: "integration.shopify_webhooks_retried",
+        subjectType: "integration",
+        subjectId: integration._id,
+        meta: {
+          registered: reg.registered,
+          errors: reg.errors,
+          allRegistered,
+        },
+      });
+      return {
+        ok: allRegistered,
+        registered: reg.registered,
+        errors: reg.errors,
+      };
     }),
 
   /** Recent webhook deliveries — surfaces the merchant's debug pane. */

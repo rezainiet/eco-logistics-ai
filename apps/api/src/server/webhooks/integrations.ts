@@ -6,6 +6,7 @@ import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
 import { enqueueInboundWebhook } from "../ingest.js";
 import { QUEUE_NAMES, safeEnqueue } from "../../lib/queue.js";
 import {
+  diffShopifyScopes,
   exchangeShopifyCode,
   fetchShopifyShopInfo,
   registerShopifyWebhooks,
@@ -13,6 +14,7 @@ import {
 } from "../../lib/integrations/shopify.js";
 import { writeAudit } from "../../lib/audit.js";
 import { safeStringEqual } from "../../lib/crypto.js";
+import { env } from "../../env.js";
 
 /**
  * Maximum age (ms) of an inbound webhook before we reject it as stale. The
@@ -306,6 +308,30 @@ shopifyOauthRouter.get(
       return fail("invalid_shop");
     }
 
+    // SECURITY: when a platform-level Shopify app secret is configured
+    // (env.SHOPIFY_APP_API_SECRET — the one-click path used by 99% of
+    // merchants), verify the OAuth HMAC BEFORE any database work. This
+    // closes a small enumeration oracle: without the early gate, an
+    // attacker could probe random `state` values and observe the
+    // difference between `integration_not_found` (state didn't map to a
+    // pending row) and `hmac_mismatch` (it did). With the early gate, an
+    // attacker without a valid HMAC can never reach the lookup at all.
+    //
+    // For per-merchant custom-app installs (Advanced panel; rare path)
+    // we don't know the secret until we've found the integration row, so
+    // we still do HMAC verification post-lookup further down.
+    const platformSecret = env.SHOPIFY_APP_API_SECRET;
+    const queryForHmac = req.query as Record<string, string | string[] | undefined>;
+    if (platformSecret) {
+      if (!verifyShopifyOAuthHmac(queryForHmac, platformSecret)) {
+        console.warn("[shopify-oauth] hmac_mismatch (platform-secret check)", {
+          rawShop: shop,
+          normalizedShop,
+        });
+        return fail("hmac_mismatch");
+      }
+    }
+
     // Look up the pending integration by the install nonce we minted at
     // install-start. Going via the nonce instead of the shop domain dodges
     // a Shopify quirk: stores can have multiple myshopify.com hostnames
@@ -339,6 +365,26 @@ shopifyOauthRouter.get(
       return fail("state_mismatch");
     }
 
+    // Log how long Shopify took between the install URL we minted and
+    // the callback landing here. The single most useful signal for
+    // debugging "the install screen hangs forever" — we can tell the
+    // difference between Shopify being slow (long elapsed, callback
+    // does land) and Shopify never redirecting at all (no callback log
+    // line, ever).
+    const installStartedAtRaw = integration.credentials?.installStartedAt;
+    if (installStartedAtRaw) {
+      const elapsedMs = Date.now() - new Date(installStartedAtRaw).getTime();
+      console.log("[shopify-oauth] callback received", {
+        shop: normalizedShop,
+        elapsedMs,
+        slow: elapsedMs > 15_000,
+      });
+    } else {
+      console.log("[shopify-oauth] callback received (no installStartedAt)", {
+        shop: normalizedShop,
+      });
+    }
+
     // If Shopify rewrote the shop to a canonical hostname different from
     // what the merchant typed, persist the canonical form so all
     // subsequent webhooks (which Shopify also sends with the canonical
@@ -361,17 +407,24 @@ shopifyOauthRouter.get(
       return fail("credential_decrypt_failed");
     }
 
-    if (!verifyShopifyOAuthHmac(req.query as Record<string, string | string[] | undefined>, apiSecret)) {
-      void writeAudit({
-        merchantId: integration.merchantId as Types.ObjectId,
-        actorId: integration.merchantId as Types.ObjectId,
-        actorType: "system",
-        action: "integration.shopify_oauth",
-        subjectType: "integration",
-        subjectId: integration._id,
-        meta: { ok: false, reason: "hmac_mismatch", shop },
-      });
-      return fail("hmac_mismatch");
+    // Custom-app fallback HMAC check — only meaningful when we DIDN'T
+    // already verify against the platform secret above (env unset).
+    // Skipping on the platform path is safe because we already proved the
+    // HMAC is valid for the platform secret, and no merchant can install
+    // through a different secret without us knowing about it.
+    if (!platformSecret) {
+      if (!verifyShopifyOAuthHmac(queryForHmac, apiSecret)) {
+        void writeAudit({
+          merchantId: integration.merchantId as Types.ObjectId,
+          actorId: integration.merchantId as Types.ObjectId,
+          actorType: "system",
+          action: "integration.shopify_oauth",
+          subjectType: "integration",
+          subjectId: integration._id,
+          meta: { ok: false, reason: "hmac_mismatch", shop },
+        });
+        return fail("hmac_mismatch");
+      }
     }
 
     let exchange;
@@ -395,45 +448,101 @@ shopifyOauthRouter.get(
       return fail("token_exchange_failed");
     }
 
+    // Smoke-test the freshly-issued token while also fetching the shop
+    // name for a friendly label. The discriminated result lets us
+    // distinguish a transient blip (network/timeout) from a hard auth
+    // failure that means the token isn't actually usable.
     const shopInfo = await fetchShopifyShopInfo({
-      shopDomain: shop,
+      shopDomain: normalizedShop,
       accessToken: exchange.accessToken,
     });
 
-    // Auto-register webhooks so the merchant doesn't have to copy/paste the
-    // URL into the Shopify admin panel. Failures don't block connect — they
-    // surface in `webhookStatus.lastError` with a clear retry path.
+    // Detect scope subset — Shopify can grant fewer scopes than we asked
+    // for if the merchant approved an outdated scope set, or if the
+    // deployed app's [access_scopes].scopes drifted from what the web
+    // client requests. Without this gate, the integration lands in
+    // `connected` state and the FIRST API call surfaces a 403 days later.
+    const scopeDiff = diffShopifyScopes(integration.permissions, exchange.scope);
+
+    // Auto-register webhooks so the merchant doesn't have to copy/paste
+    // the URL into the Shopify admin panel. Failures DON'T block the
+    // connect (the OAuth itself succeeded — token is valid) but they
+    // get surfaced via `?warning=webhooks_not_registered` so the
+    // dashboard can show a yellow banner with a Retry button. This keeps
+    // the OAuth path fast (no synchronous webhook backoff) while still
+    // making sure the merchant knows real-time sync isn't ready yet.
     const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/shopify/${String(integration._id)}`;
     const reg = await registerShopifyWebhooks({
-      shopDomain: shop,
+      shopDomain: normalizedShop,
       accessToken: exchange.accessToken,
       callbackUrl,
     });
 
+    // Compose health from the three signals we just collected. The order
+    // matters: auth-level shop-info failure trumps everything else (token
+    // is bad, nothing else will work either); scope subset is next (some
+    // calls will work, others won't); then webhooks (real-time sync only).
     const now = new Date();
+    let healthOk = true;
+    let healthError: string | undefined;
+    const warnings: string[] = [];
+    if (shopInfo.ok === false && shopInfo.kind === "auth") {
+      healthOk = false;
+      healthError = `Shopify token check failed (${shopInfo.status}): ${shopInfo.detail}`;
+      warnings.push("token_unusable");
+    } else if (scopeDiff.missing.length > 0) {
+      healthOk = false;
+      healthError = `Missing Shopify scopes: ${scopeDiff.missing.join(", ")}. Reconnect to grant.`;
+      warnings.push("scope_subset_granted");
+    } else if (shopInfo.ok === false && shopInfo.kind === "transient") {
+      // Transient shop-info failure — token's probably fine, just don't
+      // upgrade the label. Health stays ok; merchant can retry from the
+      // Test connection button.
+      console.warn("[shopify-oauth] shop_info_transient", {
+        shop: normalizedShop,
+        detail: shopInfo.detail,
+      });
+    }
+    if (reg.errors.length > 0 && reg.registered.length === 0) {
+      // ALL webhook subscriptions failed — real-time sync is dead.
+      // Distinct from healthOk=false because the token IS usable for
+      // polling-mode imports; only the live stream is broken.
+      warnings.push("webhooks_not_registered");
+    } else if (reg.errors.length > 0) {
+      // Partial — some topics registered, some didn't. Still warn so
+      // the merchant can decide whether the missing topic matters.
+      warnings.push("webhooks_partially_registered");
+    }
+
     integration.credentials = {
       ...(integration.credentials ?? {}),
       accessToken: encryptSecret(exchange.accessToken),
-      // Wipe the install nonce so the same code can't be replayed later.
+      // Wipe install scratch data — nonce so the code can't be replayed,
+      // installStartedAt so a future re-connect's elapsed-time log isn't
+      // contaminated by the previous attempt.
       installNonce: undefined,
-      scopes: exchange.scope ? exchange.scope.split(",").map((s) => s.trim()).filter(Boolean) : integration.credentials?.scopes ?? [],
+      installStartedAt: undefined,
+      scopes: exchange.scope
+        ? exchange.scope.split(",").map((s) => s.trim()).filter(Boolean)
+        : integration.credentials?.scopes ?? [],
     } as typeof integration.credentials;
     integration.status = "connected";
     integration.connectedAt = now;
     integration.disconnectedAt = null;
-    if (shopInfo) {
-      integration.label = `Shopify · ${shopInfo.name}`;
+    if (shopInfo.ok) {
+      integration.label = `Shopify · ${shopInfo.shop.name}`;
     }
     integration.health = {
-      ok: true,
-      lastError: undefined,
+      ok: healthOk,
+      lastError: healthError,
       lastCheckedAt: now,
     };
     integration.webhookStatus = {
       registered: reg.registered.length > 0,
       lastEventAt: integration.webhookStatus?.lastEventAt,
       failures: integration.webhookStatus?.failures ?? 0,
-      lastError: reg.errors.length > 0 ? reg.errors.join("; ").slice(0, 500) : undefined,
+      lastError:
+        reg.errors.length > 0 ? reg.errors.join("; ").slice(0, 500) : undefined,
     };
     await integration.save();
 
@@ -446,17 +555,27 @@ shopifyOauthRouter.get(
       subjectId: integration._id,
       meta: {
         ok: true,
-        shop,
-        shopName: shopInfo?.name ?? null,
-        plan: shopInfo?.planName ?? null,
-        scopes: exchange.scope || null,
+        shop: normalizedShop,
+        shopName: shopInfo.ok ? shopInfo.shop.name : null,
+        plan: shopInfo.ok ? shopInfo.shop.planName : null,
+        scopesGranted: scopeDiff.granted,
+        scopesMissing: scopeDiff.missing,
         webhooksRegistered: reg.registered,
         webhookErrors: reg.errors,
+        warnings,
+        healthOk,
+        shopInfoKind: shopInfo.ok ? "ok" : shopInfo.kind,
       },
     });
 
-    return res.redirect(
-      `${dashboard}?connected=shopify&shop=${encodeURIComponent(shop)}`,
-    );
+    // Build the success-or-warning redirect. `warning=` carries
+    // semicolon-joined codes so the web can render the appropriate
+    // yellow banner(s) without us hard-coding copy here.
+    const params = new URLSearchParams({
+      connected: "shopify",
+      shop: normalizedShop,
+    });
+    if (warnings.length > 0) params.set("warning", warnings.join(","));
+    return res.redirect(`${dashboard}?${params.toString()}`);
   },
 );

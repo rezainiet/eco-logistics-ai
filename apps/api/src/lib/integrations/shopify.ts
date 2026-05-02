@@ -9,6 +9,48 @@ import {
 } from "./types.js";
 
 /**
+ * Hard timeout for any outbound call to Shopify. Picked from the same place
+ * Shopify themselves recommend for storefront API integrations — long enough
+ * to cover normal latency tails (P99 ~3s for /admin endpoints) but short
+ * enough that a stalled merchant tab doesn't sit forever. Override via
+ * SHOPIFY_FETCH_TIMEOUT_MS for ops debugging.
+ *
+ * No exponential backoff here — the caller decides retry policy. We just
+ * make sure a single attempt can't burn unbounded time.
+ */
+const SHOPIFY_FETCH_TIMEOUT_MS = Number(
+  process.env.SHOPIFY_FETCH_TIMEOUT_MS ?? 10_000,
+);
+
+/**
+ * Wrap fetch in an AbortController so we can enforce a hard ceiling without
+ * leaking the timer (always cleared in finally). Throws an
+ * `IntegrationError("shopify timeout: <op> after Nms")` so the caller can
+ * differentiate a slow Shopify from a 5xx — both surface as different error
+ * codes to the merchant.
+ */
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  opName: string,
+  timeoutMs: number = SHOPIFY_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") {
+      throw new IntegrationError(`shopify timeout: ${opName} after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Shopify connector.
  *
  * `apiKey`        — App API key (public; identifies the partner app)
@@ -36,15 +78,20 @@ async function callShopify<T>(
   if (!creds.accessToken) {
     throw new IntegrationError("shopify: accessToken missing — complete OAuth first");
   }
-  const res = await fetch(`${shopBase(creds)}${path}`, {
-    ...init,
-    headers: {
-      "X-Shopify-Access-Token": creds.accessToken,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...(init.headers ?? {}),
+  const res = await fetchWithTimeout(
+    fetch,
+    `${shopBase(creds)}${path}`,
+    {
+      ...init,
+      headers: {
+        "X-Shopify-Access-Token": creds.accessToken,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...(init.headers ?? {}),
+      },
     },
-  });
+    `callShopify ${init.method ?? "GET"} ${path}`,
+  );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new IntegrationError(`shopify ${res.status}: ${body.slice(0, 200)}`);
@@ -259,15 +306,20 @@ export async function exchangeShopifyCode(args: {
 }): Promise<ShopifyOAuthExchangeResult> {
   const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const fetcher = args.fetchImpl ?? fetch;
-  const res = await fetcher(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({
-      client_id: args.apiKey,
-      client_secret: args.apiSecret,
-      code: args.code,
-    }),
-  });
+  const res = await fetchWithTimeout(
+    fetcher,
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: args.apiKey,
+        client_secret: args.apiSecret,
+        code: args.code,
+      }),
+    },
+    "exchangeShopifyCode",
+  );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new IntegrationError(`shopify oauth ${res.status}: ${body.slice(0, 200)}`);
@@ -277,6 +329,38 @@ export async function exchangeShopifyCode(args: {
     throw new IntegrationError("shopify oauth: response missing access_token");
   }
   return { accessToken: json.access_token, scope: json.scope ?? "" };
+}
+
+/**
+ * Compare what we ASKED for at install start with what Shopify actually
+ * granted. Pure helper — does no IO, safe to call from anywhere. Returns
+ * the missing scopes (requested - granted), normalized + deduplicated.
+ *
+ * Use case: after exchangeShopifyCode, the integration's `permissions`
+ * array holds the scopes we requested. If any are missing from
+ * `exchange.scope`, the merchant approved a subset (or our deployed app
+ * doesn't actually declare them) and the integration is "degraded" — some
+ * downstream calls will 403 even though the OAuth itself completed.
+ */
+export function diffShopifyScopes(
+  requested: string[] | undefined | null,
+  grantedRaw: string | undefined | null,
+): { missing: string[]; granted: string[] } {
+  const norm = (s: string) => s.trim().toLowerCase();
+  const granted = new Set(
+    (grantedRaw ?? "").split(",").map(norm).filter(Boolean),
+  );
+  const missing = (requested ?? [])
+    .map(norm)
+    .filter(Boolean)
+    .filter((s) => !granted.has(s));
+  // Dedup while preserving the requested order so error messages read like
+  // "Missing: read_products, read_fulfillments" not "read_products,
+  // read_products, read_fulfillments".
+  return {
+    missing: Array.from(new Set(missing)),
+    granted: Array.from(granted),
+  };
 }
 
 /**
@@ -302,9 +386,13 @@ export async function registerShopifyWebhooks(args: {
   const errors: string[] = [];
 
   // List existing subscriptions first so re-runs don't pile up duplicates.
+  // Listing is best-effort: if it fails we still attempt to register and
+  // accept that a transient list failure may cause a duplicate-topic 422
+  // on the POST below — handled gracefully there.
   let existing: Set<string> = new Set();
   try {
-    const listRes = await fetcher(
+    const listRes = await fetchWithTimeout(
+      fetcher,
       `https://${shop}/admin/api/2024-04/webhooks.json?address=${encodeURIComponent(args.callbackUrl)}`,
       {
         headers: {
@@ -312,13 +400,14 @@ export async function registerShopifyWebhooks(args: {
           Accept: "application/json",
         },
       },
+      "registerShopifyWebhooks.list",
     );
     if (listRes.ok) {
       const body = (await listRes.json()) as { webhooks?: Array<{ topic?: string }> };
       existing = new Set((body.webhooks ?? []).map((w) => w.topic ?? "").filter(Boolean));
     }
   } catch {
-    // Listing is best-effort — keep going.
+    // Best-effort — fall through.
   }
 
   for (const topic of topics) {
@@ -327,18 +416,28 @@ export async function registerShopifyWebhooks(args: {
       continue;
     }
     try {
-      const res = await fetcher(`https://${shop}/admin/api/2024-04/webhooks.json`, {
-        method: "POST",
-        headers: {
-          "X-Shopify-Access-Token": args.accessToken,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+      const res = await fetchWithTimeout(
+        fetcher,
+        `https://${shop}/admin/api/2024-04/webhooks.json`,
+        {
+          method: "POST",
+          headers: {
+            "X-Shopify-Access-Token": args.accessToken,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            webhook: { topic, address: args.callbackUrl, format: "json" },
+          }),
         },
-        body: JSON.stringify({
-          webhook: { topic, address: args.callbackUrl, format: "json" },
-        }),
-      });
+        `registerShopifyWebhooks.create:${topic}`,
+      );
       if (res.ok) {
+        registered.push(topic);
+      } else if (res.status === 422) {
+        // Shopify returns 422 when the topic+address pair already exists.
+        // Treat that as success — the list-call earlier may have missed it
+        // (eventual consistency on the listings endpoint).
         registered.push(topic);
       } else {
         const detail = await res.text().catch(() => "");
@@ -351,36 +450,78 @@ export async function registerShopifyWebhooks(args: {
   return { registered, errors };
 }
 
+export type ShopifyShopInfo = {
+  name: string;
+  planName: string | null;
+  email: string | null;
+};
+
 /**
- * Optional shop-info read. Used after the OAuth exchange to persist a friendly
- * label and surface the connected store name in the UI. Failures are swallowed
- * by the caller — the token is still good even if this 404s.
+ * Discriminated result for fetchShopifyShopInfo. The OAuth callback uses
+ * this to decide whether a failed shop-info call indicates a real
+ * problem with the freshly-issued token (auth) or a transient blip
+ * (network/timeout/5xx). Auth failures degrade integration health;
+ * transient failures are tolerated.
+ */
+export type ShopifyShopInfoResult =
+  | { ok: true; shop: ShopifyShopInfo }
+  | { ok: false; kind: "auth"; status: number; detail: string }
+  | { ok: false; kind: "missing"; detail: string }
+  | { ok: false; kind: "transient"; detail: string };
+
+/**
+ * Shop-info read. Doubles as a smoke-test of the freshly-issued access
+ * token — if it returns 401/403 the token is bad even though the OAuth
+ * exchange itself reported success (often a sign that scopes were
+ * partially granted). Caller should set integration health.degraded on
+ * `kind: "auth"` and tolerate `kind: "transient"`.
  */
 export async function fetchShopifyShopInfo(args: {
   shopDomain: string;
   accessToken: string;
   fetchImpl?: typeof fetch;
-}): Promise<{ name: string; planName: string | null; email: string | null } | null> {
+}): Promise<ShopifyShopInfoResult> {
+  const fetcher = args.fetchImpl ?? fetch;
+  const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  let res: Response;
   try {
-    const fetcher = args.fetchImpl ?? fetch;
-    const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
-    const res = await fetcher(`https://${shop}/admin/api/2024-04/shop.json`, {
-      headers: {
-        "X-Shopify-Access-Token": args.accessToken,
-        Accept: "application/json",
+    res = await fetchWithTimeout(
+      fetcher,
+      `https://${shop}/admin/api/2024-04/shop.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": args.accessToken,
+          Accept: "application/json",
+        },
       },
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      shop?: { name?: string; plan_name?: string; email?: string };
-    };
-    if (!json.shop?.name) return null;
-    return {
+      "fetchShopifyShopInfo",
+    );
+  } catch (err) {
+    return { ok: false, kind: "transient", detail: (err as Error).message };
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    const detail = await res.text().catch(() => "");
+    return { ok: false, kind: "auth", status: res.status, detail: detail.slice(0, 200) };
+  }
+  if (!res.ok) {
+    return { ok: false, kind: "transient", detail: `HTTP ${res.status}` };
+  }
+  let json: { shop?: { name?: string; plan_name?: string; email?: string } };
+  try {
+    json = (await res.json()) as typeof json;
+  } catch (err) {
+    return { ok: false, kind: "transient", detail: (err as Error).message };
+  }
+  if (!json.shop?.name) {
+    return { ok: false, kind: "missing", detail: "shop info response had no name" };
+  }
+  return {
+    ok: true,
+    shop: {
       name: json.shop.name,
       planName: json.shop.plan_name ?? null,
       email: json.shop.email ?? null,
-    };
-  } catch {
-    return null;
-  }
+    },
+  };
 }
