@@ -2,17 +2,13 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { Notification, NOTIFICATION_KINDS } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 
 /**
  * In-app inbox for merchant alerts. Backs the bell icon in the dashboard
  * header. Today this is the surface where fraud alerts arrive — same shape
  * will be reused for tracking delays, trial reminders, etc.
  */
-
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
 
 const listInput = z
   .object({

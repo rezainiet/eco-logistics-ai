@@ -8,7 +8,9 @@ import {
   Bell,
   ChevronRight,
   CreditCard,
+  LifeBuoy,
   LogOut,
+  MessageCircle,
   Search,
   Settings as SettingsIcon,
   UserCircle2,
@@ -23,6 +25,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { initialsFromLabel } from "@/lib/formatters";
 import { useCommandPalette } from "@/components/shell/command-palette";
+import { HelpButton } from "@/components/shell/help-button";
+// LocaleToggle is intentionally not imported — it's hidden until Bangla
+// coverage is real (see comment near where it used to render below).
 import {
   NotificationsDrawer,
   useNotificationCount,
@@ -83,6 +88,40 @@ function resolveCrumbs(pathname: string | null): Crumb[] {
   }));
 }
 
+/**
+ * Support / WhatsApp button. Visible on every dashboard page in the topbar.
+ * Reads NEXT_PUBLIC_SUPPORT_WHATSAPP first (preferred — opens WhatsApp), falls
+ * back to NEXT_PUBLIC_SUPPORT_URL (any URL — Intercom, mailto:, etc.), and
+ * hides itself if neither is set so unconfigured installs don't show a dead
+ * button.
+ *
+ * Mobile (< sm): icon-only with aria-label.
+ * Desktop (sm+): icon + "Support" label so it's discoverable.
+ */
+function SupportButton() {
+  const whatsapp = process.env.NEXT_PUBLIC_SUPPORT_WHATSAPP;
+  const url = process.env.NEXT_PUBLIC_SUPPORT_URL;
+  if (!whatsapp && !url) return null;
+  const href = whatsapp
+    ? `https://wa.me/${whatsapp.replace(/[^0-9]/g, "")}`
+    : (url as string);
+  const isWhatsapp = !!whatsapp;
+  const Icon = isWhatsapp ? MessageCircle : LifeBuoy;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={isWhatsapp ? "Chat with us on WhatsApp" : "Get support"}
+      title={isWhatsapp ? "Chat with us on WhatsApp" : "Get support"}
+      className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-stroke/12 bg-surface px-2.5 text-xs font-medium text-fg-subtle transition-colors hover:border-stroke/24 hover:text-fg sm:px-3"
+    >
+      <Icon className="h-4 w-4" aria-hidden />
+      <span className="hidden sm:inline">{isWhatsapp ? "WhatsApp" : "Support"}</span>
+    </a>
+  );
+}
+
 export function Topbar({ userLabel }: { userLabel: string }) {
   const pathname = usePathname();
   const crumbs = resolveCrumbs(pathname);
@@ -139,6 +178,18 @@ export function Topbar({ userLabel }: { userLabel: string }) {
         >
           <Search className="h-4 w-4" />
         </button>
+        {/*
+          The EN/বাংলা toggle was hidden because it only translated ~16 nav
+          strings while the rest of the dashboard stayed English. Showing
+          it implied full Bangla support — a trust killer for BD merchants
+          who toggled and got a half-translated UI. Restore once the
+          translation table covers actual content (orders, errors,
+          settings copy). The provider + toggle component still live in
+          src/lib/i18n.tsx and src/components/shell/locale-toggle.tsx so
+          this is a one-line revert when the strings land.
+        */}
+        <HelpButton />
+        <SupportButton />
         <button
           type="button"
           aria-label={

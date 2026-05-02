@@ -46,9 +46,8 @@ test.describe("merchant golden path", () => {
       // The CSV provider card lives under heading "CSV import". Scope the
       // Connect click to that card so we don't hit the wrong provider.
       const csvCard = page
-        .locator('div:has(h3:has-text("CSV import"))')
-        .first()
-        .or(page.locator('[data-testid="provider-card-csv"]'));
+        .locator('[data-testid="provider-card-csv"]')
+        .or(page.locator('div:has(h3:has-text("CSV import"))').last());
       await csvCard.scrollIntoViewIfNeeded();
       await csvCard
         .getByRole("button", { name: /connect/i })

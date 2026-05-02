@@ -53,6 +53,140 @@ describe("integrations router + connectors", () => {
     expect(result.installUrl).toMatch(/admin\/oauth\/authorize/);
   });
 
+  it("connect(shopify) rejects a non-myshopify domain with an inline-friendly Zod error", async () => {
+    const m = await createMerchant();
+    const caller = callerFor(authUserFor(m));
+    await expect(
+      caller.integrations.connect({
+        provider: "shopify",
+        shopDomain: "mystore.com",
+        apiKey: "k",
+        apiSecret: "s",
+        scopes: ["read_orders"],
+      }),
+    ).rejects.toThrow(/myshopify\.com/);
+  });
+
+  it("connect(shopify) with platform-level env credentials needs only the shop domain", async () => {
+    const prevKey = process.env.SHOPIFY_APP_API_KEY;
+    const prevSecret = process.env.SHOPIFY_APP_API_SECRET;
+    process.env.SHOPIFY_APP_API_KEY = "platform-k";
+    process.env.SHOPIFY_APP_API_SECRET = "platform-s";
+    // Drop the env singleton's cached graph so the router picks up the
+    // new process.env values on the fresh import.
+    vi.resetModules();
+    try {
+      const { appRouter } = await import("../src/server/routers/index.js");
+      const m = await createMerchant({
+        email: `env-fallback-${Date.now()}@t.com`,
+      });
+      const fresh = appRouter.createCaller({
+        user: { id: String(m._id), email: m.email, role: m.role as "merchant" },
+        request: {
+          ip: null,
+          userAgent: null,
+          cookieAuth: false,
+          csrfHeader: null,
+          csrfCookie: null,
+        },
+      });
+      const result = await fresh.integrations.connect({
+        provider: "shopify",
+        shopDomain: "envshop.myshopify.com",
+        scopes: ["read_orders"],
+      });
+      expect(result.status).toBe("pending");
+      expect(result.installUrl).toContain("client_id=platform-k");
+    } finally {
+      process.env.SHOPIFY_APP_API_KEY = prevKey;
+      process.env.SHOPIFY_APP_API_SECRET = prevSecret;
+      vi.resetModules();
+    }
+  });
+
+  it("connect(shopify) without env or merchant credentials surfaces a friendly error", async () => {
+    const prevKey = process.env.SHOPIFY_APP_API_KEY;
+    const prevSecret = process.env.SHOPIFY_APP_API_SECRET;
+    delete process.env.SHOPIFY_APP_API_KEY;
+    delete process.env.SHOPIFY_APP_API_SECRET;
+    vi.resetModules();
+    const { appRouter } = await import("../src/server/routers/index.js");
+    try {
+      const m = await createMerchant({
+        email: `no-creds-${Date.now()}@t.com`,
+      });
+      const fresh = appRouter.createCaller({
+        user: { id: String(m._id), email: m.email, role: m.role as "merchant" },
+        request: {
+          ip: null,
+          userAgent: null,
+          cookieAuth: false,
+          csrfHeader: null,
+          csrfCookie: null,
+        },
+      });
+      await expect(
+        fresh.integrations.connect({
+          provider: "shopify",
+          shopDomain: "naked.myshopify.com",
+          scopes: ["read_orders"],
+        }),
+      ).rejects.toThrow(/shopify_credentials_required/);
+    } finally {
+      process.env.SHOPIFY_APP_API_KEY = prevKey;
+      process.env.SHOPIFY_APP_API_SECRET = prevSecret;
+      vi.resetModules();
+    }
+  });
+
+  it("connect(shopify) refuses to clobber a connected store without confirmOverwrite", async () => {
+    const m = await createMerchant();
+    const caller = callerFor(authUserFor(m));
+    // Seed a fully-connected Shopify integration with a valid encrypted
+    // accessToken so the reconnect-safety branch fires.
+    const seeded = await Integration.create({
+      merchantId: m._id,
+      provider: "shopify",
+      accountKey: "safe.myshopify.com",
+      status: "connected",
+      credentials: {
+        apiKey: encryptSecret("k"),
+        apiSecret: encryptSecret("s"),
+        accessToken: encryptSecret("shpat_existing_token"),
+        siteUrl: "safe.myshopify.com",
+      },
+      webhookSecret: encryptSecret("ws"),
+    });
+    // First call without the flag — should short-circuit to alreadyConnected.
+    const guarded = await caller.integrations.connect({
+      provider: "shopify",
+      shopDomain: "safe.myshopify.com",
+      apiKey: "new-k",
+      apiSecret: "new-s",
+      scopes: ["read_orders"],
+    });
+    expect(guarded.id).toBe(String(seeded._id));
+    expect((guarded as { alreadyConnected?: boolean }).alreadyConnected).toBe(true);
+    // The accessToken on disk MUST still be the old one.
+    const after = await Integration.findById(seeded._id).lean();
+    expect(after?.credentials?.accessToken).toBe(seeded.credentials!.accessToken);
+
+    // Second call WITH the flag — proceeds and rebuilds the install URL.
+    const confirmed = await caller.integrations.connect({
+      provider: "shopify",
+      shopDomain: "safe.myshopify.com",
+      apiKey: "new-k",
+      apiSecret: "new-s",
+      scopes: ["read_orders"],
+      confirmOverwrite: true,
+    });
+    expect(confirmed.installUrl).toMatch(/admin\/oauth\/authorize/);
+    // accessToken preserved (we didn't pass a new one), credentials rotated.
+    const rotated = await Integration.findById(seeded._id).lean();
+    expect(rotated?.credentials?.accessToken).toBe(seeded.credentials!.accessToken);
+    expect(decryptSecret(rotated!.credentials!.apiKey as string)).toBe("new-k");
+  });
+
   it("disconnect flips status and stamps disconnectedAt", async () => {
     const m = await createMerchant();
     const caller = callerFor(authUserFor(m));
@@ -165,7 +299,10 @@ describe("integrations router + connectors", () => {
     const m = await createMerchant();
     const caller = callerFor(authUserFor(m));
     const connected = await caller.integrations.connect({ provider: "custom_api" });
-    const rotated = await caller.integrations.rotateWebhookSecret({ id: connected.id });
+    const rotated = await caller.integrations.rotateWebhookSecret({
+      id: connected.id,
+      password: "password123",
+    });
     expect(rotated.secret).toBeTruthy();
     const row = await Integration.findById(connected.id).lean();
     const stored = row?.webhookSecret;

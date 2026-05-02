@@ -6,20 +6,31 @@ import {
   type MerchantFraudConfig,
   MerchantStats,
   Order,
+  type OrderAutomation,
   REVIEW_STATUSES,
 } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 import { invalidate } from "../../lib/cache.js";
 import { writeAudit } from "../../lib/audit.js";
 import { collectRiskHistory, computeRisk, hashAddress, type RiskOptions } from "../risk.js";
 import { getPlan } from "../../lib/plans.js";
-import { bumpUsage, checkQuota } from "../../lib/usage.js";
+import { releaseQuota, reserveQuota } from "../../lib/usage.js";
+import {
+  buildFraudRejectSnapshot,
+  buildPreActionSnapshot,
+} from "../../lib/rejectSnapshot.js";
 import { fireFraudAlert } from "../../lib/alerts.js";
+import {
+  hashPhoneForNetwork,
+  lookupNetworkRisk,
+} from "../../lib/fraud-network.js";
 import { enqueueRescore } from "../../workers/riskRecompute.js";
 
 const REVIEW_NOTE_MAX = 1000;
 
-const queueFilter = z.enum(["pending_call", "no_answer", "all_open"]).default("all_open");
+const queueFilter = z
+  .enum(["pending_call", "no_answer", "optional_review", "all_open", "watch"])
+  .default("all_open");
 
 const reviewActionInput = z.object({
   id: z.string().min(1),
@@ -41,13 +52,13 @@ type FraudDoc = {
     reviewedAt?: Date;
     reviewNotes?: string;
     scoredAt?: Date;
+    confidence?: number;
+    confidenceLabel?: "Safe" | "Verify" | "Risky";
+    hardBlocked?: boolean;
+    smsFeedback?: "confirmed" | "rejected" | "no_reply";
   };
   createdAt: Date;
 };
-
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
 
 function parseObjectId(id: string): Types.ObjectId {
   if (!Types.ObjectId.isValid(id)) {
@@ -99,10 +110,19 @@ export const fraudRouter = router({
     .query(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
       await ensureFraudAccess(merchantId, ctx.user.role);
+      // Queue tabs:
+      //   all_open       → must-review (HIGH) only — keeps the agent's queue tight
+      //   pending_call   → just-arrived HIGH
+      //   no_answer      → HIGH that we tried to call and failed
+      //   watch          → just MEDIUM (optional_review) — the watch tab
+      //   optional_review → alias for "watch", kept for callers using the
+      //                     literal review-status name
       const statusMatch =
         input.filter === "all_open"
           ? { $in: ["pending_call", "no_answer"] }
-          : input.filter;
+          : input.filter === "watch"
+            ? "optional_review"
+            : input.filter;
 
       const findQuery: Record<string, unknown> = {
         merchantId,
@@ -147,6 +167,16 @@ export const fraudRouter = router({
           reasons: o.fraud?.reasons ?? [],
           scoredAt: o.fraud?.scoredAt ?? null,
           createdAt: o.createdAt,
+          confidence: o.fraud?.confidence ?? Math.max(0, 100 - (o.fraud?.riskScore ?? 0)),
+          confidenceLabel:
+            o.fraud?.confidenceLabel ??
+            (o.fraud?.level === "high"
+              ? "Risky"
+              : o.fraud?.level === "medium"
+                ? "Verify"
+                : "Safe"),
+          hardBlocked: o.fraud?.hardBlocked ?? false,
+          smsFeedback: o.fraud?.smsFeedback ?? null,
         })),
       };
     }),
@@ -162,6 +192,18 @@ export const fraudRouter = router({
       const _id = parseObjectId(input.id);
       const order = await Order.findOne({ _id, merchantId }).lean<FraudDoc>();
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+
+      // Cross-merchant network read — only aggregate counts surface, never
+      // merchant identities. Returns an "EMPTY"-shaped object when the
+      // fingerprint has no signal yet (pre-network or singleton merchant).
+      const phoneHash = hashPhoneForNetwork(order.customer.phone);
+      const { hashAddress } = await import("../risk.js");
+      const addressHash = hashAddress(order.customer.address, order.customer.district);
+      const network = await lookupNetworkRisk({
+        phoneHash,
+        addressHash,
+        merchantId,
+      });
 
       return {
         id: String(order._id),
@@ -179,6 +221,27 @@ export const fraudRouter = router({
           reviewedAt: order.fraud?.reviewedAt ?? null,
           reviewNotes: order.fraud?.reviewNotes ?? null,
           scoredAt: order.fraud?.scoredAt ?? null,
+          confidence:
+            order.fraud?.confidence ?? Math.max(0, 100 - (order.fraud?.riskScore ?? 0)),
+          confidenceLabel:
+            order.fraud?.confidenceLabel ??
+            (order.fraud?.level === "high"
+              ? "Risky"
+              : order.fraud?.level === "medium"
+                ? "Verify"
+                : "Safe"),
+          hardBlocked: order.fraud?.hardBlocked ?? false,
+          smsFeedback: order.fraud?.smsFeedback ?? null,
+        },
+        network: {
+          merchantCount: network.merchantCount,
+          deliveredCount: network.deliveredCount,
+          rtoCount: network.rtoCount,
+          cancelledCount: network.cancelledCount,
+          rtoRate: network.rtoRate,
+          firstSeenAt: network.firstSeenAt,
+          lastSeenAt: network.lastSeenAt,
+          matchedOn: network.matchedOn,
         },
         createdAt: order.createdAt,
       };
@@ -191,11 +254,15 @@ export const fraudRouter = router({
       const merchantId = merchantObjectId(ctx);
       await ensureFraudAccess(merchantId, ctx.user.role);
       const plan = getPlan((await Merchant.findById(merchantId).select("subscription.tier").lean())?.subscription?.tier);
-      const quota = await checkQuota(merchantId, plan, "fraudReviewsUsed");
-      if (!quota.allowed) {
+      // Reserve a slot atomically up-front. Two agents racing for the last
+      // review-quota unit cannot both pass a `checkQuota` and then both
+      // bump — the `$inc` here is conditional on the post-increment value
+      // staying inside the cap.
+      const reservation = await reserveQuota(merchantId, plan, "fraudReviewsUsed", 1);
+      if (!reservation.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: `monthly fraud review quota reached (${quota.used}/${quota.limit}) — upgrade your plan`,
+          message: `monthly fraud review quota reached (${reservation.used}/${reservation.limit}) — upgrade your plan`,
         });
       }
       const _id = parseObjectId(input.id);
@@ -217,6 +284,10 @@ export const fraudRouter = router({
         { new: true },
       ).lean<FraudDoc>();
       if (!updated) {
+        // No real state transition happened (order already verified /
+        // rejected by another agent, or never in review). Refund the
+        // quota slot so retries don't accumulate against the cap.
+        await releaseQuota(merchantId, "fraudReviewsUsed", 1);
         throw new TRPCError({
           code: "CONFLICT",
           message: "order is not awaiting review",
@@ -231,7 +302,6 @@ export const fraudRouter = router({
         subjectId: updated._id,
         meta: { notes: input.notes ?? null, riskScore: updated.fraud?.riskScore ?? 0 },
       });
-      await bumpUsage(merchantId, "fraudReviewsUsed", 1);
       await invalidate(`dashboard:${ctx.user.id}`);
       return { id: String(updated._id), reviewStatus: "verified" as const };
     }),
@@ -249,8 +319,12 @@ export const fraudRouter = router({
       const _id = parseObjectId(input.id);
       const now = new Date();
       const prior = await Order.findOne({ _id, merchantId })
-        .select("order.status order.cod fraud.reviewStatus")
-        .lean<{ order: { status: string; cod: number }; fraud?: { reviewStatus?: string } }>();
+        .select("order.status order.cod automation fraud.reviewStatus fraud.level")
+        .lean<{
+          order: { status: string; cod: number };
+          automation?: OrderAutomation;
+          fraud?: { reviewStatus?: string; level?: string };
+        }>();
       if (!prior) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
       const reviewStatus = prior.fraud?.reviewStatus ?? "not_required";
       if (!["pending_call", "no_answer"].includes(reviewStatus)) {
@@ -260,7 +334,36 @@ export const fraudRouter = router({
         });
       }
 
+      const plan = getPlan((await Merchant.findById(merchantId).select("subscription.tier").lean())?.subscription?.tier);
+      const reservation = await reserveQuota(merchantId, plan, "fraudReviewsUsed", 1);
+      if (!reservation.allowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `monthly fraud review quota reached (${reservation.used}/${reservation.limit}) — upgrade your plan`,
+        });
+      }
+
       const prevStatus = prior.order.status;
+      const fromAutomationState = prior.automation?.state ?? "not_evaluated";
+      const fraudSnapshot = buildFraudRejectSnapshot(prior.fraud);
+      const preActionSnapshot = buildPreActionSnapshot({
+        orderStatus: prevStatus,
+        automation: prior.automation,
+        fraud: prior.fraud,
+      });
+
+      // Write the SAME snapshot fields that orders.rejectOrder and
+      // orders.bulkRejectOrders write — without these, restoreOrder
+      // cannot put a fraud-rejected order back, because its filter
+      // requires automation.state="rejected" + decidedBy="merchant"
+      // + rejectedAt set. Pre-this-change, fraud reject was
+      // irrecoverable.
+      //
+      // The fraud.preRejectReviewStatus capture is what lets restore
+      // re-enter the queue: the queue is built from
+      // fraud.reviewStatus ∈ {pending_call, no_answer}, so restoring
+      // the prior reviewStatus puts the order back in the merchant's
+      // review query naturally.
       const updated = await Order.findOneAndUpdate(
         {
           _id,
@@ -272,14 +375,35 @@ export const fraudRouter = router({
             "fraud.reviewStatus": "rejected",
             "fraud.reviewedAt": now,
             "fraud.reviewedBy": merchantId,
+            "fraud.preRejectReviewStatus": fraudSnapshot.preRejectReviewStatus,
+            "fraud.preRejectLevel": fraudSnapshot.preRejectLevel,
             "order.status": "cancelled",
+            "order.preRejectStatus": prevStatus,
+            "automation.state": "rejected",
+            "automation.preRejectState": fromAutomationState,
+            "automation.decidedBy": "merchant",
+            "automation.decidedAt": now,
+            "automation.rejectedAt": now,
+            "automation.rejectionReason":
+              input.notes ?? "rejected during fraud review",
+            preActionSnapshot,
             ...(input.notes ? { "fraud.reviewNotes": input.notes } : {}),
           },
         },
         { new: true },
       ).lean<FraudDoc>();
       if (!updated) {
+        // No state change — refund the fraud-review slot we reserved.
+        await releaseQuota(merchantId, "fraudReviewsUsed", 1);
         throw new TRPCError({ code: "CONFLICT", message: "order state changed — retry" });
+      }
+
+      // Refund the order quota too — the order is cancelled, no longer
+      // countable against the merchant's monthly cap. Matches the
+      // behaviour of rejectOrder + bulkRejectOrders so all three reject
+      // paths leave usage in the same shape.
+      if (prevStatus !== "cancelled") {
+        await releaseQuota(merchantId, "ordersCreated", 1);
       }
 
       if (prevStatus !== "cancelled") {
@@ -315,7 +439,6 @@ export const fraudRouter = router({
         meta: { reason: "review_rejected" },
       });
 
-      await bumpUsage(merchantId, "fraudReviewsUsed", 1);
       await invalidate(`dashboard:${ctx.user.id}`);
 
       // A confirmed rejection is the strongest possible fraud signal for the
@@ -420,7 +543,7 @@ export const fraudRouter = router({
         suspiciousDistricts: fc.suspiciousDistricts ?? [],
         blockedPhones: fc.blockedPhones ?? [],
         blockedAddresses: fc.blockedAddresses ?? [],
-        velocityThreshold: fc.velocityThreshold ?? 0,
+        velocityThreshold: fc.velocityThreshold ?? undefined,
       };
       const addressHash =
         order.source?.addressHash ??
@@ -466,6 +589,9 @@ export const fraudRouter = router({
             "fraud.signals": risk.signals,
             "fraud.reviewStatus": nextReview,
             "fraud.scoredAt": new Date(),
+            "fraud.confidence": risk.confidence,
+            "fraud.confidenceLabel": risk.confidenceLabel,
+            "fraud.hardBlocked": risk.hardBlocked,
           },
         },
       );

@@ -14,6 +14,17 @@ export const NOTIFICATION_KINDS = [
   "fraud.blocked_match",
   "integration.webhook_failed",
   "recovery.cart_pending",
+  "automation.stale_pending",
+  "automation.watchdog_exhausted",
+  "queue.enqueue_failed",
+  "queue.stalled",
+  /**
+   * Platform-level anomaly alert (payment_spike, webhook_failure_spike,
+   * automation_failure_spike, fraud_spike). Fanned out to every role=admin
+   * merchant by lib/admin-alerts.ts whenever the anomaly worker emits an
+   * `alert.fired` audit row.
+   */
+  "admin.alert",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
@@ -30,7 +41,11 @@ const notificationSchema = new Schema(
     /** Optional deep-link target (e.g. `/dashboard/fraud-review?id=…`). */
     link: { type: String, trim: true, maxlength: 500 },
     /** Subject reference — used for de-dup and UI badges. */
-    subjectType: { type: String, enum: ["order", "merchant", "integration"], default: "order" },
+    subjectType: {
+      type: String,
+      enum: ["order", "merchant", "integration", "system"],
+      default: "order",
+    },
     subjectId: { type: Schema.Types.ObjectId },
     /** Arbitrary payload (risk score, COD value, matched signals, …). */
     meta: { type: Schema.Types.Mixed },

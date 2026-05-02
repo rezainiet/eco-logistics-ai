@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
 import {
+  FraudPrediction,
   Integration,
   Merchant,
   type MerchantFraudConfig,
@@ -13,9 +14,11 @@ import {
 import {
   collectRiskHistory,
   computeRisk,
+  DEFAULT_WEIGHTS_VERSION,
   hashAddress,
   type RiskOptions,
 } from "./risk.js";
+import { getMerchantValueRollup } from "../lib/merchantValueRollup.js";
 import { fireFraudAlert } from "../lib/alerts.js";
 import { writeAudit } from "../lib/audit.js";
 import { releaseQuota, reserveQuota } from "../lib/usage.js";
@@ -94,6 +97,14 @@ export async function ingestNormalizedOrder(
     .lean();
   if (!merchant) return { ok: false, error: "merchant not found" };
 
+  // Dynamic per-merchant value rollup — drives adaptive COD thresholds.
+  // Cheap (cached 10 min); first hit aggregates the merchant's last 90d.
+  const rollup = await getMerchantValueRollup(opts.merchantId).catch(() => ({
+    avgOrderValue: undefined,
+    p75OrderValue: undefined,
+    resolvedSampleSize: 0,
+  }));
+
   const plan = getPlan(merchant.subscription?.tier);
   const reservation = await reserveQuota(opts.merchantId, plan, "ordersCreated", 1);
   if (!reservation.allowed) {
@@ -112,6 +123,16 @@ export async function ingestNormalizedOrder(
       blockedPhones: fraudConfig.blockedPhones ?? [],
       blockedAddresses: fraudConfig.blockedAddresses ?? [],
       velocityThreshold: fraudConfig.velocityThreshold ?? 0,
+      // Adaptive thresholds — only kick in when no explicit override exists.
+      p75OrderValue: rollup.p75OrderValue,
+      avgOrderValue: rollup.avgOrderValue,
+      // Adaptive weights — written by the monthly tuning worker.
+      weightOverrides: fraudConfig.signalWeightOverrides as
+        | Map<string, number>
+        | Record<string, number>
+        | undefined,
+      baseRtoRate: fraudConfig.baseRtoRate,
+      weightsVersion: fraudConfig.weightsVersion ?? DEFAULT_WEIGHTS_VERSION,
     };
     const addressHashValue = hashAddress(
       normalized.customer.address,
@@ -177,6 +198,25 @@ export async function ingestNormalizedOrder(
       },
     });
 
+    // Persist the prediction for the monthly weight tuner. Best-effort:
+    // a failure here MUST NOT undo the order create. Idempotent via the
+    // unique index on `orderId` so a rescore later will overwrite cleanly.
+    void FraudPrediction.create({
+      merchantId: opts.merchantId,
+      orderId: orderDoc._id,
+      riskScore: risk.riskScore,
+      pRto: risk.pRto,
+      levelPredicted: risk.level,
+      customerTier: risk.customerTier,
+      signals: risk.signals.map((s) => ({ key: s.key, weight: s.weight })),
+      weightsVersion: risk.weightsVersion,
+    }).catch((err) =>
+      console.error(
+        "[fraud-prediction] write failed",
+        (err as Error).message,
+      ),
+    );
+
     void writeAudit({
       merchantId: opts.merchantId,
       actorId: opts.merchantId,
@@ -189,6 +229,9 @@ export async function ingestNormalizedOrder(
         externalId: normalized.externalId,
         riskLevel: risk.level,
         riskScore: risk.riskScore,
+        pRto: risk.pRto,
+        customerTier: risk.customerTier,
+        weightsVersion: risk.weightsVersion,
       },
     });
 
@@ -255,9 +298,79 @@ export async function ingestNormalizedOrder(
 }
 
 /**
- * Idempotent webhook entry-point. Stamps a `WebhookInbox` row before
- * processing so duplicate deliveries (Shopify retries, Woo at-least-once)
- * never spawn a second order.
+ * ACK-fast inbound webhook entry-point. Stamps a `WebhookInbox` row in
+ * `received` state and returns immediately — actual ingestion is deferred to
+ * the `webhook-process` worker so the request thread is freed in <50ms.
+ *
+ * Idempotency is enforced by the `(merchantId, provider, externalId)` unique
+ * index — a duplicate delivery returns `{ duplicate: true }` and the route
+ * skips the enqueue.
+ *
+ * Returns:
+ *  - `{ duplicate: true, inboxId, resolvedOrderId }` on a known event
+ *  - `{ duplicate: false, inboxId }` on a fresh event (caller must enqueue)
+ *  - throws on unexpected db errors so the caller can return 5xx
+ */
+export interface EnqueueInboundWebhookArgs {
+  merchantId: Types.ObjectId;
+  integrationId: Types.ObjectId;
+  provider: string;
+  topic: string;
+  externalId: string;
+  rawPayload: unknown;
+  payloadBytes: number;
+}
+
+export interface EnqueueInboundWebhookResult {
+  duplicate: boolean;
+  inboxId: Types.ObjectId;
+  resolvedOrderId?: string;
+}
+
+export async function enqueueInboundWebhook(
+  args: EnqueueInboundWebhookArgs,
+): Promise<EnqueueInboundWebhookResult> {
+  try {
+    const row = await WebhookInbox.create({
+      merchantId: args.merchantId,
+      integrationId: args.integrationId,
+      provider: args.provider,
+      topic: args.topic,
+      externalId: args.externalId,
+      payload: args.rawPayload,
+      payloadBytes: args.payloadBytes,
+      status: "received",
+    });
+    return { duplicate: false, inboxId: row._id as Types.ObjectId };
+  } catch (err: unknown) {
+    const e = err as { code?: number };
+    if (e?.code !== 11000) throw err;
+    // Duplicate event — pull the prior row so the caller can echo the order id.
+    const existing = await WebhookInbox.findOne({
+      merchantId: args.merchantId,
+      provider: args.provider,
+      externalId: args.externalId,
+    })
+      .select("_id resolvedOrderId")
+      .lean();
+    if (!existing) {
+      throw new Error("inbox upsert race: row vanished after dup-key");
+    }
+    return {
+      duplicate: true,
+      inboxId: existing._id as Types.ObjectId,
+      resolvedOrderId: existing.resolvedOrderId
+        ? String(existing.resolvedOrderId)
+        : undefined,
+    };
+  }
+}
+
+/**
+ * Synchronous webhook ingestion. Kept for tests and dashboard-driven imports
+ * where the caller wants the order id back inline. Production webhook traffic
+ * goes through `enqueueInboundWebhook` + the `webhook-process` worker so
+ * upstream gets a 202 in <50ms.
  *
  * Returns:
  *  - `{ ok: true, duplicate: true }` if the externalId already landed

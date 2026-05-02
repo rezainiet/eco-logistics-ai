@@ -2,8 +2,20 @@
   "name": "@ecom/types",
   "version": "0.0.0",
   "private": true,
-  "main": "./src/index.ts",
+  "type": "module",
+  "main": "./src/index.js",
   "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json",
+    "./*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.js"
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

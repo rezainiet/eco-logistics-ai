@@ -17,7 +17,22 @@ const { Schema, model, models } = mongoose;
 export const PAYMENT_METHODS = ["bkash", "nagad", "bank_transfer", "card", "other"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
-export const PAYMENT_STATUSES = ["pending", "approved", "rejected", "refunded"] as const;
+/**
+ * Manual payment approval workflow.
+ *
+ *   pending   → submitted by merchant, no admin has touched it yet
+ *   reviewed  → a finance admin opened it, eyeballed proof + risk, marked
+ *               it reviewed. Required intermediate state — instant approve
+ *               from pending is forbidden. Risk score is computed during
+ *               submission and surfaced here.
+ *   approved  → final state. For high-risk payments (riskScore ≥ 60) two
+ *               distinct admins must sign off (4-eyes). The first one's
+ *               approval lands as `firstApprovalBy`; the second one flips
+ *               status to approved.
+ *   rejected  → admin declined with a reason
+ *   refunded  → post-approval reversal (separate flow, not in this PR)
+ */
+export const PAYMENT_STATUSES = ["pending", "reviewed", "approved", "rejected", "refunded"] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 export const PAYMENT_PROVIDERS = ["manual", "stripe"] as const;
@@ -79,9 +94,57 @@ const paymentSchema = new Schema(
      * retries.
      */
     invoiceId: { type: String, trim: true, maxlength: 200 },
+    /**
+     * Caller-supplied idempotency token for manual `submitPayment` calls.
+     * The dashboard generates a UUID per submit click; the (merchantId,
+     * clientRequestId) sparse-unique index below dedupes double-submits.
+     */
+    clientRequestId: { type: String, trim: true, maxlength: 120 },
     reviewerId: { type: Schema.Types.ObjectId, ref: "Merchant" },
     reviewerNote: { type: String, trim: true, maxlength: 1000 },
     reviewedAt: { type: Date },
+    /**
+     * Two-stage review:
+     *  - markedReviewedBy / markedReviewedAt: admin who triaged (status -> reviewed).
+     *  - firstApprovalBy   / firstApprovalAt: only set for high-risk payments
+     *    that need dual approval. Cleared on rejection.
+     *  - reviewerId is the *second* (final) approver; admin set it on the
+     *    transition to "approved".
+     * For low-risk payments the first approval IS the final approval — we
+     * keep firstApprovalBy unset and use reviewerId only.
+     */
+    markedReviewedBy: { type: Schema.Types.ObjectId, ref: "Merchant" },
+    markedReviewedAt: { type: Date },
+    firstApprovalBy: { type: Schema.Types.ObjectId, ref: "Merchant" },
+    firstApprovalAt: { type: Date },
+    firstApprovalNote: { type: String, trim: true, maxlength: 1000 },
+    /**
+     * Anti-fraud fingerprints — populated on submitPayment.
+     *
+     *   txnIdNorm     : normalized (lower-cased + stripped) txnId for
+     *                   cross-merchant duplicate detection. Unique-sparse
+     *                   index covers (method, txnIdNorm) globally so the
+     *                   same bKash transaction id can't be claimed by two
+     *                   merchants.
+     *   proofHash     : sha256 of the proof file bytes. Two merchants
+     *                   submitting the same screenshot collide on this.
+     *   metadataHash  : sha256 of (senderPhone + amount + method + txnIdNorm).
+     *                   Catches replays that swap the screenshot but keep
+     *                   the underlying claim identical.
+     */
+    txnIdNorm: { type: String, trim: true, maxlength: 200 },
+    proofHash: { type: String, trim: true, maxlength: 64 },
+    metadataHash: { type: String, trim: true, maxlength: 64 },
+    /**
+     * Auto-computed risk score (0..100) from `scorePaymentRisk`. >= 60 forces
+     * dual-approval at admin time; >= 80 also surfaces in the suspicious-
+     * activity dashboard. Reasons are the human-readable signals that fired.
+     */
+    riskScore: { type: Number, min: 0, max: 100, default: 0 },
+    riskReasons: { type: [String], default: [] },
+    /** True iff riskScore was >= 60 at submission time — locked in to avoid
+     * post-hoc tuning sneaking high-risk payments through single approval. */
+    requiresDualApproval: { type: Boolean, default: false },
     /** Period the payment covers — mirrored onto subscription.currentPeriodEnd on approval. */
     periodStart: { type: Date },
     periodEnd: { type: Date },
@@ -103,10 +166,26 @@ paymentSchema.index(
   { invoiceId: 1 },
   { unique: true, partialFilterExpression: { invoiceId: { $type: "string" } } },
 );
+// Manual submitPayment idempotency — same merchant + same clientRequestId
+// collapses to a single Payment row regardless of double-click.
+paymentSchema.index(
+  { merchantId: 1, clientRequestId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientRequestId: { $type: "string" } },
+  },
+);
 paymentSchema.index({ merchantId: 1, subscriptionId: 1, createdAt: -1 });
 
 paymentSchema.index({ merchantId: 1, createdAt: -1 });
 paymentSchema.index({ status: 1, createdAt: -1 });
+// Cross-merchant fingerprint indices. NOT unique — two merchants legitimately
+// submitting receipts with the same hash should both land; the cross-merchant
+// fraud check fires at submit time and adds a risk signal. Keeping the index
+// non-unique lets the audit trail of attempted reuse stay intact.
+paymentSchema.index({ method: 1, txnIdNorm: 1 });
+paymentSchema.index({ proofHash: 1 });
+paymentSchema.index({ metadataHash: 1 });
 
 export type Payment = InferSchemaType<typeof paymentSchema> & { _id: Types.ObjectId };
 

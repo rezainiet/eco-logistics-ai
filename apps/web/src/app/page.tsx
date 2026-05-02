@@ -175,7 +175,7 @@ export default function HomePage() {
             </div>
             <div className="space-y-1">
               <h2 className="text-xl font-semibold text-fg">
-                Ready to see your RTO rate drop?
+                Ready to see your failed-delivery rate drop?
               </h2>
               <p className="max-w-lg text-sm text-fg-subtle">
                 Spin up a workspace in under 60 seconds. Import your first

@@ -1,7 +1,10 @@
 import mongoose, { type InferSchemaType, type Model, type Types } from "mongoose";
 const { Schema, model, models } = mongoose;
 
-const PHONE_RE = /^\+?[0-9]{7,15}$/;
+// Single source of truth for phone number validation. Used by Mongoose
+// schemas, tRPC routers, and the auth router. Keep loose enough for
+// international numbers; stricter per-country checks live in lib/phone.ts.
+export const PHONE_RE = /^\+?[0-9]{7,15}$/;
 
 const COUNTRIES = ["BD", "PK", "IN", "LK", "NP", "ID", "PH", "VN", "MY", "TH"] as const;
 const LANGUAGES = ["en", "bn", "ur", "hi", "ta", "id", "th", "vi", "ms"] as const;
@@ -75,10 +78,130 @@ const fraudConfigSchema = new Schema(
     historyHalfLifeDays: { type: Number, min: 0, default: 30 },
     /** Notify the merchant when a pending_call arrives. Defaults to true. */
     alertOnPendingReview: { type: Boolean, default: true },
+    /**
+     * Per-signal weight overrides written by the monthly weight-tuning
+     * worker. Merchant-specific because RTO patterns vary wildly across
+     * verticals (high-ticket electronics vs. low-ticket apparel). Stored
+     * as a free-form key→multiplier so we can ship new signals without a
+     * schema migration. Multiplier is applied to the platform default;
+     * `undefined` (or missing key) keeps the default.
+     */
+    signalWeightOverrides: {
+      type: Map,
+      of: Number,
+      default: undefined,
+    },
+    /**
+     * Anchor for the P(RTO) calibration. Default 0.18 reflects the BD
+     * COD market base rate; the tuning worker rewrites this per merchant
+     * once they have ≥200 resolved orders (statistical floor).
+     */
+    baseRtoRate: { type: Number, min: 0, max: 1 },
+    /** Stamp set by the tuning worker so the UI can show "Last tuned: …". */
+    lastTunedAt: { type: Date },
+    /** Version tag of the weights currently in effect. */
+    weightsVersion: { type: String, trim: true, maxlength: 60 },
   },
   { _id: false }
 );
 
+/**
+ * Public-facing branding fields, shown on the customer tracking page
+ * (`/track/[code]`). Every field optional — falls back to neutral
+ * platform defaults when unset. Display name defaults to businessName.
+ * primaryColor must be a 7-char hex string (#rrggbb); the web layer
+ * sanitizes anything else so a bad merchant value can never become a
+ * CSS injection vector.
+ */
+const brandingSchema = new Schema(
+  {
+    displayName: { type: String, trim: true, maxlength: 80 },
+    logoUrl: { type: String, trim: true, maxlength: 500 },
+    /**
+     * Inline base64 logo for the in-app sidebar header and hero. Stored as a
+     * `data:image/...;base64,...` URL so we don't need a file server. Capped
+     * at 280k chars (~200 KB raw + base64 overhead) — enforced again in the
+     * tRPC mutation so we surface a friendly error before Mongoose throws.
+     * Distinct from `logoUrl` (which is the public-tracking-page logo) so a
+     * merchant can run different art on the customer surface vs the admin.
+     */
+    logoDataUrl: {
+      type: String,
+      maxlength: 280_000,
+      validate: {
+        validator: (v: string) => !v || /^data:image\/(png|jpe?g|svg\+xml|webp|gif);base64,/.test(v),
+        message: "logoDataUrl must be a data:image/* base64 URL",
+      },
+    },
+    primaryColor: {
+      type: String,
+      trim: true,
+      maxlength: 7,
+      validate: {
+        validator: (v: string) => !v || /^#[0-9a-fA-F]{6}$/.test(v),
+        message: "primaryColor must be a 6-digit hex like #112233",
+      },
+    },
+    supportPhone: {
+      type: String,
+      trim: true,
+      maxlength: 20,
+      validate: { validator: (v: string) => !v || PHONE_RE.test(v), message: "Invalid phone" },
+    },
+    supportEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
+  },
+  { _id: false },
+);
+
+export interface MerchantBranding {
+  displayName?: string;
+  logoUrl?: string;
+  logoDataUrl?: string;
+  primaryColor?: string;
+  supportPhone?: string;
+  supportEmail?: string;
+}
+
+export const AUTOMATION_MODES = ["manual", "semi_auto", "full_auto"] as const;
+export type AutomationMode = (typeof AUTOMATION_MODES)[number];
+
+/**
+ * Per-merchant automation policy for newly created orders.
+ *
+ *   manual     — every order goes to pending_confirmation; merchant
+ *                clicks Confirm or Reject. (Default — safest.)
+ *   semi_auto  — low-risk orders auto-confirm; medium/high go to
+ *                pending_confirmation; auto-book is OFF by default.
+ *   full_auto  — low-risk orders auto-confirm AND auto-book through
+ *                the merchant's preferred courier. Medium goes to
+ *                pending_confirmation; high always requires_review.
+ *
+ * `maxRiskForAutoConfirm` is the riskScore ceiling under full_auto.
+ * Orders scored above this number bypass auto-confirm regardless of
+ * level — useful for merchants who want full_auto only on very-low
+ * risk while keeping their threshold tighter than 39.
+ */
+const automationConfigSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: false },
+    mode: { type: String, enum: AUTOMATION_MODES, default: "manual" },
+    /** Hard cap on the risk score under which auto-confirm fires (0..100). */
+    maxRiskForAutoConfirm: { type: Number, min: 0, max: 100, default: 39 },
+    /** When true, auto-confirmed orders also get auto-booked. */
+    autoBookEnabled: { type: Boolean, default: false },
+    /** Preferred courier for auto-book when multiple are configured. */
+    autoBookCourier: { type: String, trim: true, lowercase: true, maxlength: 60 },
+  },
+  { _id: false },
+);
+
+export interface MerchantAutomationConfig {
+  enabled?: boolean;
+  mode?: AutomationMode;
+  maxRiskForAutoConfirm?: number;
+  autoBookEnabled?: boolean;
+  autoBookCourier?: string;
+}
 const subscriptionSchema = new Schema(
   {
     tier: { type: String, enum: TIERS, default: "starter" },
@@ -151,9 +274,58 @@ const merchantSchema = new Schema(
     country: { type: String, enum: COUNTRIES, default: "BD" },
     language: { type: String, enum: LANGUAGES, default: "en" },
     role: { type: String, enum: ["merchant", "admin", "agent"], default: "merchant" },
+    /**
+     * Admin RBAC scopes. Empty for non-admin users. An admin without any
+     * scope can read but cannot mutate. Scopes are additive; super_admin
+     * implies all others.
+     *   - super_admin    : full power, including granting/revoking other admins
+     *   - finance_admin  : payment approval / refund / plan changes
+     *   - support_admin  : merchant suspension / unsuspension, fraud override
+     */
+    adminScopes: {
+      type: [String],
+      enum: ["super_admin", "finance_admin", "support_admin"],
+      default: [],
+    },
+    /**
+     * Per-admin alert delivery preferences — drives lib/admin-alerts.ts
+     * fan-out from `alert.fired` audit rows. Each severity has independent
+     * email + sms toggles; in-app is always on so an admin can never miss
+     * an alert because they tuned themselves out of every channel.
+     *
+     * Defaults (mirrored in `DEFAULT_ADMIN_ALERT_PREFS`):
+     *   info     — inApp only
+     *   warning  — inApp + email
+     *   critical — inApp + email + sms
+     *
+     * Defaults only apply when the field is unset. An admin who explicitly
+     * disables every channel still receives in-app rows.
+     */
+    adminAlertPrefs: {
+      type: new Schema(
+        {
+          info: {
+            email: { type: Boolean, default: false },
+            sms: { type: Boolean, default: false },
+          },
+          warning: {
+            email: { type: Boolean, default: true },
+            sms: { type: Boolean, default: false },
+          },
+          critical: {
+            email: { type: Boolean, default: true },
+            sms: { type: Boolean, default: true },
+          },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     subscription: { type: subscriptionSchema, default: () => ({}) },
     couriers: { type: [courierSchema], default: [] },
     fraudConfig: { type: fraudConfigSchema, default: () => ({}) },
+    branding: { type: brandingSchema, default: () => ({}) },
+    automationConfig: { type: automationConfigSchema, default: () => ({}) },
     /**
      * Public tracking key embedded in the JS SDK on the merchant's storefront.
      * Resolves to merchantId server-side at the collector boundary. Safe to
@@ -161,6 +333,17 @@ const merchantSchema = new Schema(
      * Auto-generated on first /track request that needs it.
      */
     trackingKey: { type: String, unique: true, sparse: true, trim: true, maxlength: 64 },
+    /**
+     * Optional shared secret for HMAC-signed collector events. When set, the
+     * SDK signs every batch as `HMAC-SHA256(secret, timestamp + "." + body)`
+     * and the collector verifies before accepting. Unsigned batches still
+     * pass when the secret is unset (backward compat); once a merchant
+     * rotates the secret on, signature verification becomes mandatory for
+     * any subsequent unsigned batches via the strictHmac flag.
+     */
+    trackingSecret: { type: String, trim: true, maxlength: 128 },
+    /** When true, the collector REJECTS any batch missing/invalid HMAC. */
+    trackingStrictHmac: { type: Boolean, default: false },
     /**
      * Stripe customer record. Created once on the first subscription checkout
      * and reused for every later billing operation (subsequent checkouts,
@@ -229,6 +412,10 @@ export interface MerchantFraudConfig {
   velocityWindowMin?: number;
   historyHalfLifeDays?: number;
   alertOnPendingReview?: boolean;
+  signalWeightOverrides?: Map<string, number> | Record<string, number>;
+  baseRtoRate?: number;
+  lastTunedAt?: Date;
+  weightsVersion?: string;
 }
 
 export const Merchant: Model<Merchant> =
@@ -236,7 +423,35 @@ export const Merchant: Model<Merchant> =
 
 export const MERCHANT_COUNTRIES = COUNTRIES;
 export const MERCHANT_LANGUAGES = LANGUAGES;
-export const SUBSCRIPTION_TIERS = TIERS;
-export const SUBSCRIPTION_STATUSES = SUB_STATUS;
+
+// Re-export the courier-provider enum so API routers can build zod
+// `z.enum(...)` validators without re-declaring the union.
 export const COURIER_PROVIDER_NAMES = COURIER_PROVIDERS;
 export type CourierProvider = (typeof COURIER_PROVIDERS)[number];
+
+export type AdminAlertSeverity = "info" | "warning" | "critical";
+
+export interface AdminAlertPrefs {
+  info: { email: boolean; sms: boolean };
+  warning: { email: boolean; sms: boolean };
+  critical: { email: boolean; sms: boolean };
+}
+
+/**
+ * Source-of-truth defaults consumed by lib/admin-alerts.ts when an admin
+ * has no explicit preferences set. Mirrors the Mongoose schema defaults
+ * but lives here so the API layer doesn't have to round-trip the schema
+ * to know what an "unconfigured" admin should receive.
+ */
+export const DEFAULT_ADMIN_ALERT_PREFS: AdminAlertPrefs = {
+  info: { email: false, sms: false },
+  warning: { email: true, sms: false },
+  critical: { email: true, sms: true },
+};
+
+// Re-export subscription-tier enum for admin/billing surfaces that need a
+// stable list of valid tiers.
+export const SUBSCRIPTION_TIERS = TIERS;
+export type SubscriptionTier = (typeof TIERS)[number];
+export const SUBSCRIPTION_STATUSES = SUB_STATUS;
+export type SubscriptionStatus = (typeof SUB_STATUS)[number];

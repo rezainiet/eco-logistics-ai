@@ -18,6 +18,7 @@ import {
   Zap,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { BdPaymentRails, PaymentStatusBadge } from "@/components/billing/bd-payment-rails";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +53,7 @@ import {
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 
+import { humanizeError } from "@/lib/friendly-errors";
 const PLAN_ICON = {
   starter: Sparkles,
   growth: Zap,
@@ -143,7 +145,7 @@ export default function BillingPage() {
       setForm({ plan: "growth", method: "bkash", amount: "", txnId: "", senderPhone: "", proofUrl: "", notes: "" });
       setProofPreview(null);
     },
-    onError: (err) => toast.error("Could not submit", err.message),
+    onError: (err) => toast.error("Could not submit", humanizeError(err)),
   });
 
   const uploadProof = trpc.billing.uploadPaymentProof.useMutation();
@@ -159,7 +161,7 @@ export default function BillingPage() {
       // Same-tab redirect so the merchant never sees a flash of the old page.
       window.location.href = data.url;
     },
-    onError: (err) => toast.error("Couldn't start checkout", err.message),
+    onError: (err) => toast.error("Couldn't start checkout", humanizeError(err)),
   });
 
   const subscribe = trpc.billing.createSubscriptionCheckout.useMutation({
@@ -172,14 +174,14 @@ export default function BillingPage() {
       }
       window.location.href = data.url;
     },
-    onError: (err) => toast.error("Couldn't start subscription", err.message),
+    onError: (err) => toast.error("Couldn't start subscription", humanizeError(err)),
   });
 
   const openPortal = trpc.billing.createPortalSession.useMutation({
     onSuccess: (data) => {
       window.location.href = data.url;
     },
-    onError: (err) => toast.error("Couldn't open billing portal", err.message),
+    onError: (err) => toast.error("Couldn't open billing portal", humanizeError(err)),
   });
 
   const cancel = trpc.billing.cancel.useMutation({
@@ -233,6 +235,10 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
+      {/* BD-first payment rails — surfaces bKash/Nagad/bank instructions
+          ahead of Stripe for the local merchant audience. Hidden when no
+          PAY_*_NUMBER env entries are configured. */}
+      <BdPaymentRails />
       <header>
         <h1 className="text-2xl font-semibold text-fg">Billing &amp; subscription</h1>
         <p className="text-sm text-fg-subtle">

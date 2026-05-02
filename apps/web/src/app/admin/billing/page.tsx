@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
+  AlertTriangle,
   CheckCircle2,
   CreditCard,
-  Download,
-  ExternalLink,
-  FileImage,
+  Eye,
+  Filter,
   Inbox,
   Loader2,
+  ShieldAlert,
+  ShieldCheck,
   XCircle,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -17,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -65,39 +66,62 @@ type PendingPayment = {
   txnId: string | null;
   proofUrl: string | null;
   hasProofFile?: boolean;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "reviewed" | "approved" | "rejected";
+  riskScore: number;
+  riskReasons: string[];
+  requiresDualApproval: boolean;
+  firstApprovalBy: string | null;
 };
 
-type ApproveState = { open: boolean; payment: PendingPayment | null; days: string };
-type RejectState = { open: boolean; payment: PendingPayment | null; reason: string };
-
 export default function AdminBillingPage() {
-  const [status, setStatus] = useState<"pending" | "approved" | "rejected">("pending");
-  const [extendForm, setExtendForm] = useState({ merchantId: "", days: "30", note: "" });
-  const [changeForm, setChangeForm] = useState({
-    merchantId: "",
-    tier: "growth" as "starter" | "growth" | "scale" | "enterprise",
-    note: "",
-  });
-  const [approveState, setApproveState] = useState<ApproveState>({
-    open: false,
+  const [status, setStatus] = useState<
+    "pending" | "reviewed" | "approved" | "rejected"
+  >("pending");
+  const [stepupDialog, setStepupDialog] = useState<{
+    payment: PendingPayment | null;
+    intent: "approve" | "reject";
+    days: string;
+    reason: string;
+    password: string;
+  }>({
     payment: null,
+    intent: "approve",
     days: "30",
-  });
-  const [rejectState, setRejectState] = useState<RejectState>({
-    open: false,
-    payment: null,
     reason: "",
+    password: "",
   });
-  const [viewingProofId, setViewingProofId] = useState<string | null>(null);
 
-  const list = trpc.adminBilling.listPendingPayments.useQuery({ status, limit: 100 });
+  const [highRiskOnly, setHighRiskOnly] = useState(false);
+
+  const list = trpc.adminBilling.listPendingPayments.useQuery({
+    status,
+    limit: 100,
+  });
+  const overview = trpc.adminObservability.paymentOverview.useQuery(undefined, {
+    refetchInterval: 60_000,
+  });
   const utils = trpc.useUtils();
 
-  const approve = trpc.adminBilling.approvePayment.useMutation({
+  const markReviewed = trpc.adminBilling.markReviewed.useMutation({
     onSuccess: () => {
-      toast.success("Approved", "Subscription activated.");
-      setApproveState({ open: false, payment: null, days: "30" });
+      toast.success("Marked reviewed", "Ready for final approval.");
+      utils.adminBilling.listPendingPayments.invalidate();
+    },
+    onError: (err) => toast.error("Mark reviewed failed", err.message),
+  });
+
+  const issueStepup = trpc.adminAccess.issueStepup.useMutation();
+  const approve = trpc.adminBilling.approvePayment.useMutation({
+    onSuccess: (res) => {
+      if (res.stage === "first_approval") {
+        toast.success(
+          "First approval recorded",
+          "A different admin must complete the second approval.",
+        );
+      } else {
+        toast.success("Approved", "Subscription activated.");
+      }
+      setStepupDialog((s) => ({ ...s, payment: null, password: "" }));
       utils.adminBilling.listPendingPayments.invalidate();
     },
     onError: (err) => toast.error("Approval failed", err.message),
@@ -105,49 +129,162 @@ export default function AdminBillingPage() {
   const reject = trpc.adminBilling.rejectPayment.useMutation({
     onSuccess: () => {
       toast.success("Rejected");
-      setRejectState({ open: false, payment: null, reason: "" });
+      setStepupDialog((s) => ({ ...s, payment: null, password: "" }));
       utils.adminBilling.listPendingPayments.invalidate();
     },
     onError: (err) => toast.error("Rejection failed", err.message),
   });
-  const extend = trpc.adminBilling.extendSubscription.useMutation({
-    onSuccess: (res) =>
-      toast.success("Extended", `New period end: ${formatDateTime(res.currentPeriodEnd)}`),
-    onError: (err) => toast.error("Extend failed", err.message),
-  });
-  const change = trpc.adminBilling.changePlan.useMutation({
-    onSuccess: (res) => toast.success("Plan changed", `Merchant now on ${res.tier}`),
-    onError: (err) => toast.error("Change failed", err.message),
-  });
 
-  const payments = (list.data ?? []) as PendingPayment[];
+  const allPayments = (list.data ?? []) as PendingPayment[];
+  const payments = useMemo(
+    () =>
+      highRiskOnly
+        ? allPayments.filter(
+            (p) => (p.riskScore ?? 0) >= 60 || p.requiresDualApproval,
+          )
+        : allPayments,
+    [allPayments, highRiskOnly],
+  );
+
+  async function performStepupAction() {
+    const { payment, intent, days, reason, password } = stepupDialog;
+    if (!payment) return;
+    if (!password) {
+      toast.error("Enter your password to confirm");
+      return;
+    }
+    try {
+      const { token } = await issueStepup.mutateAsync({
+        permission: intent === "approve" ? "payment.approve" : "payment.reject",
+        password,
+      });
+      if (intent === "approve") {
+        const d = Number(days);
+        if (!Number.isFinite(d) || d <= 0) {
+          toast.error("Enter positive billing period days");
+          return;
+        }
+        await approve.mutateAsync({
+          paymentId: payment.id,
+          periodDays: d,
+          confirmationToken: token,
+        });
+      } else {
+        if (!reason.trim()) {
+          toast.error("Enter a rejection reason");
+          return;
+        }
+        await reject.mutateAsync({
+          paymentId: payment.id,
+          reason: reason.trim(),
+          confirmationToken: token,
+        });
+      }
+    } catch (err) {
+      toast.error("Step-up failed", (err as Error).message);
+    }
+  }
+
+  function openApproveDialog(p: PendingPayment) {
+    setStepupDialog({
+      payment: p,
+      intent: "approve",
+      days: "30",
+      reason: "",
+      password: "",
+    });
+  }
+  function openRejectDialog(p: PendingPayment) {
+    setStepupDialog({
+      payment: p,
+      intent: "reject",
+      days: "30",
+      reason: "",
+      password: "",
+    });
+  }
 
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Admin"
-        title="Billing approvals"
-        description="Approve or reject manual payment submissions and manage merchant subscriptions."
+        title="Payment risk queue"
+        description="Two-stage workflow: review first, then approve. High-risk payments (score ≥ 60) require a second admin's sign-off."
       />
+
+      {/* Summary band */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <SummaryTile
+          icon={Inbox}
+          label="Pending today"
+          value={overview.data?.last24h.pending ?? "—"}
+          tone="info"
+          loading={overview.isLoading}
+        />
+        <SummaryTile
+          icon={Eye}
+          label="Awaiting approval"
+          value={overview.data?.last24h.reviewed ?? "—"}
+          tone="warning"
+          loading={overview.isLoading}
+        />
+        <SummaryTile
+          icon={ShieldAlert}
+          label="Suspicious (risk ≥ 80)"
+          value={overview.data?.suspiciousCount ?? "—"}
+          tone={
+            (overview.data?.suspiciousCount ?? 0) > 0 ? "danger" : "success"
+          }
+          loading={overview.isLoading}
+        />
+        <SummaryTile
+          icon={ShieldCheck}
+          label="Pending dual approval"
+          value={overview.data?.pendingDualApproval ?? "—"}
+          tone={
+            (overview.data?.pendingDualApproval ?? 0) > 0 ? "warning" : "success"
+          }
+          loading={overview.isLoading}
+        />
+      </div>
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Inbox className="h-4 w-4 text-fg-subtle" />
               <CardTitle>Payments</CardTitle>
+              {highRiskOnly ? (
+                <Badge className="bg-danger-subtle text-danger">
+                  high-risk only
+                </Badge>
+              ) : null}
             </div>
-            <div className="w-40">
-              <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="approved">Approved</SelectItem>
-                  <SelectItem value="rejected">Rejected</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant={highRiskOnly ? "default" : "outline"}
+                onClick={() => setHighRiskOnly((v) => !v)}
+              >
+                <Filter className="mr-1 h-3 w-3" />
+                {highRiskOnly ? "Showing high-risk" : "High-risk only"}
+              </Button>
+              <div className="w-44">
+                <Select
+                  value={status}
+                  onValueChange={(v) => setStatus(v as typeof status)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="reviewed">Reviewed</SelectItem>
+                    <SelectItem value="approved">Approved</SelectItem>
+                    <SelectItem value="rejected">Rejected</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -156,113 +293,90 @@ export default function AdminBillingPage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-stroke/8 bg-surface-raised/40">
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Submitted
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Merchant
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Plan
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Method
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Amount
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Txn ID
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Proof
-                  </TableHead>
-                  <TableHead className="h-11 px-3 text-right text-2xs font-semibold uppercase tracking-[0.06em] text-fg-subtle">
-                    Actions
-                  </TableHead>
+                  <TableHead>Submitted</TableHead>
+                  <TableHead>Merchant</TableHead>
+                  <TableHead>Plan</TableHead>
+                  <TableHead>Method</TableHead>
+                  <TableHead>Amount</TableHead>
+                  <TableHead>Txn ID</TableHead>
+                  <TableHead>Risk</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {list.isLoading ? (
                   Array.from({ length: 4 }).map((_, i) => (
-                    <TableRow key={i} className="border-stroke/6">
-                      <TableCell colSpan={8} className="py-3">
+                    <TableRow key={i}>
+                      <TableCell colSpan={8}>
                         <div className="h-4 w-full animate-shimmer rounded" />
                       </TableCell>
                     </TableRow>
                   ))
                 ) : payments.length > 0 ? (
                   payments.map((p) => (
-                    <TableRow key={p.id} className="border-stroke/6 hover:bg-surface-raised/40">
-                      <TableCell className="px-3 py-3 text-xs text-fg-subtle">
+                    <TableRow key={p.id}>
+                      <TableCell className="text-xs text-fg-subtle">
                         {formatDateTime(p.createdAt)}
                       </TableCell>
-                      <TableCell className="px-3 py-3">
-                        <div className="text-sm font-medium text-fg">{p.merchantName}</div>
-                        <div className="text-xs text-fg-subtle">{p.merchantEmail}</div>
+                      <TableCell>
+                        <div className="text-sm font-medium text-fg">
+                          {p.merchantName}
+                        </div>
+                        <div className="text-xs text-fg-subtle">
+                          {p.merchantEmail}
+                        </div>
                       </TableCell>
-                      <TableCell className="px-3 py-3">
-                        <div className="capitalize text-sm text-fg">{p.plan}</div>
-                        <div className="text-xs text-fg-subtle">current: {p.currentTier}</div>
+                      <TableCell className="text-sm capitalize">
+                        {p.plan}
                       </TableCell>
-                      <TableCell className="px-3 py-3 text-sm text-fg-muted">
+                      <TableCell>
                         {p.provider === "stripe" ? (
-                          <Badge className="border-transparent bg-info-subtle text-info">
+                          <Badge>
                             <CreditCard className="mr-1 h-3 w-3" /> Stripe
                           </Badge>
                         ) : (
-                          <span className="capitalize">{p.method.replace("_", " ")}</span>
+                          <span className="capitalize text-sm">
+                            {p.method.replace("_", " ")}
+                          </span>
                         )}
                       </TableCell>
-                      <TableCell className="px-3 py-3 font-mono text-sm tabular-nums text-fg">
+                      <TableCell className="font-mono text-sm">
                         {formatBDT(p.amount)}
                       </TableCell>
-                      <TableCell className="px-3 py-3 font-mono text-xs text-fg-muted">
+                      <TableCell className="font-mono text-xs text-fg-muted">
                         {p.txnId ?? "—"}
                       </TableCell>
-                      <TableCell className="px-3 py-3">
-                        {p.hasProofFile ? (
+                      <TableCell>
+                        <RiskCell payment={p} />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {p.status === "pending" ? (
                           <Button
                             size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => setViewingProofId(p.id)}
+                            variant="outline"
+                            onClick={() =>
+                              markReviewed.mutate({ paymentId: p.id })
+                            }
+                            disabled={markReviewed.isPending}
                           >
-                            <FileImage className="mr-1 h-3 w-3" /> Preview
+                            <Eye className="mr-1 h-3 w-3" /> Mark reviewed
                           </Button>
-                        ) : p.proofUrl ? (
-                          <a
-                            href={p.proofUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-brand hover:underline"
-                          >
-                            View <ExternalLink className="h-3 w-3" />
-                          </a>
-                        ) : (
-                          <span className="text-xs text-fg-faint">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-3 py-3 text-right">
-                        {p.status === "pending" ? (
+                        ) : p.status === "reviewed" ? (
                           <div className="flex justify-end gap-2">
                             <Button
                               size="sm"
-                              className="bg-success text-white hover:bg-success/90"
-                              onClick={() =>
-                                setApproveState({ open: true, payment: p, days: "30" })
-                              }
-                              disabled={approve.isPending}
+                              className="bg-success text-white"
+                              onClick={() => openApproveDialog(p)}
                             >
-                              <CheckCircle2 className="mr-1 h-3 w-3" /> Approve
+                              <CheckCircle2 className="mr-1 h-3 w-3" />
+                              {p.requiresDualApproval && p.firstApprovalBy
+                                ? "Second approval"
+                                : "Approve"}
                             </Button>
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={() =>
-                                setRejectState({ open: true, payment: p, reason: "" })
-                              }
-                              disabled={reject.isPending}
+                              onClick={() => openRejectDialog(p)}
                             >
                               <XCircle className="mr-1 h-3 w-3" /> Reject
                             </Button>
@@ -288,11 +402,7 @@ export default function AdminBillingPage() {
                       <EmptyState
                         icon={Inbox}
                         title={`No ${status} payments`}
-                        description={
-                          status === "pending"
-                            ? "New manual payment submissions will appear here for review."
-                            : `Switch the filter to see other payment states.`
-                        }
+                        description="Submissions will appear here when merchants pay."
                         className="m-4 border-0 bg-transparent"
                       />
                     </TableCell>
@@ -304,335 +414,177 @@ export default function AdminBillingPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Extend subscription</CardTitle>
-            <CardDescription>
-              Push a merchant's currentPeriodEnd forward by N days (comp extension).
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Merchant ID</Label>
-              <Input
-                value={extendForm.merchantId}
-                onChange={(e) => setExtendForm((f) => ({ ...f, merchantId: e.target.value }))}
-                placeholder="ObjectId"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Days</Label>
-              <Input
-                type="number"
-                value={extendForm.days}
-                onChange={(e) => setExtendForm((f) => ({ ...f, days: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Note</Label>
-              <Input
-                value={extendForm.note}
-                onChange={(e) => setExtendForm((f) => ({ ...f, note: e.target.value }))}
-              />
-            </div>
-            <Button
-              className="bg-brand text-white hover:bg-brand-hover"
-              onClick={() => {
-                const days = Number(extendForm.days);
-                if (!extendForm.merchantId || !Number.isFinite(days) || days <= 0) {
-                  toast.error("Provide a merchant id and positive days");
-                  return;
-                }
-                extend.mutate({
-                  merchantId: extendForm.merchantId,
-                  days,
-                  note: extendForm.note || undefined,
-                });
-              }}
-              disabled={extend.isPending}
-            >
-              {extend.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Extend
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Change plan</CardTitle>
-            <CardDescription>
-              Force a merchant onto a different plan without creating a payment record.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Merchant ID</Label>
-              <Input
-                value={changeForm.merchantId}
-                onChange={(e) => setChangeForm((f) => ({ ...f, merchantId: e.target.value }))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Tier</Label>
-              <Select
-                value={changeForm.tier}
-                onValueChange={(v) => setChangeForm((f) => ({ ...f, tier: v as typeof f.tier }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="starter">Starter</SelectItem>
-                  <SelectItem value="growth">Growth</SelectItem>
-                  <SelectItem value="scale">Scale</SelectItem>
-                  <SelectItem value="enterprise">Enterprise</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Note</Label>
-              <Input
-                value={changeForm.note}
-                onChange={(e) => setChangeForm((f) => ({ ...f, note: e.target.value }))}
-              />
-            </div>
-            <Button
-              className="bg-brand text-white hover:bg-brand-hover"
-              onClick={() => {
-                if (!changeForm.merchantId) {
-                  toast.error("Provide a merchant id");
-                  return;
-                }
-                change.mutate({
-                  merchantId: changeForm.merchantId,
-                  tier: changeForm.tier,
-                  note: changeForm.note || undefined,
-                });
-              }}
-              disabled={change.isPending}
-            >
-              {change.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Change plan
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Approve payment dialog */}
       <Dialog
-        open={approveState.open}
-        onOpenChange={(v) => {
-          if (!v && !approve.isPending) {
-            setApproveState({ open: false, payment: null, days: "30" });
-          }
-        }}
+        open={!!stepupDialog.payment}
+        onOpenChange={(v) =>
+          !v &&
+          !approve.isPending &&
+          !reject.isPending &&
+          setStepupDialog((s) => ({ ...s, payment: null, password: "" }))
+        }
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Approve payment</DialogTitle>
+            <DialogTitle>
+              {stepupDialog.intent === "approve"
+                ? "Confirm approval"
+                : "Confirm rejection"}
+            </DialogTitle>
             <DialogDescription>
-              {approveState.payment
-                ? `${approveState.payment.merchantName} — ${formatBDT(
-                    approveState.payment.amount,
-                  )} for ${approveState.payment.plan}`
+              {stepupDialog.payment
+                ? `${stepupDialog.payment.merchantName} — ${formatBDT(
+                    stepupDialog.payment.amount,
+                  )} for ${stepupDialog.payment.plan}`
                 : ""}
             </DialogDescription>
           </DialogHeader>
+          {stepupDialog.intent === "approve" ? (
+            <div className="space-y-2">
+              <Label>Billing period (days)</Label>
+              <Input
+                type="number"
+                value={stepupDialog.days}
+                onChange={(e) =>
+                  setStepupDialog((s) => ({ ...s, days: e.target.value }))
+                }
+              />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>Reason (shown to the merchant)</Label>
+              <textarea
+                className="min-h-[80px] w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm"
+                value={stepupDialog.reason}
+                onChange={(e) =>
+                  setStepupDialog((s) => ({ ...s, reason: e.target.value }))
+                }
+              />
+            </div>
+          )}
           <div className="space-y-2">
-            <Label htmlFor="approve-days">Billing period length (days)</Label>
+            <Label>Re-enter your password</Label>
             <Input
-              id="approve-days"
-              type="number"
-              min={1}
-              value={approveState.days}
+              type="password"
+              value={stepupDialog.password}
+              autoComplete="current-password"
               onChange={(e) =>
-                setApproveState((s) => ({ ...s, days: e.target.value }))
+                setStepupDialog((s) => ({ ...s, password: e.target.value }))
               }
             />
             <p className="text-xs text-fg-subtle">
-              Subscription will be activated and currentPeriodEnd set to{" "}
-              <span className="font-medium text-fg">today + days</span>.
+              Step-up confirmation. Tokens are single-use, valid for 5 min,
+              and bound to this action.
             </p>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              className="border-stroke/14 bg-transparent text-fg hover:bg-surface-raised"
               onClick={() =>
-                setApproveState({ open: false, payment: null, days: "30" })
+                setStepupDialog((s) => ({ ...s, payment: null, password: "" }))
               }
-              disabled={approve.isPending}
             >
               Cancel
             </Button>
             <Button
-              className="bg-success text-white hover:bg-success/90"
-              onClick={() => {
-                const days = Number(approveState.days);
-                if (!approveState.payment || !Number.isFinite(days) || days <= 0) {
-                  toast.error("Enter a positive number of days");
-                  return;
-                }
-                approve.mutate({
-                  paymentId: approveState.payment.id,
-                  periodDays: days,
-                });
-              }}
-              disabled={approve.isPending}
-            >
-              {approve.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-              )}
-              Approve &amp; activate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Reject payment dialog */}
-      <Dialog
-        open={rejectState.open}
-        onOpenChange={(v) => {
-          if (!v && !reject.isPending) {
-            setRejectState({ open: false, payment: null, reason: "" });
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reject payment</DialogTitle>
-            <DialogDescription>
-              {rejectState.payment
-                ? `${rejectState.payment.merchantName} — ${formatBDT(
-                    rejectState.payment.amount,
-                  )}`
-                : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Label htmlFor="reject-reason">Reason (shown to the merchant)</Label>
-            <textarea
-              id="reject-reason"
-              className="flex min-h-[84px] w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg placeholder:text-fg-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-              placeholder="e.g., Transaction ID doesn't match our bank records."
-              value={rejectState.reason}
-              onChange={(e) => setRejectState((s) => ({ ...s, reason: e.target.value }))}
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              className="border-stroke/14 bg-transparent text-fg hover:bg-surface-raised"
-              onClick={() =>
-                setRejectState({ open: false, payment: null, reason: "" })
+              onClick={performStepupAction}
+              disabled={
+                approve.isPending || reject.isPending || issueStepup.isPending
               }
-              disabled={reject.isPending}
             >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (!rejectState.payment) return;
-                const trimmed = rejectState.reason.trim();
-                if (!trimmed) {
-                  toast.error("Enter a rejection reason");
-                  return;
-                }
-                reject.mutate({
-                  paymentId: rejectState.payment.id,
-                  reason: trimmed,
-                });
-              }}
-              disabled={reject.isPending}
-            >
-              {reject.isPending ? (
+              {approve.isPending ||
+              reject.isPending ||
+              issueStepup.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <XCircle className="mr-2 h-4 w-4" />
-              )}
-              Reject payment
+              ) : null}
+              {stepupDialog.intent === "approve" ? "Approve" : "Reject"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <AdminProofDialog
-        paymentId={viewingProofId}
-        onClose={() => setViewingProofId(null)}
-      />
     </div>
   );
 }
 
-function AdminProofDialog({
-  paymentId,
-  onClose,
+type TileTone = "info" | "success" | "warning" | "danger";
+
+const TILE_TONE: Record<TileTone, string> = {
+  info: "bg-info-subtle text-info",
+  success: "bg-success-subtle text-success",
+  warning: "bg-warning-subtle text-warning",
+  danger: "bg-danger-subtle text-danger",
+};
+
+function SummaryTile({
+  icon: Icon,
+  label,
+  value,
+  tone,
+  loading,
 }: {
-  paymentId: string | null;
-  onClose: () => void;
+  icon: typeof Inbox;
+  label: string;
+  value: number | string;
+  tone: TileTone;
+  loading?: boolean;
 }) {
-  const open = paymentId !== null;
-  const proof = trpc.billing.getPaymentProof.useQuery(
-    { paymentId: paymentId ?? "" },
-    { enabled: open, retry: false },
-  );
   return (
-    <Dialog open={open} onOpenChange={(v) => (!v ? onClose() : null)}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Payment proof</DialogTitle>
-        </DialogHeader>
-        {proof.isLoading ? (
-          <div className="flex items-center justify-center py-10 text-fg-subtle">
-            <Loader2 className="h-5 w-5 animate-spin" />
-          </div>
-        ) : proof.error ? (
-          <p className="py-6 text-center text-sm text-fg-faint">
-            {proof.error.message ?? "No proof on file."}
+    <Card>
+      <CardContent className="flex items-center gap-3 py-4">
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-lg ${TILE_TONE[tone]}`}
+        >
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-2xs uppercase tracking-wide text-fg-subtle">
+            {label}
           </p>
-        ) : proof.data?.dataUrl ? (
-          <div className="space-y-3 text-xs">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-fg-faint">
-                {proof.data.contentType ?? "external link"}
-                {proof.data.sizeBytes
-                  ? ` · ${Math.round(proof.data.sizeBytes / 1024)} KB`
-                  : ""}
-              </p>
-              <a
-                href={proof.data.dataUrl}
-                target="_blank"
-                rel="noreferrer"
-                download={proof.data.filename ?? undefined}
-                className="inline-flex h-8 items-center gap-1 rounded-md border border-stroke/14 px-2.5 text-2xs text-fg hover:bg-surface-raised"
-              >
-                <Download className="h-3 w-3" />
-                {proof.data.kind === "url" ? "Open" : "Download"}
-              </a>
-            </div>
-            {proof.data.contentType === "application/pdf" ? (
-              <iframe
-                src={proof.data.dataUrl}
-                className="h-[480px] w-full rounded-md border border-stroke/12"
-                title="Payment proof"
-              />
+          <p className="mt-0.5 text-2xl font-semibold tabular-nums text-fg">
+            {loading ? (
+              <span className="inline-block h-6 w-12 animate-shimmer rounded" />
             ) : (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={proof.data.dataUrl}
-                alt="Payment proof"
-                className="max-h-[480px] w-full rounded-md border border-stroke/12 object-contain"
-              />
+              value
             )}
-          </div>
-        ) : (
-          <p className="py-6 text-center text-sm text-fg-faint">No proof on file.</p>
-        )}
-      </DialogContent>
-    </Dialog>
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RiskCell({ payment }: { payment: PendingPayment }) {
+  const score = payment.riskScore ?? 0;
+  const color =
+    score >= 60
+      ? "bg-danger-subtle text-danger"
+      : score >= 30
+        ? "bg-warning-subtle text-warning"
+        : "bg-success-subtle text-success";
+  return (
+    <div className="space-y-1">
+      <Badge className={`border-transparent ${color} font-mono`}>
+        {score}
+      </Badge>
+      {payment.requiresDualApproval ? (
+        <div className="flex items-center gap-1 text-xs text-danger">
+          <ShieldAlert className="h-3 w-3" />
+          {payment.firstApprovalBy ? "1/2 approvals" : "needs 2 admins"}
+        </div>
+      ) : null}
+      {payment.riskReasons.length > 0 ? (
+        <div className="flex flex-wrap gap-1 text-2xs">
+          {payment.riskReasons.slice(0, 3).map((r) => (
+            <span
+              key={r}
+              className="rounded bg-warning-subtle px-1 text-warning"
+              title={r}
+            >
+              <AlertTriangle className="mr-0.5 inline h-2.5 w-2.5" />
+              {r.replace(/_/g, " ")}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -58,7 +58,7 @@ export function OrdersBarChart({
             dataKey="rto"
             stackId="a"
             fill={CHART_COLORS.danger}
-            name="RTO"
+            name="Failed"
             radius={[6, 6, 0, 0]}
             maxBarSize={42}
           />

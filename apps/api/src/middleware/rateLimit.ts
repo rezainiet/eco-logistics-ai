@@ -59,3 +59,35 @@ export const globalLimiter = rateLimit({
   legacyHeaders: false,
   store: redisStore(),
 });
+
+/**
+ * Per-IP limiter for inbound webhooks. Couriers can legitimately burst
+ * (status updates fan out per-package) so the budget is generous, but the
+ * limiter still kills runaway senders or someone replaying captured
+ * payloads at line speed.
+ */
+export const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: redisStore(),
+  message: { ok: false, error: "rate_limited" },
+});
+
+/**
+ * Per-IP limiter for the public tracking lookup. Tracking codes are short
+ * and enumerable, so without this any unauthenticated client could brute-
+ * force the order namespace. 30/min is plenty for legitimate consumers
+ * checking their own delivery status.
+ */
+export const publicTrackingLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: redisStore(),
+  message: { error: "too many tracking lookups — slow down" },
+});

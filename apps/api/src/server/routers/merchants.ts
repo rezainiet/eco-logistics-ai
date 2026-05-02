@@ -12,8 +12,11 @@ import {
 import { protectedProcedure, router } from "../trpc.js";
 import { encryptSecret, maskSecretPayload } from "../../lib/crypto.js";
 import { adapterFor, hasCourierAdapter } from "../../lib/couriers/index.js";
+import { registerCourierWebhook } from "../../lib/couriers/webhook-registration.js";
 import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
+import { sendSms } from "../../lib/sms/index.js";
+import { consumeMerchantTokens } from "../../lib/merchantRateLimit.js";
 
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
 
@@ -85,6 +88,13 @@ export const merchantsRouter = router({
       createdAt: m.createdAt,
       emailVerified: m.emailVerified ?? false,
       billing: billingView(m.subscription),
+      // Surface only the in-app branding fields the dashboard layout needs.
+      // The customer-facing tracking page reads its own `logoUrl` separately.
+      branding: {
+        logoDataUrl: m.branding?.logoDataUrl ?? null,
+        primaryColor: m.branding?.primaryColor ?? null,
+        displayName: m.branding?.displayName ?? null,
+      },
     };
   }),
 
@@ -132,6 +142,87 @@ export const merchantsRouter = router({
       return { ok: true };
     }),
 
+  /**
+   * Update the in-app branding (sidebar logo, accent color, display name).
+   * Drives the BrandingProvider that injects --brand CSS vars across the
+   * dashboard. Logo is stored as an inline `data:image/...;base64,...` URL —
+   * size capped at 200 KB raw to keep the merchant doc reasonable. Distinct
+   * from the customer-tracking-page logo (`branding.logoUrl`) — a merchant
+   * can run one for their internal admins and a different polished one for
+   * the customer surface.
+   *
+   * Pass `null` to either field to clear that part of branding while keeping
+   * the rest. Passing `undefined`/omitting leaves the field untouched.
+   */
+  updateBranding: protectedProcedure
+    .input(
+      z
+        .object({
+          logoDataUrl: z
+            .string()
+            .max(280_000, "Logo too large — keep it under 200 KB.")
+            .regex(
+              /^data:image\/(png|jpe?g|svg\+xml|webp|gif);base64,/,
+              "Logo must be an inline data:image/* base64 URL.",
+            )
+            .nullable()
+            .optional(),
+          primaryColor: z
+            .string()
+            .regex(/^#[0-9a-fA-F]{6}$/, "Color must be a 6-digit hex like #112233.")
+            .nullable()
+            .optional(),
+          displayName: z
+            .string()
+            .trim()
+            .max(80)
+            .nullable()
+            .optional(),
+        })
+        .refine((v) => Object.keys(v).length > 0, { message: "no fields to update" }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const m = await findMerchantOrThrow(ctx.user.id);
+      const branding = m.branding ?? {};
+      // Apply only the keys actually present in the input. `null` clears,
+      // `undefined`/missing leaves untouched. We avoid `$set: input` because
+      // that path would also unset omitted fields.
+      const next: Record<string, unknown> = { ...branding };
+      if (Object.prototype.hasOwnProperty.call(input, "logoDataUrl")) {
+        if (input.logoDataUrl == null) delete next.logoDataUrl;
+        else next.logoDataUrl = input.logoDataUrl;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "primaryColor")) {
+        if (input.primaryColor == null) delete next.primaryColor;
+        else next.primaryColor = input.primaryColor;
+      }
+      if (Object.prototype.hasOwnProperty.call(input, "displayName")) {
+        if (input.displayName == null) delete next.displayName;
+        else next.displayName = input.displayName;
+      }
+      m.branding = next as typeof m.branding;
+      await m.save();
+
+      void writeAudit({
+        merchantId: m._id as Types.ObjectId,
+        actorId: m._id as Types.ObjectId,
+        actorType: "merchant",
+        action: "merchant.branding_updated",
+        subjectType: "merchant",
+        subjectId: m._id as Types.ObjectId,
+        meta: {
+          hasLogo: !!next.logoDataUrl,
+          primaryColor: next.primaryColor ?? null,
+        },
+      });
+
+      return {
+        logoDataUrl: (next.logoDataUrl as string | undefined) ?? null,
+        primaryColor: (next.primaryColor as string | undefined) ?? null,
+        displayName: (next.displayName as string | undefined) ?? null,
+      };
+    }),
+
   updateProfile: protectedProcedure
     .input(
       z
@@ -158,6 +249,68 @@ export const merchantsRouter = router({
         language: m.language,
       };
     }),
+
+  /**
+   * Sanity-check SMS sender used by Settings → "Send test SMS". Sends a
+   * templated message to the merchant's stored phone via the same adapter
+   * that powers OTP / order-confirmation traffic, so a successful delivery
+   * proves the entire pipeline (provider creds → SSL Wireless → carrier).
+   *
+   * Rate-limited (5/hour) on top of the per-merchant token bucket so a
+   * frustrated merchant clicking the button repeatedly doesn't burn their
+   * SMS quota or trip the provider's anti-abuse heuristics.
+   */
+  sendTestSms: protectedProcedure.mutation(async ({ ctx }) => {
+    const m = await findMerchantOrThrow(ctx.user.id);
+    if (!m.phone) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Add a phone number to your profile before sending a test SMS.",
+      });
+    }
+    const bucket = await consumeMerchantTokens(
+      "sms-test",
+      ctx.user.id,
+      { capacity: 5, refillPerSecond: 5 / 3600 },
+    );
+    if (!bucket.allowed) {
+      const minutes = Math.ceil(bucket.retryAfterMs / 60_000);
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: `Test SMS limit reached. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      });
+    }
+    const result = await sendSms(
+      m.phone,
+      `${m.businessName}: SMS pipeline working. If you didn't request this, ignore — it doesn't affect your account.`,
+      { tag: "settings_test", csmsId: `test-${ctx.user.id}-${Date.now()}` },
+    );
+    void writeAudit({
+      merchantId: m._id as Types.ObjectId,
+      actorId: m._id as Types.ObjectId,
+      actorType: "merchant",
+      action: "merchant.test_sms_sent",
+      subjectType: "merchant",
+      subjectId: m._id as Types.ObjectId,
+      meta: {
+        ok: result.ok,
+        providerStatus: result.providerStatus,
+        // Mask the phone in the audit log — last 4 only.
+        phoneSuffix: m.phone.slice(-4),
+      },
+    });
+    if (!result.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: result.error ?? "Failed to send test SMS.",
+      });
+    }
+    return {
+      ok: true,
+      phoneSuffix: m.phone.slice(-4),
+      providerStatus: result.providerStatus,
+    };
+  }),
 
   getCouriers: protectedProcedure.query(async ({ ctx }) => {
     const m = await findMerchantOrThrow(ctx.user.id);
@@ -227,6 +380,12 @@ export const merchantsRouter = router({
         }
       }
 
+      const webhook = await registerCourierWebhook({
+        courier: input.name,
+        merchantId: ctx.user.id,
+        apiSecret: input.apiSecret,
+      });
+
       return {
         name: input.name,
         accountId: input.accountId,
@@ -234,6 +393,7 @@ export const merchantsRouter = router({
         preferredDistricts: input.preferredDistricts,
         apiKeyMasked: maskSecretPayload(encryptedApiKey),
         updatedAt: now,
+        webhook,
       };
     }),
 
@@ -303,6 +463,115 @@ export const merchantsRouter = router({
    * the UI can show "using platform default" hints without juggling
    * `undefined`.
    */
+  /**
+   * Per-merchant automation policy. Read by the order-create flow to
+   * decide whether to auto-confirm and/or auto-book a fresh order.
+   */
+  getAutomationConfig: protectedProcedure.query(async ({ ctx }) => {
+    const m = await Merchant.findById(ctx.user.id)
+      .select("automationConfig couriers")
+      .lean();
+    if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+    const cfg = (m as { automationConfig?: Record<string, unknown> }).automationConfig ?? {};
+    const couriers = ((m as { couriers?: Array<{ name: string; enabled?: boolean }> }).couriers ?? [])
+      .filter((c) => c.enabled !== false)
+      .map((c) => c.name);
+    return {
+      enabled: (cfg.enabled as boolean | undefined) ?? false,
+      mode: (cfg.mode as "manual" | "semi_auto" | "full_auto" | undefined) ?? "manual",
+      maxRiskForAutoConfirm: (cfg.maxRiskForAutoConfirm as number | undefined) ?? 39,
+      autoBookEnabled: (cfg.autoBookEnabled as boolean | undefined) ?? false,
+      autoBookCourier: (cfg.autoBookCourier as string | undefined) ?? null,
+      enabledCouriers: couriers,
+    };
+  }),
+
+  updateAutomationConfig: protectedProcedure
+    .input(
+      z.object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["manual", "semi_auto", "full_auto"]).optional(),
+        maxRiskForAutoConfirm: z.number().int().min(0).max(100).optional(),
+        autoBookEnabled: z.boolean().optional(),
+        autoBookCourier: z.string().trim().max(60).nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const set: Record<string, unknown> = {};
+      if (input.enabled !== undefined) set["automationConfig.enabled"] = input.enabled;
+      if (input.mode !== undefined) set["automationConfig.mode"] = input.mode;
+      if (input.maxRiskForAutoConfirm !== undefined)
+        set["automationConfig.maxRiskForAutoConfirm"] = input.maxRiskForAutoConfirm;
+      if (input.autoBookEnabled !== undefined)
+        set["automationConfig.autoBookEnabled"] = input.autoBookEnabled;
+
+      // Validate autoBookCourier — must match an enabled courier on the
+      // merchant. Without this, a merchant can pick "redx" while having no
+      // redx credentials, and auto-book will silently skip every order.
+      if (input.autoBookCourier !== undefined && input.autoBookCourier) {
+        const merchant = await Merchant.findById(ctx.user.id)
+          .select("couriers")
+          .lean();
+        const enabled = (
+          (merchant as { couriers?: Array<{ name: string; enabled?: boolean }> } | null)?.couriers ?? []
+        )
+          .filter((c) => c.enabled !== false)
+          .map((c) => c.name);
+        if (!enabled.includes(input.autoBookCourier)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: enabled.length === 0
+              ? "Add and enable a courier in Settings before picking one for auto-book."
+              : `Courier "${input.autoBookCourier}" is not enabled. Enabled: ${enabled.join(", ")}.`,
+          });
+        }
+        set["automationConfig.autoBookCourier"] = input.autoBookCourier;
+      } else if (input.autoBookCourier !== undefined) {
+        // Explicit clear (null or empty string) — allowed.
+        set["automationConfig.autoBookCourier"] = "";
+      }
+
+      // If the merchant is enabling auto-book without picking a courier (or
+      // with a courier that no longer exists), refuse — we won't ship orders
+      // that would silently skip auto-booking.
+      if (input.autoBookEnabled === true) {
+        const merchant = await Merchant.findById(ctx.user.id)
+          .select("automationConfig couriers")
+          .lean();
+        const enabled = (
+          (merchant as { couriers?: Array<{ name: string; enabled?: boolean }> } | null)?.couriers ?? []
+        )
+          .filter((c) => c.enabled !== false)
+          .map((c) => c.name);
+        const desired = (input.autoBookCourier
+          ?? (merchant as { automationConfig?: { autoBookCourier?: string } } | null)?.automationConfig?.autoBookCourier
+          ?? "").trim();
+        if (!desired || !enabled.includes(desired)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: enabled.length === 0
+              ? "Connect a courier first — auto-book has nothing to book through."
+              : `Pick an auto-book courier from your enabled couriers: ${enabled.join(", ")}.`,
+          });
+        }
+      }
+
+      const res = await Merchant.updateOne({ _id: ctx.user.id }, { $set: set });
+      if (res.matchedCount === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+      }
+      void writeAudit({
+        merchantId: new Types.ObjectId(ctx.user.id),
+        actorId: new Types.ObjectId(ctx.user.id),
+        actorType: "merchant",
+        action: "automation.config_updated",
+        subjectType: "merchant",
+        subjectId: new Types.ObjectId(ctx.user.id),
+        meta: input as Record<string, unknown>,
+      });
+      return { ok: true };
+    }),
+
   getFraudConfig: protectedProcedure.query(async ({ ctx }) => {
     const m = (await Merchant.findById(ctx.user.id)
       .select("fraudConfig")

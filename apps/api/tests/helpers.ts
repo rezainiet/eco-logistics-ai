@@ -21,6 +21,55 @@ export async function resetDb() {
   await ensureDb();
   const collections = await mongoose.connection.db!.collections();
   await Promise.all(collections.map((c) => c.deleteMany({})));
+  // Clear in-process caches that might survive between tests since vitest
+  // runs in singleFork mode. Best-effort: ignore failures so tests in
+  // packages that don't import these libs still work.
+  try {
+    const rbac = await import("../src/lib/admin-rbac.js");
+    rbac.invalidateAdminProfile?.("");
+    // Drop everything by re-importing the cache module — easier:
+    if ("__resetForTests" in rbac && typeof rbac.__resetForTests === "function") {
+      (rbac.__resetForTests as () => void)();
+    }
+  } catch {
+    /* no admin-rbac in this test bundle */
+  }
+  try {
+    const stepup = await import("../src/lib/admin-stepup.js");
+    stepup.__resetStepupForTests?.();
+  } catch {
+    /* no stepup in this test bundle */
+  }
+  try {
+    const trpc = await import("../src/server/trpc.js");
+    trpc.invalidateRoleCache?.("");
+  } catch {
+    /* trpc not loaded yet */
+  }
+  try {
+    const audit = await import("../src/lib/audit.js");
+    audit.__resetAuditChainCache?.();
+  } catch {
+    /* audit not loaded yet */
+  }
+  try {
+    const guard = await import("../src/lib/tracking-guard.js");
+    guard.__resetTrackingGuardForTests?.();
+  } catch {
+    /* tracking guard not loaded yet */
+  }
+  try {
+    const collector = await import("../src/server/tracking/collector.js");
+    collector.__resetCollectorCache?.();
+  } catch {
+    /* collector not loaded yet */
+  }
+  try {
+    const breaker = await import("../src/lib/couriers/circuit-breaker.js");
+    breaker.__resetBreakersForTests?.();
+  } catch {
+    /* breaker not loaded yet */
+  }
 }
 
 export async function createMerchant(
@@ -85,9 +134,22 @@ export async function createMerchant(
 
 export function callerFor(
   user: AuthUser,
-  request: { ip: string | null; userAgent: string | null } = { ip: null, userAgent: null },
+  request: {
+    ip: string | null;
+    userAgent: string | null;
+    cookieAuth?: boolean;
+    csrfHeader?: string | null;
+    csrfCookie?: string | null;
+  } = { ip: null, userAgent: null },
 ) {
-  return appRouter.createCaller({ user, request });
+  const fullRequest = {
+    ip: request.ip,
+    userAgent: request.userAgent,
+    cookieAuth: request.cookieAuth ?? false,
+    csrfHeader: request.csrfHeader ?? null,
+    csrfCookie: request.csrfCookie ?? null,
+  };
+  return appRouter.createCaller({ user, request: fullRequest });
 }
 
 export function authUserFor(merchant: { _id: unknown; email: string; role: string }): AuthUser {

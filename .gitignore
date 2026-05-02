@@ -8,6 +8,11 @@ coverage
 .env.local
 .env.*.local
 
+# Local notes / scratch — never commit credentials
+readme.txt
+notes.local.*
+*.secrets
+
 *.log
 .DS_Store
 .turbo

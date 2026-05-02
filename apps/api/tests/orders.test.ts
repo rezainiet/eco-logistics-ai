@@ -56,7 +56,7 @@ describe("ordersRouter", () => {
     const res = await caller.orders.bulkUpload({ csv });
     expect(res.inserted).toBe(2);
     expect(res.errors).toHaveLength(1);
-    expect(res.errors[0]!.error).toBe("invalid phone");
+    expect(res.errors[0]!.error).toMatch(/invalid phone/);
   });
 
   it("updateOrder changes status and keeps merchant stats in sync", async () => {

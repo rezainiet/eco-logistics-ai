@@ -2,8 +2,17 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { Merchant, Payment, PAYMENT_METHODS } from "@ecom/db";
-import { invalidateSubscriptionCache, protectedProcedure, router } from "../trpc.js";
+import { invalidateSubscriptionCache, merchantObjectId, protectedProcedure, router } from "../trpc.js";
+import {
+  checkManualPaymentSubmitGuard,
+  computeMetadataHash,
+  computeProofHash,
+  listManualPaymentOptions,
+  normalizeTxnId,
+  scorePaymentRisk,
+} from "../../lib/manual-payments.js";
 import { writeAudit } from "../../lib/audit.js";
+import { computeTrialState, daysLeftUntil } from "../../lib/billing.js";
 import {
   getPlan,
   isPlanTier,
@@ -24,10 +33,12 @@ import {
 } from "../../lib/stripe.js";
 import { webUrl } from "../../lib/email.js";
 
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
-
+/**
+ * Billing-dashboard subscription view. Richer than the profile-page
+ * `billingView` (in routers/merchants.ts) — adds grace-period detail,
+ * billing provider, and pending-payment id. The two are intentionally
+ * separate; shared trial-days math lives in `lib/billing.ts`.
+ */
 function summarizeSubscription(sub: {
   status?: string;
   tier?: string;
@@ -48,24 +59,13 @@ function summarizeSubscription(sub: {
     | "suspended"
     | "cancelled";
   const tier = (sub?.tier ?? "starter") as PlanTier;
-  const now = Date.now();
   const trialEndsAt = sub?.trialEndsAt ?? null;
   const currentPeriodEnd = sub?.currentPeriodEnd ?? null;
   const gracePeriodEndsAt = sub?.gracePeriodEndsAt ?? null;
-  const trialDaysLeft =
-    status === "trial" && trialEndsAt
-      ? Math.max(0, Math.ceil((trialEndsAt.getTime() - now) / 86400_000))
-      : null;
-  const trialExpired =
-    status === "trial" && trialEndsAt ? trialEndsAt.getTime() <= now : false;
-  const periodDaysLeft =
-    currentPeriodEnd
-      ? Math.max(0, Math.ceil((currentPeriodEnd.getTime() - now) / 86400_000))
-      : null;
+  const { trialDaysLeft, trialExpired } = computeTrialState(status, trialEndsAt);
+  const periodDaysLeft = daysLeftUntil(currentPeriodEnd);
   const graceDaysLeft =
-    status === "past_due" && gracePeriodEndsAt
-      ? Math.max(0, Math.ceil((gracePeriodEndsAt.getTime() - now) / 86400_000))
-      : null;
+    status === "past_due" ? daysLeftUntil(gracePeriodEndsAt) : null;
   return {
     status,
     tier,
@@ -468,6 +468,29 @@ export const billingRouter = router({
           message: "file too large — keep proof under 2MB",
         });
       }
+      // Compute the proof fingerprint and refuse cross-merchant reuse —
+      // the same screenshot uploaded by a different merchant is an
+      // unambiguous fraud signal (no legitimate workflow recycles
+      // someone else's payment proof).
+      const proofHash = computeProofHash({ data: input.data });
+      if (proofHash) {
+        const collision = await Payment.findOne({
+          merchantId: { $ne: merchantId },
+          proofHash,
+          status: { $in: ["pending", "reviewed", "approved"] },
+        })
+          .select("_id")
+          .lean();
+        if (collision) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "That receipt has already been used by another merchant. " +
+              "If you have a legitimate reason, contact support.",
+          });
+        }
+      }
+
       payment.proofFile = {
         contentType: input.contentType,
         sizeBytes: buf.byteLength,
@@ -475,6 +498,39 @@ export const billingRouter = router({
         data: input.data,
         uploadedAt: new Date(),
       };
+      if (proofHash) {
+        (payment as unknown as { proofHash?: string }).proofHash = proofHash;
+        // Recompute risk now that the proof is attached — proof-bearing
+        // submissions deserve a re-score (lower risk for "no_proof_high_value",
+        // potentially higher for proof-reuse signals on other historical rows).
+        const merchant2 = await Merchant.findById(merchantId)
+          .select("createdAt subscription.tier")
+          .lean();
+        const ageDays = merchant2?.createdAt
+          ? (Date.now() - new Date(merchant2.createdAt).getTime()) / 86_400_000
+          : 0;
+        const risk = await scorePaymentRisk({
+          merchantId,
+          method: payment.method,
+          txnIdNorm: (payment as unknown as { txnIdNorm?: string }).txnIdNorm ?? null,
+          proofHash,
+          metadataHash:
+            (payment as unknown as { metadataHash?: string }).metadataHash ?? "",
+          hasProof: true,
+          amount: payment.amount,
+          expectedAmount: null,
+          senderPhone: payment.senderPhone ?? null,
+          merchantAgeDays: ageDays,
+        });
+        const p = payment as unknown as {
+          riskScore: number;
+          riskReasons: string[];
+          requiresDualApproval: boolean;
+        };
+        p.riskScore = risk.score;
+        p.riskReasons = risk.reasons;
+        p.requiresDualApproval = risk.requiresDualApproval;
+      }
       await payment.save();
 
       void writeAudit({
@@ -487,6 +543,7 @@ export const billingRouter = router({
         meta: {
           contentType: input.contentType,
           sizeBytes: buf.byteLength,
+          proofHash: proofHash ?? null,
         },
       });
 
@@ -539,6 +596,16 @@ export const billingRouter = router({
     }),
 
   /**
+   * Surface the BD-rail payment instructions (bKash / Nagad / bank).
+   * UI calls this on /dashboard/billing to render the primary
+   * payment options. Each option carries an `enabled` flag — the UI
+   * hides any rail whose env entry is unset.
+   */
+  getPaymentInstructions: protectedProcedure.query(() => {
+    return { options: listManualPaymentOptions() };
+  }),
+
+  /**
    * Merchant submits a manual payment receipt. We mark the subscription as
    * "pendingPaymentId" so the UI reflects "awaiting approval". Actual plan
    * flip happens in admin.approvePayment.
@@ -553,11 +620,20 @@ export const billingRouter = router({
         senderPhone: z.string().trim().max(32).optional(),
         proofUrl: z.string().trim().url().max(1000).optional(),
         notes: z.string().trim().max(1000).optional(),
+        /**
+         * Caller-supplied idempotency token. Re-sending the same
+         * (merchantId, clientRequestId) returns the existing pending
+         * payment instead of creating a second row — kills duplicate
+         * receipts from double-click / network retry.
+         */
+        clientRequestId: z.string().min(8).max(120).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
-      const merchant = await Merchant.findById(merchantId).select("subscription");
+      const merchant = await Merchant.findById(merchantId).select(
+        "subscription createdAt",
+      );
       if (!merchant) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
 
       if (!isPlanTier(input.plan)) {
@@ -572,18 +648,134 @@ export const billingRouter = router({
         });
       }
 
-      const payment = await Payment.create({
+      // Idempotency fast-path — same (merchantId, clientRequestId) returns
+      // the existing payment without minting a second row. The unique
+      // index below is the authoritative race guard.
+      if (input.clientRequestId) {
+        const existing = await Payment.findOne({
+          merchantId,
+          clientRequestId: input.clientRequestId,
+        }).lean();
+        if (existing) {
+          return {
+            id: String(existing._id),
+            status: existing.status,
+            plan: existing.plan,
+            amount: existing.amount,
+            createdAt: existing.createdAt,
+            idempotent: true as const,
+          };
+        }
+      }
+
+      // Submit guard: daily cap + same-merchant dedupe + cross-merchant
+      // txnId block. Prior to this PR the guard was imported but never
+      // invoked; running it here enforces the cross-merchant block that the
+      // admin hardening pass requires.
+      const guard = await checkManualPaymentSubmitGuard({
         merchantId,
-        plan: input.plan,
-        amount: input.amount,
-        currency: "BDT",
         method: input.method,
         txnId: input.txnId,
-        senderPhone: input.senderPhone,
-        proofUrl: input.proofUrl,
-        notes: input.notes,
-        status: "pending",
       });
+      if (!guard.ok) {
+        throw new TRPCError({
+          code: guard.reason === "daily_cap" ? "TOO_MANY_REQUESTS" : "CONFLICT",
+          message: guard.detail,
+        });
+      }
+
+      // Anti-fraud fingerprints. proofHash lands later, when the merchant
+      // attaches a file; metadataHash captures the claim itself so
+      // proof-less submissions still get a fingerprint.
+      const txnIdNorm = input.txnId ? normalizeTxnId(input.txnId) : null;
+      const metadataHash = computeMetadataHash({
+        method: input.method,
+        txnIdNorm,
+        senderPhone: input.senderPhone ?? null,
+        amount: input.amount,
+        currency: "BDT",
+      });
+
+      // Hard block on cross-merchant metadata reuse — same claim details
+      // (sender phone, amount, txnId, method) submitted by another merchant
+      // is an unambiguous reuse signal.
+      const metaCollision = await Payment.findOne({
+        merchantId: { $ne: merchantId },
+        metadataHash,
+        status: { $in: ["pending", "reviewed", "approved"] },
+      })
+        .select("_id")
+        .lean();
+      if (metaCollision) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Those payment details were already submitted by another merchant. " +
+            "Contact support if you believe this is an error.",
+        });
+      }
+
+      // Compute risk score with what we know so far. proofHash will be null
+      // until the merchant attaches a file; the score is recomputed in
+      // attachPaymentProof at that point.
+      const merchantAgeDays =
+        merchant.createdAt
+          ? (Date.now() - new Date(merchant.createdAt).getTime()) / 86_400_000
+          : 0;
+      const risk = await scorePaymentRisk({
+        merchantId,
+        method: input.method,
+        txnIdNorm,
+        proofHash: null,
+        metadataHash,
+        hasProof: !!input.proofUrl,
+        amount: input.amount,
+        expectedAmount: plan.priceBDT,
+        senderPhone: input.senderPhone ?? null,
+        merchantAgeDays,
+      });
+
+      let payment;
+      try {
+        payment = await Payment.create({
+          merchantId,
+          plan: input.plan,
+          amount: input.amount,
+          currency: "BDT",
+          method: input.method,
+          txnId: input.txnId,
+          txnIdNorm: txnIdNorm ?? undefined,
+          metadataHash,
+          riskScore: risk.score,
+          riskReasons: risk.reasons,
+          requiresDualApproval: risk.requiresDualApproval,
+          senderPhone: input.senderPhone,
+          proofUrl: input.proofUrl,
+          notes: input.notes,
+          status: "pending",
+          ...(input.clientRequestId
+            ? { clientRequestId: input.clientRequestId }
+            : {}),
+        });
+      } catch (err) {
+        const code = (err as { code?: number })?.code;
+        if (code === 11000 && input.clientRequestId) {
+          const existing = await Payment.findOne({
+            merchantId,
+            clientRequestId: input.clientRequestId,
+          }).lean();
+          if (!existing) throw err;
+          return {
+            id: String(existing._id),
+            status: existing.status,
+            plan: existing.plan,
+            amount: existing.amount,
+            createdAt: existing.createdAt,
+            idempotent: true as const,
+          };
+        }
+        throw err;
+      }
 
       merchant.subscription = merchant.subscription ?? {};
       (merchant.subscription as Record<string, unknown>).pendingPaymentId = payment._id;
@@ -600,8 +792,21 @@ export const billingRouter = router({
           amount: input.amount,
           method: input.method,
           txnId: input.txnId ?? null,
+          riskScore: risk.score,
+          riskReasons: risk.reasons,
+          requiresDualApproval: risk.requiresDualApproval,
         },
       });
+      if (risk.requiresDualApproval) {
+        void writeAudit({
+          merchantId,
+          actorId: merchantId,
+          action: "payment.flagged",
+          subjectType: "payment",
+          subjectId: payment._id,
+          meta: { riskScore: risk.score, riskReasons: risk.reasons },
+        });
+      }
 
       return {
         id: String(payment._id),
@@ -609,6 +814,7 @@ export const billingRouter = router({
         plan: payment.plan,
         amount: payment.amount,
         createdAt: payment.createdAt,
+        idempotent: false as const,
       };
     }),
 

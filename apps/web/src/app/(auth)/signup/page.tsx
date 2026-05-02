@@ -8,7 +8,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { AlertCircle, Loader2, Sparkles } from "lucide-react";
-import { isPlanTier, PLANS } from "@ecom/types";
+import { isPlanTier, PHONE_RE, PLANS } from "@ecom/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,7 +19,7 @@ const schema = z.object({
   password: z.string().min(8, "At least 8 characters"),
   phone: z
     .string()
-    .regex(/^\+?[0-9]{7,15}$/, "Invalid phone")
+    .regex(PHONE_RE, "Invalid phone")
     .optional()
     .or(z.literal("")),
 });
@@ -62,7 +62,10 @@ function SignupForm() {
       router.push("/login");
       return;
     }
-    router.push("/dashboard/orders");
+    // Land on the welcome surface, not the (empty) orders list. New
+    // merchants need the onboarding checklist + KPI tiles to orient
+    // themselves; an empty table is a trust killer on the first screen.
+    router.push("/dashboard");
     router.refresh();
   }
 

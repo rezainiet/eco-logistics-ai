@@ -1,5 +1,12 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { env } from "../../env.js";
-import { classifyHttpStatus, httpRequest, withRetry, type HttpRequestOptions } from "./http.js";
+import {
+  classifyHttpStatus,
+  httpRequest,
+  withCourierBreaker,
+  withRetry,
+  type HttpRequestOptions,
+} from "./http.js";
 import {
   CourierError,
   type AWBRequest,
@@ -164,7 +171,7 @@ export class SteadfastAdapter implements CourierAdapter {
   readonly name = PROVIDER;
   private readonly transport: SteadfastTransport;
 
-  constructor(opts: SteadfastAdapterOptions) {
+  constructor(private readonly opts: SteadfastAdapterOptions) {
     const baseUrl = (opts.credentials.baseUrl || env.STEADFAST_BASE_URL).replace(/\/$/, "");
     this.transport =
       opts.transport ??
@@ -177,14 +184,27 @@ export class SteadfastAdapter implements CourierAdapter {
           ));
   }
 
+  private breakerKey(): string {
+    return `${PROVIDER}:${this.opts.credentials.accountId}`;
+  }
+
   async validateCredentials(): Promise<ValidationResult> {
     try {
-      const res = await withRetry(
-        () => this.transport.request<SteadfastBalance>("/api/v1/get_balance", { method: "GET" }),
-        { attempts: 2 },
+      const res = await withCourierBreaker(this.breakerKey(), (signal) =>
+        withRetry(
+          () =>
+            this.transport.request<SteadfastBalance>("/api/v1/get_balance", {
+              method: "GET",
+              signal,
+            }),
+          { attempts: 2, signal },
+        ),
       );
       if (!res.ok) {
-        return { valid: false, message: `Steadfast rejected credentials (${res.status})` };
+        return {
+          valid: false,
+          message: `Steadfast rejected credentials (${res.status})`,
+        };
       }
       return { valid: true };
     } catch (err) {
@@ -193,74 +213,86 @@ export class SteadfastAdapter implements CourierAdapter {
   }
 
   async createAWB(order: AWBRequest): Promise<AWBResponse> {
-    const body = {
-      invoice: order.orderNumber,
-      recipient_name: order.customer.name,
-      recipient_phone: order.customer.phone,
-      recipient_address: `${order.customer.address}, ${order.customer.district}`,
-      cod_amount: order.cod,
-      note: order.notes ?? order.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
-    };
-    const res = await withRetry(
-      () =>
-        this.transport.request<SteadfastCreateResp>("/api/v1/create_order", {
-          method: "POST",
-          body,
-        }),
-      { attempts: 3 },
-    );
-    if (!res.ok) {
-      const { code, retryable } = classifyHttpStatus(res.status);
-      throw new CourierError(code, `steadfast createAWB failed (${res.status})`, {
-        retryable,
-        status: res.status,
-        provider: PROVIDER,
+    return withCourierBreaker(this.breakerKey(), async (signal) => {
+      const body = {
+        invoice: order.orderNumber,
+        recipient_name: order.customer.name,
+        recipient_phone: order.customer.phone,
+        recipient_address: `${order.customer.address}, ${order.customer.district}`,
+        cod_amount: order.cod,
+        note: order.notes ?? order.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
+      };
+      const res = await withRetry(
+        () =>
+          this.transport.request<SteadfastCreateResp>("/api/v1/create_order", {
+            method: "POST",
+            body,
+            signal,
+            headers: order.idempotencyKey
+              ? { "Idempotency-Key": order.idempotencyKey }
+              : undefined,
+          }),
+        { attempts: 3, signal },
+      );
+      if (!res.ok) {
+        const { code, retryable } = classifyHttpStatus(res.status);
+        throw new CourierError(code, `steadfast createAWB failed (${res.status})`, {
+          retryable,
+          status: res.status,
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
+      const c = res.data?.consignment;
+      if (!c?.tracking_code) {
+        throw new CourierError(
+          "provider_error",
+          "steadfast response missing tracking_code",
+          {
+            provider: PROVIDER,
+            raw: res.data,
+          },
+        );
+      }
+      return {
+        trackingNumber: c.tracking_code,
+        providerOrderId: String(c.consignment_id),
         raw: res.data,
-      });
-    }
-    const c = res.data?.consignment;
-    if (!c?.tracking_code) {
-      throw new CourierError("provider_error", "steadfast response missing tracking_code", {
-        provider: PROVIDER,
-        raw: res.data,
-      });
-    }
-    return {
-      trackingNumber: c.tracking_code,
-      providerOrderId: String(c.consignment_id),
-      raw: res.data,
-    };
+      };
+    });
   }
 
   async getTracking(trackingNumber: string): Promise<TrackingInfo> {
-    const res = await withRetry(
-      () =>
-        this.transport.request<SteadfastStatusResp>(
-          `/api/v1/status_by_cid/${encodeURIComponent(trackingNumber)}`,
-          { method: "GET" },
-        ),
-      { attempts: 3 },
-    );
-    if (!res.ok) {
-      const { code, retryable } = classifyHttpStatus(res.status);
-      throw new CourierError(code, `steadfast getTracking failed (${res.status})`, {
-        retryable,
-        status: res.status,
-        provider: PROVIDER,
+    return withCourierBreaker(this.breakerKey(), async (signal) => {
+      const res = await withRetry(
+        () =>
+          this.transport.request<SteadfastStatusResp>(
+            `/api/v1/status_by_cid/${encodeURIComponent(trackingNumber)}`,
+            { method: "GET", signal },
+          ),
+        { attempts: 3, signal },
+      );
+      if (!res.ok) {
+        const { code, retryable } = classifyHttpStatus(res.status);
+        throw new CourierError(code, `steadfast getTracking failed (${res.status})`, {
+          retryable,
+          status: res.status,
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
+      const providerStatus = res.data?.delivery_status ?? "unknown";
+      const normalized = normalizeStatus(providerStatus);
+      const at = res.data?.last_updated ? new Date(res.data.last_updated) : new Date();
+      return {
+        trackingNumber,
+        providerStatus,
+        normalizedStatus: normalized,
+        events: [{ at, description: providerStatus }],
+        deliveredAt: normalized === "delivered" ? at : undefined,
         raw: res.data,
-      });
-    }
-    const providerStatus = res.data?.delivery_status ?? "unknown";
-    const normalized = normalizeStatus(providerStatus);
-    const at = res.data?.last_updated ? new Date(res.data.last_updated) : new Date();
-    return {
-      trackingNumber,
-      providerStatus,
-      normalizedStatus: normalized,
-      events: [{ at, description: providerStatus }],
-      deliveredAt: normalized === "delivered" ? at : undefined,
-      raw: res.data,
-    };
+      };
+    });
   }
 
   async priceQuote(input: { district: string; weight: number; cod?: number }): Promise<PriceQuote> {
@@ -277,3 +309,88 @@ export class SteadfastAdapter implements CourierAdapter {
     };
   }
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Webhook handling                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Steadfast push payload. Their docs describe two shapes — one used for
+ * status webhooks (which we care about for the tracking pipeline) and a
+ * "delivery report" used for COD reconciliation. We accept both via
+ * optional fields and let the adapter normalize.
+ */
+export interface SteadfastWebhookPayload {
+  notification_type?: string;
+  consignment_id?: number | string;
+  /** Steadfast invoice == our orderNumber. */
+  invoice?: string;
+  tracking_code?: string;
+  status?: string;
+  /** ISO timestamp from the courier. */
+  updated_at?: string;
+  cod_amount?: number;
+  /** Free-form event note. */
+  note?: string;
+}
+
+export interface ParsedTrackingWebhook {
+  trackingCode: string;
+  providerStatus: string;
+  normalizedStatus: NormalizedTrackingStatus;
+  at: Date;
+  description?: string;
+}
+
+/**
+ * Verify a Steadfast webhook HMAC. Steadfast signs the raw request body
+ * with the merchant secret using HMAC-SHA256 and ships the hex digest
+ * in the `x-steadfast-signature` header. Returns true on a constant-time
+ * match. Returns false (never throws) on missing header, missing secret,
+ * or mismatch — the caller decides the HTTP response.
+ */
+export function verifySteadfastWebhookSignature(
+  rawBody: string | Buffer,
+  signature: string | string[] | undefined,
+  secret: string | undefined,
+): boolean {
+  if (!secret) return false;
+  const provided = Array.isArray(signature) ? signature[0] : signature;
+  if (!provided || typeof provided !== "string" || provided.length === 0) return false;
+  const computed = createHmac("sha256", secret)
+    .update(typeof rawBody === "string" ? rawBody : rawBody)
+    .digest("hex");
+  // Length-safe constant-time compare.
+  const a = Buffer.from(provided, "hex");
+  const b = Buffer.from(computed, "hex");
+  if (a.length === 0 || a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Convert a Steadfast push payload into the shape our tracking pipeline
+ * expects. Returns null if the payload does not name an order (e.g. a
+ * test ping) — the caller should 200 those rather than 400.
+ */
+export function parseSteadfastWebhook(
+  payload: SteadfastWebhookPayload,
+): ParsedTrackingWebhook | null {
+  const trackingCode = payload.tracking_code ?? (payload.consignment_id != null ? String(payload.consignment_id) : "");
+  if (!trackingCode) return null;
+  const providerStatus = (payload.status ?? "unknown").trim();
+  const at = payload.updated_at ? new Date(payload.updated_at) : new Date();
+  return {
+    trackingCode,
+    providerStatus,
+    normalizedStatus: normalizeStatus(providerStatus),
+    at: Number.isNaN(at.getTime()) ? new Date() : at,
+    description: payload.note ?? providerStatus,
+  };
+}
+
+export const STEADFAST_PROVIDER = PROVIDER;

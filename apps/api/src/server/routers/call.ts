@@ -1,7 +1,7 @@
 import { Types } from "mongoose";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { CallLog } from "@ecom/db";
+import { CallLog, Order } from "@ecom/db";
 import { env } from "../../env.js";
 import { billableProcedure, protectedProcedure, router } from "../trpc.js";
 import {
@@ -60,15 +60,19 @@ export const callRouter = router({
         });
       }
 
+      const merchantId = new Types.ObjectId(ctx.user.id);
+
       let orderId: Types.ObjectId | undefined;
       if (input.orderId) {
         if (!Types.ObjectId.isValid(input.orderId)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "invalid orderId" });
         }
+        const order = await Order.findById(input.orderId).select("merchantId").lean();
+        if (!order || !merchantId.equals(order.merchantId)) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+        }
         orderId = new Types.ObjectId(input.orderId);
       }
-
-      const merchantId = new Types.ObjectId(ctx.user.id);
       const normalizedPhone = normalizePhone(input.customerPhone);
 
       let twilioResult;

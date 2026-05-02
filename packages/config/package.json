@@ -3,6 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "main": "./tailwind.js",
+  "exports": {
+    ".": "./tailwind.js",
+    "./tailwind": "./tailwind.js",
+    "./tailwind.js": "./tailwind.js"
+  },
   "files": [
     "tailwind.js",
     "tsconfig.base.json"

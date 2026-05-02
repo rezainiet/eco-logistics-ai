@@ -21,15 +21,33 @@ import {
   shopifyOauthRouter,
 } from "./server/webhooks/integrations.js";
 import { stripeWebhookRouter } from "./server/webhooks/stripe.js";
+import { courierWebhookRouter } from "./server/webhooks/courier.js";
+import { smsInboundWebhookRouter } from "./server/webhooks/sms-inbound.js";
+import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
 import { trackingRouter as trackingCollectorRouter } from "./server/tracking/collector.js";
-import { globalLimiter } from "./middleware/rateLimit.js";
+import { webhookLimiter } from "./middleware/rateLimit.js";
 import { registerTrackingSyncWorker, scheduleTrackingSync } from "./workers/trackingSync.js";
 import { registerRiskRecomputeWorker } from "./workers/riskRecompute.js";
 import {
   registerWebhookRetryWorker,
   scheduleWebhookRetry,
 } from "./workers/webhookRetry.js";
+import { registerWebhookProcessWorker } from "./workers/webhookProcess.js";
+import {
+  registerFraudWeightTuningWorker,
+  scheduleFraudWeightTuning,
+} from "./workers/fraudWeightTuning.js";
 import { registerCommerceImportWorker } from "./workers/commerceImport.js";
+import { registerAutomationBookWorker } from "./workers/automationBook.js";
+import { registerAutomationSmsWorker } from "./workers/automationSms.js";
+import {
+  registerAutomationStaleWorker,
+  scheduleAutomationStaleSweep,
+} from "./workers/automationStale.js";
+import {
+  registerAutomationWatchdogWorker,
+  scheduleAutomationWatchdog,
+} from "./workers/automationWatchdog.js";
 import {
   registerCartRecoveryWorker,
   scheduleCartRecovery,
@@ -42,6 +60,30 @@ import {
   registerSubscriptionGraceWorker,
   scheduleSubscriptionGrace,
 } from "./workers/subscriptionGrace.js";
+import {
+  registerAwbReconcileWorker,
+  scheduleAwbReconcile,
+} from "./workers/awbReconcile.js";
+
+/**
+ * Parse the `TRUSTED_PROXIES` env into the value Express's `trust proxy`
+ * setting expects. Returns `false` when nothing's configured so we never
+ * silently honour a header an attacker might send.
+ */
+function parseTrustProxyValue(raw: string | undefined): boolean | number | string[] {
+  if (!raw) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed === "false" || trimmed === "0") return false;
+  if (trimmed === "true") return true;
+  const asInt = Number.parseInt(trimmed, 10);
+  if (!Number.isNaN(asInt) && String(asInt) === trimmed) return asInt;
+  // Comma-separated CIDR / keyword list — Express accepts this shape directly.
+  return trimmed
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
 async function main() {
   // Eagerly validate env before any I/O — fail fast with a readable error.
@@ -59,21 +101,55 @@ async function main() {
     registerTrackingSyncWorker();
     registerRiskRecomputeWorker();
     registerWebhookRetryWorker();
+    registerWebhookProcessWorker();
+    registerFraudWeightTuningWorker();
     registerCommerceImportWorker();
+    registerAutomationBookWorker();
+    registerAutomationSmsWorker();
+    registerAutomationStaleWorker();
+    registerAutomationWatchdogWorker();
     registerCartRecoveryWorker();
     registerTrialReminderWorker();
     registerSubscriptionGraceWorker();
+    registerAwbReconcileWorker();
     await scheduleTrackingSync();
     await scheduleWebhookRetry();
     await scheduleCartRecovery();
     await scheduleTrialReminder();
     await scheduleSubscriptionGrace();
+    await scheduleAutomationStaleSweep();
+    await scheduleAutomationWatchdog();
+    await scheduleAwbReconcile();
+    await scheduleFraudWeightTuning();
   }
 
   const app = express();
-  app.set("trust proxy", 1);
+  // Configurable trust-proxy. Defaults to OFF — we'd rather see the socket
+  // address than blindly trust whatever a direct caller put in
+  // X-Forwarded-For. Behind a known edge proxy (load balancer, CDN), set
+  // TRUSTED_PROXIES to its IP/CIDR or to a hop count.
+  const trustValue = parseTrustProxyValue(env.TRUSTED_PROXIES);
+  app.set("trust proxy", trustValue);
+  if (env.NODE_ENV === "production" && trustValue === false) {
+    console.warn(
+      "[boot] TRUSTED_PROXIES is unset — req.ip will be the socket peer. " +
+        "If this API is behind a load balancer, set TRUSTED_PROXIES so " +
+        "X-Forwarded-For is honoured.",
+    );
+  }
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+  // Courier webhooks must mount BEFORE the global JSON parser so HMAC
+  // verification sees the raw, unmutated request body. Per-IP rate limit
+  // sits in front so a captured payload cannot be replayed at line speed.
+  app.use("/api/webhooks/courier", webhookLimiter, courierWebhookRouter);
+  app.use("/api/webhooks/sms-inbound", webhookLimiter, smsInboundWebhookRouter);
+  app.use("/api/webhooks/sms-dlr", webhookLimiter, smsDlrWebhookRouter);
+  // Commerce-platform webhooks (Shopify, Woo, custom_api) sign over raw
+  // bytes, so the router MUST mount before the global JSON parser. The
+  // route-internal `express.raw` would otherwise be a no-op once
+  // `express.json` has already consumed the stream.
+  app.use("/api/integrations/webhook", webhookLimiter, integrationsWebhookRouter);
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
@@ -81,11 +157,11 @@ async function main() {
   app.use("/admin", adminRouter);
   // Stripe webhook MUST mount before any JSON parser — verifyStripeWebhook
   // signs over raw bytes, so `express.raw` lives inside the router.
-  app.use("/api/webhooks/stripe", stripeWebhookRouter);
-  app.use("/api/webhooks/twilio", twilioWebhookRouter);
-  app.use("/api/integrations/webhook", integrationsWebhookRouter);
+  app.use("/api/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
+  app.use("/api/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
   // Shopify OAuth completion handler — install URLs from
-  // `integrations.connect({provider:"shopify"})` redirect here.
+  // `integrations.connect({provider:"shopify"})` redirect here. GET-only,
+  // so it can sit after express.json without harm.
   app.use("/api/integrations", shopifyOauthRouter);
   // Behavior tracker collector. CORS is wide-open so storefronts on any
   // origin can post events; they prove ownership via the merchant's
@@ -96,9 +172,17 @@ async function main() {
     trackingCollectorRouter,
   );
 
+  // /trpc is the data plane — order create, webhook callback ingest, dashboard
+  // reads, all live here. There is NO global IP limiter on it: a single
+  // merchant pulling 1M orders/day legitimately burns ~12 req/sec from one
+  // egress. Fairness and abuse protection come from two layers that DO
+  // discriminate by tenant: (1) auth-gated procedures via the per-merchant
+  // token bucket in safeEnqueue / mutation paths, and (2) the dedicated
+  // login/signup/passwordReset/webhook/publicTracking limiters mounted on
+  // their own routes above. A single global counter would cap the entire
+  // platform at one tenant's worth of traffic.
   app.use(
     "/trpc",
-    globalLimiter,
     createExpressMiddleware({
       router: appRouter,
       createContext,

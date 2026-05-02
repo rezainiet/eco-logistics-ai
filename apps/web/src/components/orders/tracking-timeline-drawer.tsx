@@ -5,6 +5,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  ClipboardList,
+  Home,
   MapPin,
   Package,
   RefreshCw,
@@ -44,7 +46,7 @@ const NORMALIZED_BADGE: Record<string, TrackingBadge> = {
     icon: CheckCircle2,
   },
   failed: { label: "Failed", className: "bg-[rgba(239,68,68,0.15)] text-[#F87171]", icon: AlertCircle },
-  rto: { label: "RTO", className: "bg-[rgba(239,68,68,0.15)] text-[#F87171]", icon: Undo2 },
+  rto: { label: "Failed delivery", className: "bg-[rgba(239,68,68,0.15)] text-[#F87171]", icon: Undo2 },
   unknown: { label: "Unknown", className: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]", icon: Clock },
 };
 
@@ -183,37 +185,45 @@ export function TrackingTimelineDrawer({
                 )}
               </div>
 
-              {events.length === 0 ? (
-                <p className="rounded-md border border-dashed border-[rgba(209,213,219,0.15)] p-4 text-center text-sm text-[#9CA3AF]">
-                  No courier events yet. Events will appear here after the first sync.
-                </p>
-              ) : (
-                <ol className="relative space-y-4 border-l border-[rgba(209,213,219,0.15)] pl-4">
-                  {events.map((e, idx) => {
-                    const badge: TrackingBadge =
-                      NORMALIZED_BADGE[e.normalizedStatus] ?? FALLBACK_BADGE;
-                    const Icon = badge.icon;
-                    return (
-                      <li key={`${e.at}-${idx}`} className="relative">
-                        <span
-                          className={`absolute -left-[21px] flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-[#111318] ${badge.className}`}
-                        >
-                          <Icon className="h-2.5 w-2.5" />
-                        </span>
-                        <div className="text-xs text-[#9CA3AF]">{formatDate(e.at)}</div>
-                        <div className="mt-0.5 text-sm text-[#F3F4F6]">
-                          {e.description || e.providerStatus}
-                        </div>
-                        {e.location && (
-                          <div className="mt-1 flex items-center gap-1 text-xs text-[#9CA3AF]">
-                            <MapPin className="h-3 w-3" />
-                            {e.location}
+              <ProgressStepper
+                orderStatus={order.status}
+                normalizedStatus={order.normalizedStatus}
+                deliveredAt={order.deliveredAt}
+                returnedAt={order.returnedAt}
+              />
+
+              {events.length > 0 && (
+                <div className="space-y-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-[#9CA3AF]">
+                    Recent updates
+                  </h4>
+                  <ol className="relative space-y-3 border-l border-[rgba(209,213,219,0.15)] pl-4">
+                    {events.map((e, idx) => {
+                      const badge: TrackingBadge =
+                        NORMALIZED_BADGE[e.normalizedStatus] ?? FALLBACK_BADGE;
+                      const Icon = badge.icon;
+                      return (
+                        <li key={`${e.at}-${idx}`} className="relative">
+                          <span
+                            className={`absolute -left-[21px] flex h-4 w-4 items-center justify-center rounded-full ring-4 ring-[#111318] ${badge.className}`}
+                          >
+                            <Icon className="h-2.5 w-2.5" />
+                          </span>
+                          <div className="text-xs text-[#9CA3AF]">{formatDate(e.at)}</div>
+                          <div className="mt-0.5 text-sm text-[#F3F4F6]">
+                            {e.description || e.providerStatus}
                           </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ol>
+                          {e.location && (
+                            <div className="mt-1 flex items-center gap-1 text-xs text-[#9CA3AF]">
+                              <MapPin className="h-3 w-3" />
+                              {e.location}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
               )}
             </>
           ) : (
@@ -222,6 +232,144 @@ export function TrackingTimelineDrawer({
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+type StepKey = "created" | "booked" | "in_transit" | "out_for_delivery" | "delivered";
+type Step = { key: StepKey; label: string; icon: typeof Package };
+
+const SUCCESS_STEPS: Step[] = [
+  { key: "created", label: "Created", icon: ClipboardList },
+  { key: "booked", label: "Booked", icon: Package },
+  { key: "in_transit", label: "In transit", icon: Truck },
+  { key: "out_for_delivery", label: "Out for delivery", icon: Home },
+  { key: "delivered", label: "Delivered", icon: CheckCircle2 },
+];
+
+/**
+ * Map order.status + latest normalizedStatus to the index of the step the
+ * order has reached (0-based). The order's persisted `status` is the source
+ * of truth for early stages (created/booked); the courier's normalizedStatus
+ * advances us through the in-transit / out-for-delivery / delivered stages.
+ */
+function reachedStepIndex(
+  orderStatus: string,
+  normalizedStatus: string | null | undefined,
+): number {
+  if (normalizedStatus === "delivered" || orderStatus === "delivered") return 4;
+  if (normalizedStatus === "out_for_delivery") return 3;
+  if (
+    normalizedStatus === "in_transit" ||
+    normalizedStatus === "picked_up" ||
+    orderStatus === "in_transit"
+  ) {
+    return 2;
+  }
+  if (orderStatus === "shipped") return 1;
+  return 0;
+}
+
+function ProgressStepper({
+  orderStatus,
+  normalizedStatus,
+  deliveredAt,
+  returnedAt,
+}: {
+  orderStatus: string;
+  normalizedStatus: string | null | undefined;
+  deliveredAt: Date | string | null | undefined;
+  returnedAt: Date | string | null | undefined;
+}) {
+  const isFailed =
+    orderStatus === "rto" ||
+    orderStatus === "cancelled" ||
+    normalizedStatus === "rto" ||
+    normalizedStatus === "failed";
+
+  const steps: Step[] = isFailed
+    ? [
+        ...SUCCESS_STEPS.slice(0, 4),
+        {
+          key: "delivered",
+          label: orderStatus === "rto" || normalizedStatus === "rto" ? "Returned" : "Failed",
+          icon: orderStatus === "rto" || normalizedStatus === "rto" ? Undo2 : AlertCircle,
+        },
+      ]
+    : SUCCESS_STEPS;
+
+  const reached = isFailed ? steps.length - 1 : reachedStepIndex(orderStatus, normalizedStatus);
+
+  return (
+    <div className="rounded-lg border border-[rgba(209,213,219,0.08)] bg-[#1A1D2E] p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-[#F3F4F6]">Delivery progress</h3>
+        <span className="text-xs text-[#9CA3AF]">
+          {Math.min(reached + 1, steps.length)} of {steps.length}
+        </span>
+      </div>
+      <div className="flex items-start">
+        {steps.map((step, idx) => {
+          const completed = idx < reached;
+          const active = idx === reached;
+          const Icon = step.icon;
+          const failedTerminal = isFailed && idx === steps.length - 1 && active;
+          const circleClass = failedTerminal
+            ? "border-[#F87171] bg-[rgba(239,68,68,0.18)] text-[#F87171]"
+            : completed
+              ? "border-[#0084D4] bg-[#0084D4] text-white"
+              : active
+                ? "border-[#0084D4] bg-[rgba(0,132,212,0.18)] text-[#60A5FA] ring-2 ring-[rgba(0,132,212,0.35)]"
+                : "border-[rgba(209,213,219,0.2)] bg-[#111318] text-[#6B7280]";
+          const labelClass = active
+            ? failedTerminal
+              ? "text-[#F87171]"
+              : "text-[#F3F4F6]"
+            : completed
+              ? "text-[#D1D5DB]"
+              : "text-[#6B7280]";
+          return (
+            <div key={step.key} className="flex flex-1 flex-col items-center">
+              <div className="flex w-full items-center">
+                <div
+                  className={`h-0.5 flex-1 ${
+                    idx === 0
+                      ? "bg-transparent"
+                      : idx <= reached
+                        ? "bg-[#0084D4]"
+                        : "bg-[rgba(209,213,219,0.15)]"
+                  }`}
+                />
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full border ${circleClass}`}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div
+                  className={`h-0.5 flex-1 ${
+                    idx === steps.length - 1
+                      ? "bg-transparent"
+                      : idx < reached
+                        ? "bg-[#0084D4]"
+                        : "bg-[rgba(209,213,219,0.15)]"
+                  }`}
+                />
+              </div>
+              <span
+                className={`mt-2 text-center text-[10px] font-medium uppercase tracking-wide ${labelClass}`}
+              >
+                {step.label}
+              </span>
+              {active && step.key === "delivered" && deliveredAt && !isFailed && (
+                <span className="mt-0.5 text-[10px] text-[#9CA3AF]">{formatDate(deliveredAt)}</span>
+              )}
+              {active && failedTerminal && returnedAt && (
+                <span className="mt-0.5 text-[10px] text-[#9CA3AF]">{formatDate(returnedAt)}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

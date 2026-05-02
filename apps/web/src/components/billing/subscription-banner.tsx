@@ -8,7 +8,38 @@ import { trpc } from "@/lib/trpc";
  * Cross-dashboard banner. Silent when everything's fine; loud when the merchant
  * needs to renew, pay, or upgrade. Rendered once in the dashboard layout so it
  * stays visible as the merchant navigates.
+ *
+ * Metric names from the API (`fraudReviewsUsed`, `smsSent`, ...) are camelCase
+ * identifiers — never show those raw to a merchant. `metricLabel()` maps them
+ * to human copy, with a safe last-resort fallback that splits camelCase.
+ *
+ * Defensive guard: if a meter reports `blocked: true` but the recorded usage
+ * is zero, treat it as a stale/init state (a fresh trial cannot have hit a
+ * monthly cap) and stay silent rather than alarm the merchant. The real fix
+ * lives server-side in the meter init data, but we don't want to leak that
+ * footgun into the UI.
  */
+
+const METRIC_LABELS: Record<string, string> = {
+  fraudReviewsUsed: "fraud reviews this month",
+  fraudReviews: "fraud reviews this month",
+  smsSent: "SMS messages this month",
+  smsUsed: "SMS messages this month",
+  ordersIngested: "orders this month",
+  ordersUsed: "orders this month",
+  callMinutesUsed: "call minutes this month",
+  webhookEvents: "webhook events this month",
+};
+
+function metricLabel(metric: string): string {
+  if (METRIC_LABELS[metric]) return METRIC_LABELS[metric]!;
+  // Fallback: split camelCase into words and lowercase the result.
+  // "fraudReviewsUsed" → "fraud reviews used".
+  return metric
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/_/g, " ")
+    .toLowerCase();
+}
 export function SubscriptionBanner() {
   const plan = trpc.billing.getPlan.useQuery(undefined, {
     staleTime: 60_000,
@@ -79,11 +110,17 @@ export function SubscriptionBanner() {
     );
   }
 
-  const atQuotaLimit = usage.data?.meters.find((m) => m.blocked);
+  // Suppress phantom "blocked at zero usage" — a fresh meter cannot have hit
+  // its cap. This guards against stale/init meter data leaking an alarming
+  // banner into a brand-new merchant's first dashboard view.
+  const atQuotaLimit = usage.data?.meters.find(
+    (m) => m.blocked && (m.used ?? 0) > 0,
+  );
   if (atQuotaLimit) {
     return (
       <Banner tone="error" icon={<AlertCircle className="h-4 w-4" />}>
-        You've hit your monthly quota for <strong>{atQuotaLimit.metric}</strong>.{" "}
+        You've hit your monthly quota for{" "}
+        <strong>{metricLabel(atQuotaLimit.metric)}</strong>.{" "}
         <Link href="/dashboard/billing" className="underline">
           Upgrade your plan
         </Link>{" "}
@@ -92,12 +129,14 @@ export function SubscriptionBanner() {
     );
   }
 
-  const nearLimit = usage.data?.meters.find((m) => m.warning && !m.blocked);
+  const nearLimit = usage.data?.meters.find(
+    (m) => m.warning && !m.blocked && (m.used ?? 0) > 0,
+  );
   if (nearLimit) {
     return (
       <Banner tone="warning" icon={<TrendingUp className="h-4 w-4" />}>
         You're at {Math.round(nearLimit.ratio * 100)}% of your monthly{" "}
-        <strong>{nearLimit.metric}</strong> quota.{" "}
+        <strong>{metricLabel(nearLimit.metric)}</strong> quota.{" "}
         <Link href="/dashboard/billing" className="underline">
           Consider upgrading
         </Link>

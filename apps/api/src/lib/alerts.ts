@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Types } from "mongoose";
 import { Merchant, Notification, type NotificationKind } from "@ecom/db";
 import { writeAudit } from "./audit.js";
+import { sendCriticalAlertSms } from "./sms/index.js";
 
 export interface FraudAlertInput {
   merchantId: Types.ObjectId;
@@ -35,13 +36,17 @@ export async function fireFraudAlert(input: FraudAlertInput): Promise<void> {
     .slice(0, 24);
 
   let shouldNotify = true;
+  let merchantPhone: string | undefined;
+  let merchantBrand: string | undefined;
   try {
     const m = await Merchant.findById(input.merchantId)
-      .select("fraudConfig.alertOnPendingReview")
+      .select("fraudConfig.alertOnPendingReview phone businessName")
       .lean();
     if (m && m.fraudConfig?.alertOnPendingReview === false) {
       shouldNotify = false;
     }
+    merchantPhone = m?.phone ?? undefined;
+    merchantBrand = m?.businessName ?? undefined;
   } catch {
     // Best-effort — if we can't read the merchant, still alert.
   }
@@ -77,6 +82,25 @@ export async function fireFraudAlert(input: FraudAlertInput): Promise<void> {
       );
     } catch (err) {
       console.error("[fraud-alert] notification write failed", (err as Error).message);
+    }
+  }
+
+  // BD merchants live on their phones — fan critical fraud alerts out
+  // to SMS in addition to the in-app inbox. Best-effort, never blocks
+  // the alert pipeline.
+  if (shouldNotify && severity === "critical" && merchantPhone) {
+    try {
+      const summary =
+        input.title ??
+        `High-risk order${input.orderNumber ? " " + input.orderNumber : ""} (risk ${input.riskScore})`;
+      void sendCriticalAlertSms(merchantPhone, summary, {
+        brand: merchantBrand,
+        tag: `fraud_${kind}`,
+      }).catch((err) =>
+        console.error("[fraud-alert] sms fan-out failed", (err as Error).message),
+      );
+    } catch (err) {
+      console.error("[fraud-alert] sms fan-out setup failed", (err as Error).message);
     }
   }
 

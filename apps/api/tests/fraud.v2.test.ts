@@ -210,7 +210,7 @@ describe("merchants.updateFraudConfig", () => {
       cod: 500,
     });
     expect(created.risk.level).toBe("high");
-    expect(created.risk.reasons).toContain("Phone on merchant blocklist");
+    expect(created.risk.reasons).toContain("Phone is on the merchant block-list");
 
     const notifications = await Notification.find({ merchantId: m._id }).lean();
     expect(notifications.length).toBeGreaterThanOrEqual(1);
@@ -318,10 +318,12 @@ describe("bulkUpload fraud v2 — history integrity", () => {
     const res = await caller.orders.bulkUpload({ csv });
     expect(res.inserted).toBe(1);
     const bulk = await Order.findOne({ orderNumber: "BULK-1" }).lean();
-    expect(bulk?.fraud?.reasons?.some((r) => r.includes("prior return"))).toBe(true);
+    expect(
+      bulk?.fraud?.reasons?.some((r) => /failed deliver|RTO/i.test(r)),
+    ).toBe(true);
   });
 
-  it("prevents within-CSV duplicate-phone bypass", async () => {
+  it("prevents within-CSV duplicate-phone bypass via dedup pass", async () => {
     const m = await createMerchant({ tier: "growth" });
     const caller = callerFor(authUserFor(m));
     const phone = "+8801755555555";
@@ -329,10 +331,15 @@ describe("bulkUpload fraud v2 — history integrity", () => {
     for (let i = 0; i < __TEST.DUP_PHONE_HEAVY + 1; i++) {
       rows.push(`BULK-${i},Karim,${phone},House 3 Road 4,Dhaka,Shirt,1,500,500`);
     }
-    await caller.orders.bulkUpload({ csv: rows.join("\n") });
-    const last = await Order.findOne({ orderNumber: `BULK-${__TEST.DUP_PHONE_HEAVY}` }).lean();
-    const signals = (last?.fraud?.signals ?? []).map((s) => s.key);
-    expect(signals).toContain("duplicate_phone_heavy");
+    const res = await caller.orders.bulkUpload({ csv: rows.join("\n") });
+    // Only the FIRST row inserts; the rest are reported as duplicates of an
+    // earlier row in the same CSV. This is a stronger defense than letting
+    // them all in and lighting up duplicate_phone_heavy on the last one.
+    expect(res.inserted).toBe(1);
+    expect(res.duplicates.length).toBe(__TEST.DUP_PHONE_HEAVY);
+    expect(res.duplicates[0]!.matchedOrderNumber).toMatch(/another row/i);
+    const persistedCount = await Order.countDocuments({ "customer.phone": phone });
+    expect(persistedCount).toBe(1);
   });
 
   it("captures uploader IP + bulk_upload channel on every row", async () => {
@@ -425,7 +432,9 @@ describe("risk-recompute worker", () => {
     expect(res.rescored).toBe(2);
     const after = await Order.find({ _id: { $in: [a.id, b.id].map((x) => new Types.ObjectId(x)) } }).lean();
     for (const o of after) {
-      expect((o.fraud?.reasons ?? []).some((r) => r.toLowerCase().includes("prior return"))).toBe(true);
+      expect(
+        (o.fraud?.reasons ?? []).some((r) => /failed deliver|rto/i.test(r)),
+      ).toBe(true);
     }
   });
 

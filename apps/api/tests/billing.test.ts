@@ -8,6 +8,37 @@ import {
   resetDb,
 } from "./helpers.js";
 import { invalidateSubscriptionCache } from "../src/server/trpc.js";
+import {
+  invalidateAdminProfile,
+} from "../src/lib/admin-rbac.js";
+import { issueStepupToken } from "../src/lib/admin-stepup.js";
+
+/**
+ * Promote a merchant to admin AND grant the requested scopes. Most existing
+ * billing tests were written against the legacy single-step admin path
+ * (role: "admin" was sufficient); the RBAC pass requires explicit scopes.
+ * Default to super_admin so tests work like before.
+ */
+async function grantAdminScopes(
+  merchantId: unknown,
+  scopes: ("super_admin" | "finance_admin" | "support_admin")[] = [
+    "super_admin",
+  ],
+) {
+  await Merchant.updateOne(
+    { _id: merchantId as never },
+    { $set: { role: "admin", adminScopes: scopes } },
+  );
+  invalidateAdminProfile(String(merchantId));
+}
+
+async function freshStepup(
+  userId: unknown,
+  permission: "payment.approve" | "payment.reject",
+) {
+  const { token } = await issueStepupToken(String(userId), permission);
+  return token;
+}
 
 async function setTier(
   merchantId: unknown,
@@ -203,6 +234,7 @@ describe("billingRouter", () => {
   it("admin approvePayment activates subscription and sets currentPeriodEnd", async () => {
     const merchant = await createMerchant({ tier: "starter", status: "trial" });
     const admin = await createMerchant({ role: "admin", email: "admin@test.com" });
+    await grantAdminScopes(admin._id);
 
     const merchantCaller = callerFor(authUserFor(merchant));
     const adminCaller = callerFor(authUserFor(admin));
@@ -214,9 +246,13 @@ describe("billingRouter", () => {
       txnId: "TXN-APPROVE",
     });
 
+    // Two-stage flow: review first, then approve with a step-up token.
+    await adminCaller.adminBilling.markReviewed({ paymentId: submission.id });
+    const token = await freshStepup(admin._id, "payment.approve");
     const res = await adminCaller.adminBilling.approvePayment({
       paymentId: submission.id,
       periodDays: 30,
+      confirmationToken: token,
     });
     expect(res.status).toBe("approved");
     expect(res.plan).toBe("growth");
@@ -231,6 +267,7 @@ describe("billingRouter", () => {
   it("admin rejectPayment clears the pending flag and adds a reviewer note", async () => {
     const merchant = await createMerchant({ tier: "starter", status: "trial" });
     const admin = await createMerchant({ role: "admin", email: "admin2@test.com" });
+    await grantAdminScopes(admin._id);
 
     const merchantCaller = callerFor(authUserFor(merchant));
     const adminCaller = callerFor(authUserFor(admin));
@@ -241,9 +278,11 @@ describe("billingRouter", () => {
       amount: 2499,
     });
 
+    const rejectToken = await freshStepup(admin._id, "payment.reject");
     await adminCaller.adminBilling.rejectPayment({
       paymentId: submission.id,
       reason: "Receipt does not match",
+      confirmationToken: rejectToken,
     });
 
     const fresh = await Merchant.findById(merchant._id).lean();
@@ -257,6 +296,7 @@ describe("billingRouter", () => {
   it("admin extendSubscription pushes currentPeriodEnd forward", async () => {
     const merchant = await createMerchant({ tier: "growth", status: "active" });
     const admin = await createMerchant({ role: "admin", email: "admin3@test.com" });
+    await grantAdminScopes(admin._id);
     const adminCaller = callerFor(authUserFor(admin));
 
     const before = await Merchant.findById(merchant._id).lean();
@@ -272,6 +312,7 @@ describe("billingRouter", () => {
   it("admin changePlan flips merchant tier without a payment", async () => {
     const merchant = await createMerchant({ tier: "starter" });
     const admin = await createMerchant({ role: "admin", email: "admin4@test.com" });
+    await grantAdminScopes(admin._id);
     const adminCaller = callerFor(authUserFor(admin));
 
     await adminCaller.adminBilling.changePlan({

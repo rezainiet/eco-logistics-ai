@@ -5,8 +5,12 @@ import { authOptions } from "@/lib/auth";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { Topbar } from "@/components/shell/topbar";
 import { CommandPaletteProvider } from "@/components/shell/command-palette";
-import { SubscriptionBanner } from "@/components/billing/subscription-banner";
-import { VerifyEmailBanner } from "@/components/billing/verify-email-banner";
+import { DashboardBanners } from "@/components/billing/dashboard-banners";
+import { BrandingProvider } from "@/components/branding/branding-provider";
+import { TokenRefreshKeeper } from "@/components/auth/token-refresh-keeper";
+import { MobileBottomNav } from "@/components/dashboard/mobile-bottom-nav";
+import { TrustStrip } from "@/components/dashboard/trust-strip";
+import { I18nProvider } from "@/lib/i18n";
 import { Toaster } from "@/components/ui/toast";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
@@ -16,19 +20,25 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const userLabel = session.user?.name ?? session.user?.email ?? "Merchant";
 
   return (
-    <CommandPaletteProvider>
+    <I18nProvider>
+      <CommandPaletteProvider>
+      <BrandingProvider>
+      <TokenRefreshKeeper />
       <div className="flex min-h-screen bg-surface-base">
         <Sidebar />
         <main className="flex min-w-0 flex-1 flex-col">
           <Topbar userLabel={userLabel} />
-          <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 md:px-8 md:py-8">
-            <SubscriptionBanner />
-            <VerifyEmailBanner />
+          <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-6 md:px-8 md:pb-8 md:pt-8">
+            <DashboardBanners />
             {children}
+            <TrustStrip />
           </div>
         </main>
+        <MobileBottomNav />
         <Toaster />
       </div>
+      </BrandingProvider>
     </CommandPaletteProvider>
+    </I18nProvider>
   );
 }

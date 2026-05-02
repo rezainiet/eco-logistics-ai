@@ -10,6 +10,7 @@ export type CourierErrorCode =
   | "invalid_input"
   | "provider_error"
   | "not_supported"
+  | "circuit_open"
   | "unknown";
 
 export class CourierError extends Error {
@@ -61,6 +62,14 @@ export interface AWBRequest {
   cod: number;
   weight?: number;
   notes?: string;
+  /**
+   * Caller-supplied idempotency token (sha256 of orderId+attempt). Adapters
+   * MUST forward this to the upstream as `Idempotency-Key` (Stripe-style)
+   * so a retried booking with the same key collapses to the same AWB at
+   * the courier. Vendors that don't honour the header treat it as opaque
+   * — we still get at-most-once on our side via the booking lock + ledger.
+   */
+  idempotencyKey?: string;
 }
 
 export interface AWBResponse {

@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
 import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
+import { env } from "../../env.js";
 import {
   ImportJob,
   Integration,
@@ -10,7 +12,7 @@ import {
   WebhookInbox,
   type IntegrationProvider,
 } from "@ecom/db";
-import { billableProcedure, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
+import { billableProcedure, merchantObjectId, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
 import { decryptSecret, encryptSecret, maskSecretPayload } from "../../lib/crypto.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import {
@@ -30,10 +32,6 @@ import {
 } from "../ingest.js";
 import { enqueueCommerceImport } from "../../workers/commerceImport.js";
 import { writeAudit } from "../../lib/audit.js";
-
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
 
 function decryptCreds(stored: Record<string, unknown> | null | undefined): IntegrationCredentials {
   const s = (stored ?? {}) as Record<string, string | null | undefined>;
@@ -55,16 +53,43 @@ function decryptSafe(payload: string): string {
   }
 }
 
+/**
+ * `shop.myshopify.com`. The subdomain must start with a letter or digit and
+ * may contain letters, digits, and hyphens — Shopify's own naming rule.
+ * Anything else (custom domains, typos, http://) gets a clear inline error
+ * before we even try to mint an install URL.
+ */
+const SHOP_DOMAIN_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/;
+
 const connectShopifySchema = z.object({
   provider: z.literal("shopify"),
   shopDomain: z
     .string()
+    .trim()
+    .toLowerCase()
     .min(3)
-    .regex(/^[a-zA-Z0-9.-]+$/),
-  apiKey: z.string().min(1),
-  apiSecret: z.string().min(1),
+    .max(120)
+    .regex(
+      SHOP_DOMAIN_RE,
+      "Use your Shopify store address like mystore.myshopify.com",
+    ),
+  // Optional in the simple flow. When the platform has
+  // SHOPIFY_APP_API_KEY/SECRET configured, the merchant only needs to enter
+  // their shop domain — we drive OAuth with the platform-level app
+  // credentials. When the platform vars are unset, the connect handler
+  // requires these (legacy custom-app path) and surfaces a clear error.
+  apiKey: z.string().min(1).optional(),
+  apiSecret: z.string().min(1).optional(),
   accessToken: z.string().min(1).optional(),
   scopes: z.array(z.string()).default(["read_orders", "write_orders", "read_customers"]),
+  /**
+   * The merchant has explicitly confirmed they want to overwrite an existing
+   * connected integration (rotating credentials / forcing a fresh OAuth).
+   * Without this flag, the handler refuses to clobber a connected store and
+   * returns the existing integration unchanged so accidental double-clicks
+   * never lose a working access token.
+   */
+  confirmOverwrite: z.boolean().optional(),
 });
 
 const connectWooSchema = z.object({
@@ -145,12 +170,34 @@ export const integrationsRouter = router({
       let accountKey: string;
       let credentialsPayload: Record<string, string> = {};
       const permissions: string[] = [];
+      // Resolved Shopify app credentials. Populated only when
+      // `input.provider === "shopify"`; consumed when minting the install
+      // URL further down so the simple-flow merchant (no apiKey/apiSecret
+      // typed) still gets a valid OAuth redirect via env-level credentials.
+      let resolvedShopifyAppKey = "";
 
       if (input.provider === "shopify") {
         accountKey = input.shopDomain.toLowerCase();
+        // Resolve which Shopify app credentials to use. Priority:
+        //   1. Merchant-supplied (Advanced section in the connect dialog —
+        //      legacy custom-app path)
+        //   2. Platform-level env (`SHOPIFY_APP_API_KEY`/`_SECRET`) for the
+        //      simple flow where the merchant only enters a shop domain.
+        const appKey = input.apiKey ?? env.SHOPIFY_APP_API_KEY ?? "";
+        const appSecret = input.apiSecret ?? env.SHOPIFY_APP_API_SECRET ?? "";
+        resolvedShopifyAppKey = appKey;
+        if (!appKey || !appSecret) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            // The web client maps this to a friendly inline message that
+            // points the merchant at the Advanced section.
+            message:
+              "shopify_credentials_required: paste your Shopify app's API key + secret in the Advanced section, or contact support to enable one-click connect.",
+          });
+        }
         credentialsPayload = {
-          apiKey: encryptSecret(input.apiKey),
-          apiSecret: encryptSecret(input.apiSecret),
+          apiKey: encryptSecret(appKey),
+          apiSecret: encryptSecret(appSecret),
           siteUrl: input.shopDomain,
         };
         if (input.accessToken) {
@@ -175,34 +222,104 @@ export const integrationsRouter = router({
         permissions.push("bulk_upload");
       }
 
-      const webhookSecret = randomBytes(32).toString("base64");
+      // Detect existing integration up front so we know whether the connect
+      // call is creating a new resource (in which case the merchant must see
+      // the freshly-minted webhook secret / apiKey ONCE so they can paste it
+      // into their CMS) or reconnecting to an existing one (in which case we
+      // never re-emit plaintext — they must use the explicit reveal/rotate
+      // endpoints, which require re-auth and are audit-logged).
+      const existing = await Integration.findOne({
+        merchantId,
+        provider: input.provider,
+        accountKey,
+      })
+        .select("_id webhookSecret status credentials")
+        .lean();
+      const isNewIntegration = !existing;
+
+      // Reconnect safety: if a Shopify integration is already CONNECTED
+      // (i.e. it has a working accessToken), refuse to clobber it unless
+      // the merchant has explicitly confirmed via `confirmOverwrite`. This
+      // protects the most punishing past behaviour — accidental
+      // double-clicks wiping a working token. The web client surfaces a
+      // confirmation dialog and re-issues the call with the flag set.
+      const existingShopifyAccessToken =
+        existing && input.provider === "shopify"
+          ? ((existing.credentials as Record<string, string | undefined> | undefined)
+              ?.accessToken ?? null)
+          : null;
+      if (
+        input.provider === "shopify" &&
+        existing?.status === "connected" &&
+        existingShopifyAccessToken &&
+        !input.accessToken &&
+        !input.confirmOverwrite
+      ) {
+        return {
+          id: String(existing._id),
+          status: "connected" as const,
+          provider: "shopify" as const,
+          alreadyConnected: true as const,
+          webhookSecretPreview: maskSecretPayload(existing.webhookSecret),
+          revealedOnce: false,
+        };
+      }
+
+      // Reuse the existing webhookSecret on reconnect so that any signed
+      // webhooks already configured in the merchant's CMS keep validating.
+      // A fresh secret is minted only on first creation; rotation is
+      // explicit via rotateWebhookSecret.
+      const webhookSecretPlaintext = isNewIntegration
+        ? randomBytes(32).toString("base64")
+        : null;
       const status = input.provider === "shopify" && !("accessToken" in input && input.accessToken)
         ? "pending"
         : "connected";
+
+      // For Shopify reconnects without a fresh access token, preserve the
+      // previously-stored token so a confirmed overwrite of credentials
+      // doesn't strand the merchant in "pending" until they re-do OAuth.
+      // The OAuth callback still overwrites this with the latest token.
+      if (
+        input.provider === "shopify" &&
+        existingShopifyAccessToken &&
+        !input.accessToken
+      ) {
+        credentialsPayload.accessToken = existingShopifyAccessToken;
+      }
+      const setPayload: Record<string, unknown> = {
+        label:
+          "label" in input && input.label
+            ? input.label
+            : `${input.provider} · ${accountKey}`,
+        status,
+        credentials: credentialsPayload,
+        "webhookStatus.registered": false,
+        "webhookStatus.failures": 0,
+        permissions,
+        "health.ok": true,
+        "health.lastError": null,
+        "health.lastCheckedAt": now,
+        connectedAt: status === "connected" ? now : null,
+        disconnectedAt: null,
+      };
+      if (webhookSecretPlaintext) {
+        setPayload.webhookSecret = encryptSecret(webhookSecretPlaintext);
+      }
       const integration = await Integration.findOneAndUpdate(
         { merchantId, provider: input.provider, accountKey },
         {
-          $set: {
-            label:
-              "label" in input && input.label
-                ? input.label
-                : `${input.provider} · ${accountKey}`,
-            status,
-            credentials: credentialsPayload,
-            webhookSecret: encryptSecret(webhookSecret),
-            "webhookStatus.registered": false,
-            "webhookStatus.failures": 0,
-            permissions,
-            "health.ok": true,
-            "health.lastError": null,
-            "health.lastCheckedAt": now,
-            connectedAt: status === "connected" ? now : null,
-            disconnectedAt: null,
-          },
+          $set: setPayload,
           $setOnInsert: { merchantId, provider: input.provider, accountKey },
         },
         { upsert: true, new: true },
       );
+
+      // For Woo webhook registration we need the plaintext secret. On reconnect
+      // we decrypt the stored value; on insert we already have it in memory.
+      const webhookSecret =
+        webhookSecretPlaintext ??
+        (existing?.webhookSecret ? decryptSafe(existing.webhookSecret) : "");
 
       // Auto-register webhooks for Woo on connect — Shopify's flow waits for
       // OAuth completion (handled in the callback router). Woo uses long-
@@ -254,6 +371,7 @@ export const integrationsRouter = router({
           provider: input.provider,
           accountKey,
           status,
+          newIntegration: isNewIntegration,
           ...(wooWebhookSummary
             ? {
                 webhooksRegistered: wooWebhookSummary.registered,
@@ -267,17 +385,42 @@ export const integrationsRouter = router({
         id: string;
         status: typeof status;
         provider: typeof input.provider;
+        // Plaintext secrets are emitted ONLY on first creation. Reconnect
+        // returns the masked preview — merchants must call the explicit
+        // reveal endpoint (password re-auth + audit log) to retrieve the
+        // real value, or rotateWebhookSecret to mint a new one.
         webhookSecret?: string;
+        webhookSecretPreview: string;
         plaintextApiKey?: string;
+        apiKeyPreview?: string;
         installUrl?: string;
+        revealedOnce: boolean;
+        alreadyConnected?: boolean;
       } = {
         id: String(integration._id),
         status,
         provider: input.provider,
-        webhookSecret,
+        webhookSecretPreview: maskSecretPayload(integration.webhookSecret),
+        revealedOnce: isNewIntegration,
       };
+      if (isNewIntegration && webhookSecretPlaintext) {
+        result.webhookSecret = webhookSecretPlaintext;
+      }
       if (input.provider === "custom_api") {
-        result.plaintextApiKey = decryptSafe(credentialsPayload.apiKey!);
+        result.apiKeyPreview = maskSecretPayload(credentialsPayload.apiKey);
+        if (isNewIntegration) {
+          result.plaintextApiKey = decryptSafe(credentialsPayload.apiKey!);
+        }
+      }
+      if (isNewIntegration) {
+        void writeAudit({
+          merchantId,
+          actorId: merchantId,
+          action: "integration.secret_revealed",
+          subjectType: "integration",
+          subjectId: integration._id,
+          meta: { provider: input.provider, reason: "initial_creation" },
+        });
       }
       if (input.provider === "shopify" && status === "pending") {
         const state = randomBytes(16).toString("hex");
@@ -287,7 +430,7 @@ export const integrationsRouter = router({
         );
         result.installUrl = buildShopifyInstallUrl({
           shopDomain: accountKey,
-          apiKey: input.apiKey,
+          apiKey: resolvedShopifyAppKey,
           redirectUri: `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/oauth/shopify/callback`,
           scopes: input.scopes,
           state,
@@ -315,7 +458,9 @@ export const integrationsRouter = router({
       }
       const adapter = adapterFor(integration.provider as IntegrationProvider);
       const creds = decryptCreds(integration.credentials ?? {});
+      const startedAt = Date.now();
       const result = await adapter.testConnection(creds);
+      const latencyMs = Date.now() - startedAt;
       integration.health = {
         ok: result.ok,
         lastError: result.ok ? undefined : result.detail?.slice(0, 500),
@@ -323,6 +468,10 @@ export const integrationsRouter = router({
       };
       if (!result.ok) {
         integration.status = "error";
+      } else if (integration.status === "error") {
+        // A successful test clears the prior error state — merchant fixed
+        // the credential problem, treat the integration as connected again.
+        integration.status = "connected";
       }
       await integration.save();
       void writeAudit({
@@ -331,9 +480,9 @@ export const integrationsRouter = router({
         action: "integration.test",
         subjectType: "integration",
         subjectId: integration._id,
-        meta: { provider: integration.provider, ok: result.ok },
+        meta: { provider: integration.provider, ok: result.ok, latencyMs },
       });
-      return { ok: result.ok, detail: result.detail ?? null };
+      return { ok: result.ok, detail: result.detail ?? null, latencyMs };
     }),
 
   fetchSample: protectedProcedure
@@ -442,14 +591,27 @@ export const integrationsRouter = router({
       };
     }),
 
-  /** Reveal the webhook secret once for re-rotation. Audit-logged. */
+  /**
+   * Mint a NEW webhook secret and return it ONCE. The previous secret is
+   * destroyed (any in-flight webhooks signed with it will fail validation
+   * thereafter). Requires the merchant's password to confirm the action.
+   * Audit-logged.
+   */
   rotateWebhookSecret: protectedProcedure
-    .input(z.object({ id: z.string().min(1) }))
+    .input(z.object({ id: z.string().min(1), password: z.string().min(8).max(200) }))
     .mutation(async ({ ctx, input }) => {
       if (!Types.ObjectId.isValid(input.id)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
       }
       const merchantId = merchantObjectId(ctx);
+      const merchant = await Merchant.findById(merchantId).select("passwordHash").lean();
+      if (!merchant?.passwordHash) {
+        throw new TRPCError({ code: "UNAUTHORIZED" });
+      }
+      const passwordOk = await bcrypt.compare(input.password, merchant.passwordHash);
+      if (!passwordOk) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid password" });
+      }
       const integration = await Integration.findOne({
         _id: new Types.ObjectId(input.id),
         merchantId,
@@ -460,7 +622,73 @@ export const integrationsRouter = router({
       const newSecret = randomBytes(32).toString("base64");
       integration.webhookSecret = encryptSecret(newSecret);
       await integration.save();
-      return { secret: newSecret };
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        action: "integration.webhook_secret_rotated",
+        subjectType: "integration",
+        subjectId: integration._id,
+        meta: { provider: integration.provider },
+      });
+      return { secret: newSecret, preview: maskSecretPayload(integration.webhookSecret) };
+    }),
+
+  /**
+   * Reveal a previously-issued webhook secret (or custom_api apiKey). The
+   * merchant must supply their password — the value is sensitive enough
+   * that a stolen session alone should not be able to exfiltrate it.
+   * Audit-logged so the merchant can review reveal events.
+   */
+  revealSecret: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().min(1),
+        which: z.enum(["webhookSecret", "apiKey"]),
+        password: z.string().min(8).max(200),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!Types.ObjectId.isValid(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
+      }
+      const merchantId = merchantObjectId(ctx);
+      const merchant = await Merchant.findById(merchantId).select("passwordHash").lean();
+      if (!merchant?.passwordHash) {
+        throw new TRPCError({ code: "UNAUTHORIZED" });
+      }
+      const passwordOk = await bcrypt.compare(input.password, merchant.passwordHash);
+      if (!passwordOk) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "invalid password" });
+      }
+      const integration = await Integration.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+      })
+        .select("webhookSecret credentials provider")
+        .lean();
+      if (!integration) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "integration not found" });
+      }
+      let plaintext = "";
+      if (input.which === "webhookSecret") {
+        plaintext = integration.webhookSecret ? decryptSafe(integration.webhookSecret) : "";
+      } else {
+        const stored = (integration.credentials as Record<string, string | undefined> | undefined)
+          ?.apiKey;
+        plaintext = stored ? decryptSafe(stored) : "";
+      }
+      if (!plaintext) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "secret not set" });
+      }
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        action: "integration.secret_revealed",
+        subjectType: "integration",
+        subjectId: new Types.ObjectId(input.id),
+        meta: { provider: integration.provider, which: input.which },
+      });
+      return { value: plaintext };
     }),
 
   disconnect: protectedProcedure

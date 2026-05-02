@@ -4,6 +4,7 @@ import { cloneElement, isValidElement, useId } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { PHONE_RE } from "@ecom/types";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -13,7 +14,7 @@ import { Label } from "@/components/ui/label";
 const schema = z.object({
   orderNumber: z.string().optional(),
   customerName: z.string().min(1),
-  customerPhone: z.string().regex(/^\+?[0-9]{7,15}$/, "Invalid phone"),
+  customerPhone: z.string().regex(PHONE_RE, "Invalid phone"),
   customerAddress: z.string().min(1),
   customerDistrict: z.string().min(1),
   itemName: z.string().min(1),

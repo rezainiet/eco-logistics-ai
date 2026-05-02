@@ -6,64 +6,86 @@ import {
   Merchant,
   TrackingEvent,
   TrackingSession,
-  TRACKING_EVENT_TYPES,
   type TrackingEventType,
 } from "@ecom/db";
 import { resolveIdentityForOrder } from "../ingest.js";
 import { Order } from "@ecom/db";
 import { normalizePhoneOrRaw, phoneLookupVariants } from "../../lib/phone.js";
+import {
+  checkIdenticalPayloads,
+  checkRateLimits,
+  checkSpike,
+  claimSessionOwnership,
+  collectorInflight,
+  recordAccepted,
+  recordFlag,
+  recordRejected,
+  releaseCollectorSlot,
+  signPayload,
+  snapshotMetrics,
+  tryAcquireCollectorSlot,
+  validateBatch,
+  verifyHmac,
+  type FlagReason,
+  type RejectReason,
+  type ValidatedEvent,
+} from "../../lib/tracking-guard.js";
 
 /**
- * Behavior collector. Public endpoint hit by the storefront SDK with a
- * tracking key (resolves to merchantId server-side). Idempotent on
- * `(merchantId, sessionId, clientEventId)` — replays from a flaky network
- * never duplicate-count.
+ * Behavior collector — public endpoint hit by the storefront SDK.
+ *
+ * Hardening pass adds: multi-tier rate limit (IP / key / merchant / session),
+ * strict event validation, optional HMAC signing, identical-payload spam
+ * dedupe, cross-merchant session ownership, spike flagging, concurrency
+ * cap to isolate the collector from the order/trpc path.
  *
  * Trust boundary: never trusts client-supplied IP/UA — we read them from the
  * request. PII (phone/email) is accepted only on identify/checkout_submit
- * events, and lower-cased + size-capped.
- *
- * Rate-limiting at the SDK is handled by the existing `globalLimiter`
- * mounted at /trpc — we keep this collector under a tighter cap (250
- * requests/min/IP) to absorb storefront bursts without falling over.
+ * events, lower-cased + size-capped.
  */
 export const trackingRouter = express.Router();
 
 const MAX_BATCH = 50;
 const MAX_PROPERTY_BYTES = 8 * 1024;
+const MAX_SESSION_EVENT_COUNT = 5000;
 
-// Tracking-key → merchantId lookup. Keys are stable and hot — cache aggressively.
-const keyCache = new LRUCache<string, string>({ max: 5_000, ttl: 5 * 60_000 });
+const keyCache = new LRUCache<
+  string,
+  { merchantId: string; secret: string | null; strict: boolean }
+>({ max: 5_000, ttl: 5 * 60_000 });
 
-// Coarse per-IP rate limiter (250 reqs/min/IP, sliding 60s buckets). This is
-// distinct from the global tRPC limiter — collector traffic is multi-tenant
-// and we don't want a noisy storefront to starve the API path.
-const ipBuckets = new LRUCache<string, { count: number; resetAt: number }>({
-  max: 50_000,
-  ttl: 5 * 60_000,
-});
-
-function rateLimitOk(ip: string): boolean {
-  const now = Date.now();
-  const existing = ipBuckets.get(ip);
-  if (!existing || existing.resetAt < now) {
-    ipBuckets.set(ip, { count: 1, resetAt: now + 60_000 });
-    return true;
-  }
-  existing.count += 1;
-  return existing.count <= 250;
-}
-
-async function resolveMerchantIdFromKey(key: string): Promise<string | null> {
-  if (!key || key.length < 8) return null;
+async function resolveMerchantFromKey(key: string): Promise<{
+  merchantId: string;
+  secret: string | null;
+  strict: boolean;
+} | null> {
+  if (!key || key.length < 8 || key.length > 80) return null;
   const cached = keyCache.get(key);
   if (cached) return cached;
-  const m = await Merchant.findOne({ trackingKey: key }).select("_id").lean();
+  const m = await Merchant.findOne({ trackingKey: key })
+    .select("_id trackingSecret trackingStrictHmac")
+    .lean();
   if (!m) return null;
-  const id = String(m._id);
-  keyCache.set(key, id);
-  return id;
+  const profile = {
+    merchantId: String(m._id),
+    secret:
+      ((m as { trackingSecret?: string | null }).trackingSecret ?? null) || null,
+    strict: !!(m as { trackingStrictHmac?: boolean }).trackingStrictHmac,
+  };
+  keyCache.set(key, profile);
+  return profile;
 }
+
+/**
+ * Cache the per-(merchantId, sessionId) event count so the per-session
+ * cap doesn't require a DB count on every batch. The count drifts over
+ * the LRU TTL — that's fine, the DB-side check below is authoritative
+ * and only runs when the cache says we're getting close to the cap.
+ */
+const sessionCountCache = new LRUCache<string, number>({
+  max: 100_000,
+  ttl: 60 * 60_000,
+});
 
 function clamp(value: unknown, max: number): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -102,208 +124,405 @@ interface IncomingEvent {
   repeatVisitor?: boolean;
 }
 
+/**
+ * Structured drop logger — sampled to 1-in-N at high traffic so we don't
+ * fill the log shipper. Uses console.warn so existing telemetry pipelines
+ * pick it up without a code change.
+ */
+let dropLogCounter = 0;
+function logDrop(
+  reason: RejectReason,
+  ctx: { ip: string; merchantId?: string | null; trackingKey?: string },
+): void {
+  dropLogCounter++;
+  if (dropLogCounter % 50 !== 1 && reason.startsWith("rate_limited")) return;
+  console.warn(
+    JSON.stringify({
+      msg: "tracker_drop",
+      reason,
+      ip: ctx.ip,
+      merchantId: ctx.merchantId ?? null,
+      trackingKey: ctx.trackingKey ? `${ctx.trackingKey.slice(0, 8)}…` : null,
+    }),
+  );
+}
+
+function logFlag(
+  reason: FlagReason,
+  ctx: { merchantId: string; sessionId?: string },
+): void {
+  console.warn(
+    JSON.stringify({
+      msg: "tracker_flag",
+      reason,
+      merchantId: ctx.merchantId,
+      sessionId: ctx.sessionId ?? null,
+    }),
+  );
+}
+
+/**
+ * We need the raw body for HMAC verification. `express.json` consumes the
+ * stream — switch to a verify-callback that captures rawBody on the
+ * request, then run JSON.parse manually.
+ */
+const collectorJson = express.raw({
+  type: ["application/json", "text/plain"],
+  limit: "256kb",
+});
+
 trackingRouter.post(
   "/collect",
-  express.json({ limit: "256kb" }),
+  collectorJson,
   async (req: Request, res: Response) => {
     const ip = req.ip ?? "unknown";
-    if (!rateLimitOk(ip)) {
-      return res.status(429).json({ ok: false, error: "rate_limited" });
-    }
 
-    const body = req.body as { trackingKey?: string; events?: IncomingEvent[] };
-    if (!body || typeof body !== "object" || !body.trackingKey) {
-      return res.status(400).json({ ok: false, error: "missing trackingKey" });
-    }
-    const events = Array.isArray(body.events) ? body.events : [];
-    if (events.length === 0) {
-      return res.json({ ok: true, accepted: 0 });
-    }
-    if (events.length > MAX_BATCH) {
-      return res.status(413).json({ ok: false, error: "batch too large" });
-    }
-
-    const merchantId = await resolveMerchantIdFromKey(body.trackingKey);
-    if (!merchantId) {
-      return res.status(401).json({ ok: false, error: "unknown tracking key" });
-    }
-    const merchantOid = new Types.ObjectId(merchantId);
-    const ua = clamp(req.headers["user-agent"], 500);
-    const docs: Record<string, unknown>[] = [];
-
-    let identityPhone: string | undefined;
-    let identityEmail: string | undefined;
-    let firstAt: Date | null = null;
-    let lastAt: Date | null = null;
-
-    for (const ev of events) {
-      if (!ev || typeof ev !== "object") continue;
-      if (!TRACKING_EVENT_TYPES.includes(ev.type)) continue;
-      if (typeof ev.sessionId !== "string" || ev.sessionId.length < 6) continue;
-
-      const occurredAt = ev.occurredAt ? new Date(ev.occurredAt) : new Date();
-      if (Number.isNaN(occurredAt.getTime())) continue;
-      // Reject far-future / ancient timestamps to defend against clock manipulation.
-      const skew = Math.abs(Date.now() - occurredAt.getTime());
-      if (skew > 24 * 60 * 60 * 1000) continue;
-
-      if (firstAt === null || occurredAt < firstAt) firstAt = occurredAt;
-      if (lastAt === null || occurredAt > lastAt) lastAt = occurredAt;
-
-      const rawPhone = clamp(ev.phone, 32);
-      const phone = rawPhone ? (normalizePhoneOrRaw(rawPhone) ?? rawPhone) : undefined;
-      const email = clamp(ev.email, 200)?.toLowerCase();
-      if (phone) identityPhone = phone;
-      if (email) identityEmail = email;
-
-      docs.push({
-        merchantId: merchantOid,
-        sessionId: ev.sessionId.slice(0, 64),
-        anonId: clamp(ev.anonId, 64),
-        type: ev.type,
-        clientEventId: clamp(ev.clientEventId, 64),
-        url: clamp(ev.url, 1000),
-        path: clamp(ev.path, 500),
-        referrer: clamp(ev.referrer, 1000),
-        campaign: ev.campaign
-          ? {
-              source: clamp(ev.campaign.source, 80),
-              medium: clamp(ev.campaign.medium, 80),
-              name: clamp(ev.campaign.name, 200),
-              term: clamp(ev.campaign.term, 120),
-              content: clamp(ev.campaign.content, 200),
-            }
-          : undefined,
-        device: ev.device
-          ? {
-              type: clamp(ev.device.type, 30),
-              os: clamp(ev.device.os, 60),
-              browser: clamp(ev.device.browser, 60),
-              viewport: clamp(ev.device.viewport, 40),
-              language: clamp(ev.device.language, 20),
-            }
-          : undefined,
-        properties: safeProps(ev.properties),
-        phone,
-        email,
-        ip,
-        userAgent: ua,
-        occurredAt,
-        receivedAt: new Date(),
-      });
-    }
-
-    if (docs.length === 0) {
-      return res.json({ ok: true, accepted: 0 });
+    // Layer F — concurrency cap. Returns 503 immediately when the collector
+    // is saturated so we never starve the order/trpc HTTP pool. The SDK
+    // should treat 503 as "back off + retry with jitter".
+    if (!tryAcquireCollectorSlot()) {
+      recordRejected("overload_concurrency", null);
+      logDrop("overload_concurrency", { ip });
+      return res.status(503).json({ ok: false, error: "collector_overloaded" });
     }
 
     try {
-      await TrackingEvent.insertMany(docs, { ordered: false });
-    } catch (err: unknown) {
-      const e = err as { code?: number };
-      // Duplicate clientEventIds (retries) hit our unique index — that's the
-      // happy path for idempotency. Anything else we log and continue.
-      if (e?.code !== 11000) {
-        console.error("[tracker] insert failed", (err as Error).message);
+      const rawBody = Buffer.isBuffer(req.body)
+        ? (req.body as Buffer).toString("utf8")
+        : "";
+      let body: { trackingKey?: string; events?: unknown[] };
+      try {
+        body = JSON.parse(rawBody) as typeof body;
+      } catch {
+        recordRejected("validation_shape", null);
+        return res.status(400).json({ ok: false, error: "invalid_json" });
       }
-    }
+      if (!body || typeof body !== "object" || typeof body.trackingKey !== "string") {
+        recordRejected("validation_shape", null);
+        return res.status(400).json({ ok: false, error: "missing_trackingKey" });
+      }
+      const events = Array.isArray(body.events) ? body.events : [];
+      if (events.length === 0) {
+        return res.json({ ok: true, accepted: 0 });
+      }
+      if (events.length > MAX_BATCH) {
+        recordRejected("validation_shape", null);
+        return res.status(413).json({ ok: false, error: "batch_too_large" });
+      }
 
-    // Update the session aggregate. One upsert per session — keeps the
-    // collector path roughly O(events / sessions-per-batch).
-    const session = events[0]!;
-    if (session && firstAt && lastAt) {
-      const repeatVisitor = events.some((e) => e?.repeatVisitor) || false;
-      const landingPath = clamp(session.path, 500);
-      const referrer = clamp(session.referrer, 1000);
-      const campaign = session.campaign
-        ? {
-            source: clamp(session.campaign.source, 80),
-            medium: clamp(session.campaign.medium, 80),
-            name: clamp(session.campaign.name, 200),
-          }
-        : undefined;
-      const device = session.device
-        ? {
-            type: clamp(session.device.type, 30),
-            os: clamp(session.device.os, 60),
-            browser: clamp(session.device.browser, 60),
-          }
-        : undefined;
+      // Resolve merchant + secret in one cached lookup. We need the secret
+      // before HMAC verification, which has to run before any DB I/O.
+      const profile = await resolveMerchantFromKey(body.trackingKey);
+      if (!profile) {
+        recordRejected("validation_shape", null);
+        return res.status(401).json({ ok: false, error: "unknown_tracking_key" });
+      }
+      const { merchantId, secret, strict } = profile;
+      const merchantOid = new Types.ObjectId(merchantId);
 
-      const counts = countEvents(events);
-      const update: Record<string, unknown> = {
-        $setOnInsert: {
+      // Layer C — HMAC verification (optional unless strict). Stale-timestamp
+      // and signature failures are hard 401s — there is no legitimate cause
+      // for a signed batch to fail.
+      const sigHeader = (req.headers["x-track-signature"] as string | undefined) ?? null;
+      const hmac = verifyHmac({
+        rawBody,
+        signatureHeader: sigHeader,
+        secret,
+        strict,
+      });
+      if (!hmac.ok) {
+        recordRejected(hmac.reason, merchantId);
+        logDrop(hmac.reason, { ip, merchantId, trackingKey: body.trackingKey });
+        return res.status(401).json({ ok: false, error: hmac.reason });
+      }
+      if (!hmac.signed && (secret || strict)) {
+        // Merchant has a secret configured but this batch wasn't signed —
+        // flag for observability; in strict mode we'd already have returned.
+        recordFlag("unsigned_batch", merchantId);
+        logFlag("unsigned_batch", { merchantId });
+      }
+
+      // Layer B — strict per-event validation BEFORE consuming rate-limit
+      // tokens. Quick-fail on shape errors so a flood of malformed events
+      // can't burn the rate-limit budget.
+      const validation = validateBatch(events, Date.now());
+      if (!validation.ok) {
+        recordRejected(validation.reason, merchantId);
+        logDrop(validation.reason, { ip, merchantId });
+        return res
+          .status(400)
+          .json({ ok: false, error: validation.reason, detail: validation.detail });
+      }
+      const validated = validation.events;
+      const sessionIds = [...new Set(validated.map((e) => e.sessionId))];
+
+      // Layer E — cross-merchant session ownership. First merchant to claim
+      // a sessionId owns it for 24h; reject if any sessionId in this batch
+      // is already pinned to a different merchant.
+      for (const sid of sessionIds) {
+        if (claimSessionOwnership(sid, merchantId) === "cross_merchant") {
+          recordRejected("session_cross_merchant", merchantId);
+          logDrop("session_cross_merchant", { ip, merchantId });
+          return res
+            .status(409)
+            .json({ ok: false, error: "session_cross_merchant" });
+        }
+      }
+
+      // Per-session inflation cap — count events already stored for the
+      // (merchantId, sessionId) pair, refuse new batches that would push
+      // past the cap. The cache is approximate; a DB check enforces the
+      // ceiling once the cached count gets close. This kills "fake session"
+      // attacks where one bot sends millions of events under one sessionId.
+      for (const sid of sessionIds) {
+        const k = `${merchantId}:${sid}`;
+        const cached = sessionCountCache.get(k) ?? 0;
+        const incoming = validated.filter((e) => e.sessionId === sid).length;
+        if (cached + incoming >= MAX_SESSION_EVENT_COUNT) {
+          // Cache is approximate — confirm against the DB before refusing.
+          const actual = await TrackingEvent.countDocuments({
+            merchantId: merchantOid,
+            sessionId: sid,
+          });
+          sessionCountCache.set(k, actual);
+          if (actual + incoming > MAX_SESSION_EVENT_COUNT) {
+            recordRejected("validation_session_cap", merchantId);
+            logDrop("validation_session_cap", { ip, merchantId });
+            return res
+              .status(409)
+              .json({ ok: false, error: "session_event_cap" });
+          }
+        }
+      }
+
+      // Layer A — multi-tier rate limit. IP / key / merchant / per-session.
+      const rl = checkRateLimits({
+        ip,
+        trackingKey: body.trackingKey,
+        merchantId,
+        sessionIds,
+        eventCount: validated.length,
+      });
+      if (!rl.ok) {
+        recordRejected(rl.reason, merchantId);
+        logDrop(rl.reason, { ip, merchantId, trackingKey: body.trackingKey });
+        return res.status(429).json({ ok: false, error: rl.reason });
+      }
+
+      // Layer D — anti-spam: identical-payload dedupe + spike flag.
+      // Identical payloads dropped silently (the SDK shouldn't be sending
+      // them); spike merchants accepted but flagged for review.
+      const dedupe = checkIdenticalPayloads({
+        merchantId,
+        events: validated,
+      });
+      if (dedupe.duplicates > 0) {
+        recordRejected("spam_identical_payload", merchantId, dedupe.duplicates);
+        logDrop("spam_identical_payload", { ip, merchantId });
+      }
+      if (dedupe.uniques.length === 0) {
+        return res.json({ ok: true, accepted: 0, dropped: dedupe.duplicates });
+      }
+      const eventsToWrite = dedupe.uniques;
+
+      if (checkSpike(merchantId, eventsToWrite.length)) {
+        recordFlag("spike_merchant", merchantId);
+        logFlag("spike_merchant", { merchantId });
+      }
+      // Rapid-fire flag — separate from spike, and per-session: any session
+      // that contributed > 30 events to this single batch is flagged.
+      const perSession = new Map<string, number>();
+      for (const ev of eventsToWrite) {
+        perSession.set(ev.sessionId, (perSession.get(ev.sessionId) ?? 0) + 1);
+      }
+      for (const [sid, count] of perSession) {
+        if (count > 30) {
+          recordFlag("rapid_fire_session", merchantId);
+          logFlag("rapid_fire_session", { merchantId, sessionId: sid });
+        }
+      }
+
+      // ---- Persistence (existing logic, fed from validated events) -------
+      const ua = clamp(req.headers["user-agent"], 500);
+      const docs: Record<string, unknown>[] = [];
+      let identityPhone: string | undefined;
+      let identityEmail: string | undefined;
+      let firstAt: Date | null = null;
+      let lastAt: Date | null = null;
+
+      for (const ev of eventsToWrite) {
+        const raw = ev.raw as IncomingEvent;
+        const occurredAt = ev.occurredAt;
+        if (firstAt === null || occurredAt < firstAt) firstAt = occurredAt;
+        if (lastAt === null || occurredAt > lastAt) lastAt = occurredAt;
+        const rawPhone = clamp(raw.phone, 32);
+        const phone = rawPhone ? normalizePhoneOrRaw(rawPhone) ?? rawPhone : undefined;
+        const email = clamp(raw.email, 200)?.toLowerCase();
+        if (phone) identityPhone = phone;
+        if (email) identityEmail = email;
+
+        docs.push({
           merchantId: merchantOid,
-          sessionId: session.sessionId.slice(0, 64),
-          firstSeenAt: firstAt,
-          landingPath,
-          referrer,
-          campaign,
-          device,
-          anonId: clamp(session.anonId, 64),
-        },
-        $inc: {
-          pageViews: counts.page_view,
-          productViews: counts.product_view,
-          addToCartCount: counts.add_to_cart,
-          checkoutStartCount: counts.checkout_start,
-          checkoutSubmitCount: counts.checkout_submit,
-          clickCount: counts.click,
-        },
-        $max: {
-          lastSeenAt: lastAt,
-          maxScrollDepth: counts.maxScroll,
-        },
-        $set: {
-          repeatVisitor,
-          ...(identityPhone ? { phone: identityPhone } : {}),
-          ...(identityEmail ? { email: identityEmail, customerHash: emailHash(identityEmail) } : {}),
-          ...(counts.checkout_submit > 0 ? { converted: true } : {}),
-          ...(counts.add_to_cart >= 2 && counts.checkout_submit === 0
-            ? { abandonedCart: true }
-            : {}),
-        },
-      };
+          sessionId: ev.sessionId.slice(0, 64),
+          anonId: clamp(raw.anonId, 64),
+          type: ev.type,
+          clientEventId: ev.clientEventId,
+          url: clamp(raw.url, 1000),
+          path: clamp(raw.path, 500),
+          referrer: clamp(raw.referrer, 1000),
+          campaign: raw.campaign
+            ? {
+                source: clamp(raw.campaign.source, 80),
+                medium: clamp(raw.campaign.medium, 80),
+                name: clamp(raw.campaign.name, 200),
+                term: clamp(raw.campaign.term, 120),
+                content: clamp(raw.campaign.content, 200),
+              }
+            : undefined,
+          device: raw.device
+            ? {
+                type: clamp(raw.device.type, 30),
+                os: clamp(raw.device.os, 60),
+                browser: clamp(raw.device.browser, 60),
+                viewport: clamp(raw.device.viewport, 40),
+                language: clamp(raw.device.language, 20),
+              }
+            : undefined,
+          properties: safeProps(raw.properties),
+          phone,
+          email,
+          ip,
+          userAgent: ua,
+          occurredAt,
+          receivedAt: new Date(),
+        });
+      }
 
-      await TrackingSession.updateOne(
-        { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
-        update,
-        { upsert: true },
-      );
+      try {
+        await TrackingEvent.insertMany(docs, { ordered: false });
+      } catch (err: unknown) {
+        const e = err as { code?: number };
+        // Duplicate clientEventIds (retries) hit our unique index — that's the
+        // happy path for idempotency. Anything else we log and continue.
+        if (e?.code !== 11000) {
+          console.error("[tracker] insert failed", (err as Error).message);
+        }
+      }
 
-      // Refresh durationMs as a separate pass — needs the firstSeenAt that
-      // may have just been upserted.
-      await TrackingSession.updateOne(
-        { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
-        [
-          {
-            $set: {
-              durationMs: {
-                $max: [
-                  0,
-                  { $subtract: ["$lastSeenAt", "$firstSeenAt"] },
-                ],
+      // Bump the session-count cache for each contributing session.
+      for (const [sid, count] of perSession) {
+        const k = `${merchantId}:${sid}`;
+        sessionCountCache.set(k, (sessionCountCache.get(k) ?? 0) + count);
+      }
+
+      // Update the session aggregate. One upsert per session.
+      const session = events[0] as IncomingEvent | undefined;
+      if (session && firstAt && lastAt) {
+        const repeatVisitor =
+          (events as IncomingEvent[]).some((e) => e?.repeatVisitor) || false;
+        const landingPath = clamp(session.path, 500);
+        const referrer = clamp(session.referrer, 1000);
+        const campaign = session.campaign
+          ? {
+              source: clamp(session.campaign.source, 80),
+              medium: clamp(session.campaign.medium, 80),
+              name: clamp(session.campaign.name, 200),
+            }
+          : undefined;
+        const device = session.device
+          ? {
+              type: clamp(session.device.type, 30),
+              os: clamp(session.device.os, 60),
+              browser: clamp(session.device.browser, 60),
+            }
+          : undefined;
+
+        const counts = countEvents(events as IncomingEvent[]);
+        const update: Record<string, unknown> = {
+          $setOnInsert: {
+            merchantId: merchantOid,
+            sessionId: session.sessionId.slice(0, 64),
+            firstSeenAt: firstAt,
+            landingPath,
+            referrer,
+            campaign,
+            device,
+            anonId: clamp(session.anonId, 64),
+          },
+          $inc: {
+            pageViews: counts.page_view,
+            productViews: counts.product_view,
+            addToCartCount: counts.add_to_cart,
+            checkoutStartCount: counts.checkout_start,
+            checkoutSubmitCount: counts.checkout_submit,
+            clickCount: counts.click,
+          },
+          $max: {
+            lastSeenAt: lastAt,
+            maxScrollDepth: counts.maxScroll,
+          },
+          $set: {
+            repeatVisitor,
+            ...(identityPhone ? { phone: identityPhone } : {}),
+            ...(identityEmail
+              ? { email: identityEmail, customerHash: emailHash(identityEmail) }
+              : {}),
+            ...(counts.checkout_submit > 0 ? { converted: true } : {}),
+            ...(counts.add_to_cart >= 2 && counts.checkout_submit === 0
+              ? { abandonedCart: true }
+              : {}),
+          },
+        };
+
+        await TrackingSession.updateOne(
+          { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
+          update,
+          { upsert: true },
+        );
+
+        await TrackingSession.updateOne(
+          { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
+          [
+            {
+              $set: {
+                durationMs: {
+                  $max: [0, { $subtract: ["$lastSeenAt", "$firstSeenAt"] }],
+                },
               },
             },
-          },
-        ],
-      );
-    }
+          ],
+        );
+      }
 
-    // If the merchant has an open order with this phone/email created in the
-    // last 30 days that doesn't yet point to this session, stitch backwards.
-    if ((identityPhone || identityEmail) && session?.sessionId) {
-      stitchExistingOrder({
-        merchantId: merchantOid,
-        sessionId: session.sessionId,
-        phone: identityPhone,
-        email: identityEmail,
-      }).catch((err) => console.error("[tracker] back-stitch failed", err));
-    }
+      if ((identityPhone || identityEmail) && session?.sessionId) {
+        stitchExistingOrder({
+          merchantId: merchantOid,
+          sessionId: session.sessionId,
+          phone: identityPhone,
+          email: identityEmail,
+        }).catch((err) => console.error("[tracker] back-stitch failed", err));
+      }
 
-    return res.json({ ok: true, accepted: docs.length });
+      recordAccepted(merchantId, eventsToWrite.length);
+      return res.json({
+        ok: true,
+        accepted: docs.length,
+        dropped: dedupe.duplicates,
+      });
+    } finally {
+      releaseCollectorSlot();
+    }
   },
 );
+
+/**
+ * Health snapshot for the collector — admin-only stats. Surface counters,
+ * top merchants by traffic, current concurrency. Mounted under the
+ * collector router so it shares the same isolation lane.
+ */
+trackingRouter.get("/_metrics", (_req, res) => {
+  res.json({ ...snapshotMetrics(25), inflight: collectorInflight() });
+});
 
 interface EventCounts {
   page_view: number;
@@ -390,9 +609,7 @@ async function stitchExistingOrder(args: {
 }
 
 /**
- * Generate-on-read tracking key for the merchant. Idempotent — once minted,
- * the same key is reused. Returns the public-safe identifier embedded in the
- * SDK script tag.
+ * Generate-on-read tracking key for the merchant. Idempotent.
  */
 export async function ensureTrackingKey(merchantId: Types.ObjectId): Promise<string> {
   const existing = await Merchant.findById(merchantId).select("trackingKey").lean();
@@ -402,7 +619,41 @@ export async function ensureTrackingKey(merchantId: Types.ObjectId): Promise<str
     { _id: merchantId, trackingKey: { $exists: false } },
     { $set: { trackingKey: key } },
   );
-  // Re-read in case another request raced.
   const fresh = await Merchant.findById(merchantId).select("trackingKey").lean();
   return fresh?.trackingKey ?? key;
 }
+
+/**
+ * Mint or rotate the merchant's HMAC tracking secret. Returned in plaintext
+ * — the merchant pastes it into the SDK once. Rotating invalidates every
+ * previously-issued signature.
+ */
+export async function rotateTrackingSecret(
+  merchantId: Types.ObjectId,
+): Promise<string> {
+  const secret = randomBytes(32).toString("base64url");
+  await Merchant.updateOne(
+    { _id: merchantId },
+    { $set: { trackingSecret: secret } },
+  );
+  // Invalidate the per-key cache so the next request picks up the new
+  // secret immediately. LRUCache<v10>.entries() yields [key, value, ttl] —
+  // we only need key/value.
+  const targetId = String(merchantId);
+  for (const [k, v] of keyCache.entries()) {
+    if (v.merchantId === targetId) keyCache.delete(k);
+  }
+  return secret;
+}
+
+/** Helper exported for the SDK + tests — sign a payload with a secret. */
+export const signTrackingPayload = signPayload;
+
+/** Helper for tests — clear the per-key resolution cache. */
+export function __resetCollectorCache(): void {
+  keyCache.clear();
+  sessionCountCache.clear();
+}
+
+// Re-export so tests can import without reaching into internals.
+export type { ValidatedEvent };

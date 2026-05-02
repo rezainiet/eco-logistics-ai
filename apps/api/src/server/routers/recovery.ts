@@ -7,7 +7,7 @@ import {
   RECOVERY_CHANNELS,
   RECOVERY_STATUSES,
 } from "@ecom/db";
-import { billableProcedure, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
+import { billableProcedure, merchantObjectId, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
 import { writeAudit } from "../../lib/audit.js";
 import {
   assertBehaviorAnalytics,
@@ -25,10 +25,6 @@ import type { PlanTier } from "../../lib/plans.js";
  * (call/SMS/email) reuse the existing call-center + notification stacks —
  * this router is the queue + state-machine, not a new comms pipe.
  */
-
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
 
 function tierFromCtx(ctx: { subscription?: SubscriptionSnapshot | null | undefined }): PlanTier {
   return (ctx.subscription?.tier ?? "starter") as PlanTier;

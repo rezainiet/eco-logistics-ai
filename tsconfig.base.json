@@ -13,7 +13,14 @@
     "isolatedModules": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ecom/db": ["./packages/db/src/index.ts"],
+      "@ecom/db/*": ["./packages/db/src/*"],
+      "@ecom/types": ["./packages/types/src/index.ts"],
+      "@ecom/types/*": ["./packages/types/src/*"]
+    }
   },
   "exclude": ["node_modules", "dist", ".next"]
 }

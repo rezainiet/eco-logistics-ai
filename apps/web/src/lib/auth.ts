@@ -27,10 +27,22 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
       if (user) {
         token.role = user.role;
         token.apiToken = user.apiToken;
+      }
+      // Silent refresh — the browser-side keeper calls
+      // useSession().update({ apiToken }) after exchanging the
+      // HttpOnly refresh cookie for a new access JWT. NextAuth surfaces
+      // that as `trigger === "update"` plus the partial session object.
+      // Without this branch the new token is dropped on the floor and
+      // every subsequent tRPC call still uses the dead one.
+      if (trigger === "update" && session && typeof session === "object") {
+        const next = (session as { apiToken?: unknown }).apiToken;
+        if (typeof next === "string" && next.length > 0) {
+          token.apiToken = next;
+        }
       }
       return token;
     },

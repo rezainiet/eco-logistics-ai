@@ -2,7 +2,15 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
-    "rootDir": "src"
+    "rootDir": "src",
+    "outDir": "dist",
+    "paths": {
+      "@ecom/db": ["../../packages/db/src/index.d.ts"],
+      "@ecom/db/*": ["../../packages/db/src/*"],
+      "@ecom/types": ["../../packages/types/src/index.d.ts"],
+      "@ecom/types/*": ["../../packages/types/src/*"]
+    }
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "exclude": ["tests", "vitest.config.ts"]
 }

@@ -22,7 +22,11 @@ type FormValues = z.infer<typeof schema>;
 export default function LoginPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const callbackUrl = params.get("callbackUrl") ?? "/dashboard/orders";
+  // Default to /dashboard so the layout's NewMerchantRedirect can route
+  // fresh merchants to the getting-started flow and returning merchants to
+  // the KPI overview. The previous default (/dashboard/orders) dropped
+  // every fresh signup straight onto an empty orders table.
+  const callbackUrl = params.get("callbackUrl") ?? "/dashboard";
   const [error, setError] = useState<string | null>(null);
 
   const {

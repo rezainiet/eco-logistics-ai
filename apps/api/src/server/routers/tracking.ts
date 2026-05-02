@@ -2,8 +2,10 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
 import { Merchant, TrackingEvent, TrackingSession } from "@ecom/db";
-import { billableProcedure, protectedProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
-import { ensureTrackingKey } from "../tracking/collector.js";
+import { billableProcedure, merchantObjectId, protectedProcedure, publicProcedure, router, type SubscriptionSnapshot } from "../trpc.js";
+import { fetchPublicTimeline } from "../../lib/public-tracking.js";
+import { cached } from "../../lib/cache.js";
+import { ensureTrackingKey, rotateTrackingSecret } from "../tracking/collector.js";
 import {
   assertAdvancedBehaviorTables,
   assertBehaviorAnalytics,
@@ -13,12 +15,37 @@ import {
 } from "../../lib/entitlements.js";
 import type { PlanTier } from "../../lib/plans.js";
 
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
-}
-
 function sinceFor(days: number): Date {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
+// Per-IP sliding-window limiter for the public tracking lookup. Defends
+// against tracking-code enumeration on an unauthenticated endpoint. Held
+// in-process — the global Express rate limiter (Redis-backed) is the
+// authoritative bucket; this is a tighter inner ring for one procedure.
+const PUBLIC_TRACK_WINDOW_MS = 60_000;
+const PUBLIC_TRACK_MAX = 30;
+const publicTrackBuckets = new Map<string, number[]>();
+
+function checkPublicTrackingRate(ip: string): boolean {
+  const now = Date.now();
+  const cutoff = now - PUBLIC_TRACK_WINDOW_MS;
+  const hits = (publicTrackBuckets.get(ip) ?? []).filter((t) => t > cutoff);
+  if (hits.length >= PUBLIC_TRACK_MAX) {
+    publicTrackBuckets.set(ip, hits);
+    return false;
+  }
+  hits.push(now);
+  publicTrackBuckets.set(ip, hits);
+  // Opportunistic cleanup so the map cannot grow unbounded under attack.
+  if (publicTrackBuckets.size > 5_000) {
+    for (const [k, v] of publicTrackBuckets) {
+      const fresh = v.filter((t) => t > cutoff);
+      if (fresh.length === 0) publicTrackBuckets.delete(k);
+      else publicTrackBuckets.set(k, fresh);
+    }
+  }
+  return true;
 }
 
 function tierFromCtx(ctx: { subscription?: SubscriptionSnapshot | null | undefined }): PlanTier {
@@ -33,12 +60,36 @@ function tierFromCtx(ctx: { subscription?: SubscriptionSnapshot | null | undefin
  */
 
 export const trackingRouter = router({
+  /**
+   * Rotate (or first-mint) the merchant's HMAC tracking secret. Plaintext
+   * is returned ONCE — the merchant pastes it into the SDK config. After
+   * rotation, every previously-issued signature becomes invalid; merchants
+   * who flip strict mode on must roll their SDK at the same time.
+   */
+  rotateSecret: protectedProcedure.mutation(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    const secret = await rotateTrackingSecret(merchantId);
+    return { secret };
+  }),
+
+  /** Toggle strict HMAC enforcement. Once strict, unsigned batches 401. */
+  setStrictHmac: protectedProcedure
+    .input(z.object({ strict: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      await Merchant.updateOne(
+        { _id: merchantId },
+        { $set: { trackingStrictHmac: input.strict } },
+      );
+      return { ok: true, strict: input.strict };
+    }),
+
   /** Returns the merchant's storefront tracking key + the SDK snippet to embed. */
   getInstallation: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
     const key = await ensureTrackingKey(merchantId);
     const collector = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/track/collect`;
-    const sdkUrl = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3000"}/sdk.js`;
+    const sdkUrl = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3001"}/sdk.js`;
     const snippet = `<script async src="${sdkUrl}" data-tracking-key="${key}" data-collector="${collector}"></script>`;
 
     // Install verification — single round-trip to MongoDB. We rely on the
@@ -237,26 +288,26 @@ export const trackingRouter = router({
       const productIds = rows.map((r) => r._id).filter(Boolean);
       const cartRows = productIds.length
         ? await TrackingEvent.aggregate<{ _id: string; carts: number }>([
-            {
-              $match: {
-                merchantId,
-                type: "add_to_cart",
-                occurredAt: { $gte: since },
-                $or: [
-                  { "properties.productId": { $in: productIds } },
-                  { "properties.sku": { $in: productIds } },
-                ],
-              },
+          {
+            $match: {
+              merchantId,
+              type: "add_to_cart",
+              occurredAt: { $gte: since },
+              $or: [
+                { "properties.productId": { $in: productIds } },
+                { "properties.sku": { $in: productIds } },
+              ],
             },
-            {
-              $group: {
-                _id: {
-                  $ifNull: ["$properties.productId", "$properties.sku"],
-                },
-                carts: { $sum: 1 },
+          },
+          {
+            $group: {
+              _id: {
+                $ifNull: ["$properties.productId", "$properties.sku"],
               },
+              carts: { $sum: 1 },
             },
-          ])
+          },
+        ])
         : [];
       const cartMap = new Map(cartRows.map((c) => [c._id, c.carts]));
       return rows
@@ -498,6 +549,39 @@ export const trackingRouter = router({
         repeatVisitor: s.repeatVisitor,
         converted: s.converted,
       }));
+    }),
+
+  /**
+   * Public-facing tracking timeline for the customer-share page
+   * (`/track/[code]`). No authentication. Returns ONLY safe fields
+   * (no phone, no full address, no fraud, no internal ids). Cached
+   * in Redis for 30s so a viral order link cannot hammer Mongo.
+   *
+   * Per-IP rate-limited (30/min) to block tracking-code enumeration —
+   * codes can be short and the endpoint distinguishes hit/miss.
+   */
+  getPublicTimeline: publicProcedure
+    .input(z.object({ code: z.string().trim().min(4).max(100) }))
+    .query(async ({ ctx, input }) => {
+      const ip = ctx.request?.ip ?? "unknown";
+      if (!checkPublicTrackingRate(ip)) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: "Too many tracking lookups. Try again in a minute.",
+        });
+      }
+      const result = await cached(
+        `public-tracking:${input.code}`,
+        30,
+        () => fetchPublicTimeline(input.code),
+      );
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "We could not find that tracking code. Double-check the link or contact the merchant.",
+        });
+      }
+      return result;
     }),
 
   /** Refresh tracking key (rotate). Audit-logged via Merchant write. */

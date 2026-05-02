@@ -7,6 +7,10 @@ import { callRouter } from "./call.js";
 import { fraudRouter } from "./fraud.js";
 import { billingRouter } from "./billing.js";
 import { adminBillingRouter } from "./adminBilling.js";
+import { adminFraudNetworkRouter } from "./adminFraudNetwork.js";
+import { adminAccessRouter } from "./adminAccess.js";
+import { adminObservabilityRouter } from "./adminObservability.js";
+import { adminAuditRouter } from "./adminAudit.js";
 import { notificationsRouter } from "./notifications.js";
 import { integrationsRouter } from "./integrations.js";
 import { trackingRouter } from "./tracking.js";
@@ -23,6 +27,10 @@ export const appRouter = router({
   fraud: fraudRouter,
   billing: billingRouter,
   adminBilling: adminBillingRouter,
+  adminFraudNetwork: adminFraudNetworkRouter,
+  adminAccess: adminAccessRouter,
+  adminObservability: adminObservabilityRouter,
+  adminAudit: adminAuditRouter,
   notifications: notificationsRouter,
   integrations: integrationsRouter,
   tracking: trackingRouter,

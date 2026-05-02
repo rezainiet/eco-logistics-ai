@@ -1,5 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { Merchant } from "@ecom/db";
 import { authUserFor, callerFor, createMerchant, disconnectDb, resetDb } from "./helpers.js";
+import {
+  __resetSmsTransport,
+  __setSmsTransport,
+} from "../src/lib/sms/index.js";
 
 describe("merchantsRouter", () => {
   beforeEach(resetDb);
@@ -69,5 +74,51 @@ describe("merchantsRouter", () => {
     await caller.merchants.removeCourier({ name: "pathao" });
     const couriers = await caller.merchants.getCouriers();
     expect(couriers.find((c) => c.name === "pathao")).toBeUndefined();
+  });
+
+  describe("sendTestSms", () => {
+    it("sends to the merchant's stored phone and returns a masked suffix", async () => {
+      const m = await createMerchant();
+      // createMerchant defaults phone to +8801700000000 — last 4 = "0000".
+      const caller = callerFor(authUserFor(m));
+      const sent: Array<{ to: string; body: string }> = [];
+      __setSmsTransport({
+        async send({ to, body }) {
+          sent.push({ to, body });
+          return { ok: true, providerMessageId: "test-mid", providerStatus: "ok" };
+        },
+      });
+      try {
+        const result = await caller.merchants.sendTestSms();
+        expect(result.ok).toBe(true);
+        expect(result.phoneSuffix).toBe("0000");
+        expect(sent).toHaveLength(1);
+        expect(sent[0]!.body).toMatch(/SMS pipeline working/i);
+      } finally {
+        __resetSmsTransport();
+      }
+    });
+
+    it("rejects when the merchant has no phone configured", async () => {
+      const m = await createMerchant();
+      await Merchant.updateOne({ _id: m._id }, { $unset: { phone: "" } });
+      const caller = callerFor(authUserFor(m));
+      await expect(caller.merchants.sendTestSms()).rejects.toThrow(/phone/i);
+    });
+
+    it("surfaces provider failures as a 5xx-class error", async () => {
+      const m = await createMerchant();
+      const caller = callerFor(authUserFor(m));
+      __setSmsTransport({
+        async send() {
+          return { ok: false, error: "carrier rejected", providerStatus: "err" };
+        },
+      });
+      try {
+        await expect(caller.merchants.sendTestSms()).rejects.toThrow(/carrier rejected/);
+      } finally {
+        __resetSmsTransport();
+      }
+    });
   });
 });

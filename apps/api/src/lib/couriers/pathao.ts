@@ -1,9 +1,10 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { env } from "../../env.js";
 import {
   classifyHttpStatus,
   httpRequest,
+  withCourierBreaker,
   withRetry,
   type HttpRequestOptions,
 } from "./http.js";
@@ -224,7 +225,13 @@ export class PathaoAdapter implements CourierAdapter {
       : new HttpPathaoTransport(this.baseUrl));
   }
 
-  private async getAccessToken(): Promise<string> {
+  /** Stable per-account breaker key. One bad account doesn't trip the
+   * breaker for other Pathao customers on the same instance. */
+  private breakerKey(): string {
+    return `${PROVIDER}:${this.opts.credentials.accountId}`;
+  }
+
+  private async getAccessToken(signal?: AbortSignal): Promise<string> {
     const key = tokenCacheKey(this.opts.credentials, this.baseUrl);
     const cached = tokenCache.get(key);
     if (cached) return cached;
@@ -232,6 +239,7 @@ export class PathaoAdapter implements CourierAdapter {
     const { accountId, apiKey, apiSecret } = this.opts.credentials;
     const res = await this.transport.request<PathaoTokenPayload>("/aladdin/api/v1/issue-token", {
       method: "POST",
+      signal,
       body: {
         client_id: accountId,
         client_secret: apiKey,
@@ -261,7 +269,9 @@ export class PathaoAdapter implements CourierAdapter {
 
   async validateCredentials(): Promise<ValidationResult> {
     try {
-      await withRetry(() => this.getAccessToken(), { attempts: 2 });
+      await withCourierBreaker(this.breakerKey(), (signal) =>
+        withRetry(() => this.getAccessToken(signal), { attempts: 2, signal }),
+      );
       return { valid: true };
     } catch (err) {
       if (err instanceof CourierError && err.code === "auth_failed") {
@@ -275,132 +285,161 @@ export class PathaoAdapter implements CourierAdapter {
   }
 
   async createAWB(order: AWBRequest): Promise<AWBResponse> {
-    const token = await withRetry(() => this.getAccessToken(), { attempts: 2 });
-    const body = {
-      store_id: this.opts.credentials.accountId,
-      merchant_order_id: order.orderNumber,
-      recipient_name: order.customer.name,
-      recipient_phone: order.customer.phone,
-      recipient_address: order.customer.address,
-      recipient_city: order.customer.district,
-      delivery_type: 48,
-      item_type: 2,
-      item_quantity: order.items.reduce((n, i) => n + i.quantity, 0),
-      item_weight: order.weight ?? 0.5,
-      amount_to_collect: order.cod,
-      item_description:
-        order.notes ?? order.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
-    };
+    return withCourierBreaker(this.breakerKey(), async (signal) => {
+      const token = await withRetry(() => this.getAccessToken(signal), {
+        attempts: 2,
+        signal,
+      });
+      const body = {
+        store_id: this.opts.credentials.accountId,
+        merchant_order_id: order.orderNumber,
+        recipient_name: order.customer.name,
+        recipient_phone: order.customer.phone,
+        recipient_address: order.customer.address,
+        recipient_city: order.customer.district,
+        delivery_type: 48,
+        item_type: 2,
+        item_quantity: order.items.reduce((n, i) => n + i.quantity, 0),
+        item_weight: order.weight ?? 0.5,
+        amount_to_collect: order.cod,
+        item_description:
+          order.notes ?? order.items.map((i) => `${i.name} x${i.quantity}`).join(", "),
+      };
 
-    const res = await withRetry(
-      () =>
-        this.transport.request<PathaoOrderResponse>("/aladdin/api/v1/orders", {
-          method: "POST",
-          body,
-          accessToken: token,
-        }),
-      { attempts: 3 },
-    );
-    if (!res.ok) {
-      const { code, retryable } = classifyHttpStatus(res.status);
-      throw new CourierError(code, `pathao createAWB failed (${res.status})`, {
-        retryable,
-        status: res.status,
-        provider: PROVIDER,
+      const res = await withRetry(
+        () =>
+          this.transport.request<PathaoOrderResponse>("/aladdin/api/v1/orders", {
+            method: "POST",
+            body,
+            signal,
+            accessToken: token,
+            headers: order.idempotencyKey
+              ? { "Idempotency-Key": order.idempotencyKey }
+              : undefined,
+          }),
+        { attempts: 3, signal },
+      );
+      if (!res.ok) {
+        const { code, retryable } = classifyHttpStatus(res.status);
+        throw new CourierError(code, `pathao createAWB failed (${res.status})`, {
+          retryable,
+          status: res.status,
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
+      if (!res.data?.consignment_id) {
+        throw new CourierError(
+          "provider_error",
+          "pathao order response missing consignment_id",
+          {
+            provider: PROVIDER,
+            raw: res.data,
+          },
+        );
+      }
+      return {
+        trackingNumber: res.data.consignment_id,
+        providerOrderId: res.data.consignment_id,
+        estimatedDeliveryAt: res.data.estimated_delivery_at
+          ? new Date(res.data.estimated_delivery_at)
+          : undefined,
+        fee: res.data.delivery_fee,
         raw: res.data,
-      });
-    }
-    if (!res.data?.consignment_id) {
-      throw new CourierError("provider_error", "pathao order response missing consignment_id", {
-        provider: PROVIDER,
-        raw: res.data,
-      });
-    }
-    return {
-      trackingNumber: res.data.consignment_id,
-      providerOrderId: res.data.consignment_id,
-      estimatedDeliveryAt: res.data.estimated_delivery_at
-        ? new Date(res.data.estimated_delivery_at)
-        : undefined,
-      fee: res.data.delivery_fee,
-      raw: res.data,
-    };
+      };
+    });
   }
 
   async getTracking(trackingNumber: string): Promise<TrackingInfo> {
-    const token = await withRetry(() => this.getAccessToken(), { attempts: 2 });
-    const res = await withRetry(
-      () =>
-        this.transport.request<PathaoOrderInfo>(
-          `/aladdin/api/v1/orders/${encodeURIComponent(trackingNumber)}/info`,
-          { method: "GET", accessToken: token },
-        ),
-      { attempts: 3 },
-    );
-    if (!res.ok) {
-      const { code, retryable } = classifyHttpStatus(res.status);
-      throw new CourierError(code, `pathao getTracking failed (${res.status})`, {
-        retryable,
-        status: res.status,
-        provider: PROVIDER,
-        raw: res.data,
+    return withCourierBreaker(this.breakerKey(), async (signal) => {
+      const token = await withRetry(() => this.getAccessToken(signal), {
+        attempts: 2,
+        signal,
       });
-    }
-    const providerStatus = res.data?.order_status ?? "unknown";
-    const normalized = normalizeStatus(providerStatus);
-    const events = (res.data?.delivery_history ?? []).map((h) => ({
-      at: new Date(h.updated_at),
-      description: h.order_status,
-      location: h.location,
-    }));
-    return {
-      trackingNumber,
-      providerStatus,
-      normalizedStatus: normalized,
-      events,
-      deliveredAt:
-        normalized === "delivered" && events.length > 0 ? events[events.length - 1]!.at : undefined,
-      raw: res.data,
-    };
+      const res = await withRetry(
+        () =>
+          this.transport.request<PathaoOrderInfo>(
+            `/aladdin/api/v1/orders/${encodeURIComponent(trackingNumber)}/info`,
+            { method: "GET", accessToken: token, signal },
+          ),
+        { attempts: 3, signal },
+      );
+      if (!res.ok) {
+        const { code, retryable } = classifyHttpStatus(res.status);
+        throw new CourierError(code, `pathao getTracking failed (${res.status})`, {
+          retryable,
+          status: res.status,
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
+      const providerStatus = res.data?.order_status ?? "unknown";
+      const normalized = normalizeStatus(providerStatus);
+      const events = (res.data?.delivery_history ?? []).map((h) => ({
+        at: new Date(h.updated_at),
+        description: h.order_status,
+        location: h.location,
+      }));
+      return {
+        trackingNumber,
+        providerStatus,
+        normalizedStatus: normalized,
+        events,
+        deliveredAt:
+          normalized === "delivered" && events.length > 0
+            ? events[events.length - 1]!.at
+            : undefined,
+        raw: res.data,
+      };
+    });
   }
 
   async priceQuote(input: { district: string; weight: number; cod?: number }): Promise<PriceQuote> {
-    const token = await withRetry(() => this.getAccessToken(), { attempts: 2 });
-    const res = await withRetry(
-      () =>
-        this.transport.request<PathaoPriceResponse>("/aladdin/api/v1/merchant/price-plan", {
-          method: "POST",
-          accessToken: token,
-          body: {
-            store_id: this.opts.credentials.accountId,
-            item_type: 2,
-            delivery_type: 48,
-            item_weight: Math.max(0.5, input.weight || 0.5),
-            recipient_city: input.district,
-            amount_to_collect: input.cod ?? 0,
-          },
-        }),
-      { attempts: 2 },
-    );
-    if (!res.ok) {
-      const { code, retryable } = classifyHttpStatus(res.status);
-      throw new CourierError(code, `pathao priceQuote failed (${res.status})`, {
-        retryable,
-        status: res.status,
-        provider: PROVIDER,
-        raw: res.data,
+    return withCourierBreaker(this.breakerKey(), async (signal) => {
+      const token = await withRetry(() => this.getAccessToken(signal), {
+        attempts: 2,
+        signal,
       });
-    }
-    return {
-      amount: res.data.final_price ?? res.data.price,
-      currency: "BDT",
-      breakdown: {
-        base: res.data.price,
-        discount: res.data.discount ?? 0,
-        additional: res.data.additional_charge ?? 0,
-      },
-      raw: res.data,
-    };
+      const res = await withRetry(
+        () =>
+          this.transport.request<PathaoPriceResponse>(
+            "/aladdin/api/v1/merchant/price-plan",
+            {
+              method: "POST",
+              accessToken: token,
+              signal,
+              body: {
+                store_id: this.opts.credentials.accountId,
+                item_type: 2,
+                delivery_type: 48,
+                item_weight: Math.max(0.5, input.weight || 0.5),
+                recipient_city: input.district,
+                amount_to_collect: input.cod ?? 0,
+              },
+            },
+          ),
+        { attempts: 2, signal },
+      );
+      if (!res.ok) {
+        const { code, retryable } = classifyHttpStatus(res.status);
+        throw new CourierError(code, `pathao priceQuote failed (${res.status})`, {
+          retryable,
+          status: res.status,
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
+      return {
+        amount: res.data.final_price ?? res.data.price,
+        currency: "BDT",
+        breakdown: {
+          base: res.data.price,
+          discount: res.data.discount ?? 0,
+          additional: res.data.additional_charge ?? 0,
+        },
+        raw: res.data,
+      };
+    });
   }
 }
 
@@ -408,3 +447,81 @@ export class PathaoAdapter implements CourierAdapter {
 export function __clearPathaoTokenCache(): void {
   tokenCache.clear();
 }
+
+
+/* -------------------------------------------------------------------------- */
+/* Webhook handling                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Pathao push payload. Pathao Hermes uses a flat shape with snake_case
+ * keys; field names align with their merchant-portal webhook docs.
+ */
+export interface PathaoWebhookPayload {
+  /** Pathao consignment id (== our trackingNumber). */
+  consignment_id?: string;
+  merchant_order_id?: string;
+  /** Their human-readable status string. */
+  order_status?: string;
+  /** Numeric status code. */
+  order_status_slug?: string;
+  updated_at?: string;
+  /** Optional event note / hub name. */
+  reason?: string;
+  delivered_at?: string;
+}
+
+export interface ParsedPathaoTracking {
+  trackingCode: string;
+  providerStatus: string;
+  normalizedStatus: NormalizedTrackingStatus;
+  at: Date;
+  description?: string;
+  deliveredAt?: Date;
+}
+
+/**
+ * Verify a Pathao webhook signature. Pathao signs the raw request body
+ * with the merchant's app secret (HMAC-SHA256, hex digest) and ships
+ * it in the `X-PATHAO-Signature` header.
+ */
+export function verifyPathaoWebhookSignature(
+  rawBody: string | Buffer,
+  signature: string | string[] | undefined,
+  secret: string | undefined,
+): boolean {
+  if (!secret) return false;
+  const provided = Array.isArray(signature) ? signature[0] : signature;
+  if (!provided || typeof provided !== "string" || provided.length === 0) return false;
+  const computed = createHmac("sha256", secret)
+    .update(typeof rawBody === "string" ? rawBody : rawBody)
+    .digest("hex");
+  const a = Buffer.from(provided, "hex");
+  const b = Buffer.from(computed, "hex");
+  if (a.length === 0 || a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+export function parsePathaoWebhook(payload: PathaoWebhookPayload): ParsedPathaoTracking | null {
+  const trackingCode = payload.consignment_id ?? "";
+  if (!trackingCode) return null;
+  const providerStatus = (payload.order_status ?? payload.order_status_slug ?? "unknown").trim();
+  const at = payload.updated_at ? new Date(payload.updated_at) : new Date();
+  const safeAt = Number.isNaN(at.getTime()) ? new Date() : at;
+  const deliveredRaw = payload.delivered_at ? new Date(payload.delivered_at) : undefined;
+  const safeDelivered = deliveredRaw && !Number.isNaN(deliveredRaw.getTime()) ? deliveredRaw : undefined;
+  return {
+    trackingCode,
+    providerStatus,
+    normalizedStatus: normalizeStatus(providerStatus),
+    at: safeAt,
+    description: payload.reason ?? providerStatus,
+    deliveredAt: safeDelivered,
+  };
+}
+
+export const PATHAO_PROVIDER = PROVIDER;

@@ -1,7 +1,6 @@
 import {
   createCipheriv,
   createDecipheriv,
-  createHash,
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
@@ -13,9 +12,11 @@ import { env } from "../env.js";
  * Format: `v1:<b64 iv>:<b64 tag>:<b64 ciphertext>` (no key id yet — single key).
  * IV is a per-message 12-byte random; tag is the 16-byte GCM auth tag.
  *
- * In dev, falls back to a deterministic key derived from JWT_SECRET so local
- * signup/tests work without extra setup. In production COURIER_ENC_KEY is
- * required (enforced in env.ts) and this fallback is unreachable.
+ * COURIER_ENC_KEY is REQUIRED in every environment (dev / test / staging /
+ * production). The env-loader rejects boot without it. Tests must set it
+ * in their global setup. There is intentionally no JWT_SECRET-derived
+ * fallback — silently using a derived key risks leaking ciphertexts that
+ * a future production key rotation would render unreadable.
  */
 
 const VERSION = "v1";
@@ -27,19 +28,18 @@ let _key: Buffer | null = null;
 
 function getKey(): Buffer {
   if (_key) return _key;
-  if (env.COURIER_ENC_KEY) {
-    _key = Buffer.from(env.COURIER_ENC_KEY, "base64");
-    if (_key.length !== KEY_LEN) {
-      throw new Error(`COURIER_ENC_KEY must decode to ${KEY_LEN} bytes`);
-    }
-    return _key;
+  // env.ts enforces presence + base64 + 32-byte decoded length BEFORE this
+  // module is reached. The defensive check below catches the (now
+  // impossible) case where someone bypasses env loading.
+  if (!env.COURIER_ENC_KEY) {
+    throw new Error(
+      "COURIER_ENC_KEY is required in every environment. Generate one with: openssl rand -base64 32",
+    );
   }
-  if (env.NODE_ENV === "production") {
-    // env validation already blocks this branch — belt-and-suspenders.
-    throw new Error("COURIER_ENC_KEY required in production");
+  _key = Buffer.from(env.COURIER_ENC_KEY, "base64");
+  if (_key.length !== KEY_LEN) {
+    throw new Error(`COURIER_ENC_KEY must decode to ${KEY_LEN} bytes`);
   }
-  // Dev / test fallback: derive from JWT_SECRET.
-  _key = createHash("sha256").update(`courier:${env.JWT_SECRET}`).digest();
   return _key;
 }
 

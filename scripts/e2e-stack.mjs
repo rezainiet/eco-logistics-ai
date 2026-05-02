@@ -33,9 +33,9 @@ const E2E_ENV = {
   // similar. Stable so encryption matches across boot.
   COURIER_ENC_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
   ADMIN_SECRET: "e2e-admin-secret-at-least-twenty-four-chars",
-  CORS_ORIGIN: "http://localhost:3000",
+  CORS_ORIGIN: "http://localhost:3001",
   PUBLIC_API_URL: "http://localhost:4000",
-  PUBLIC_WEB_URL: "http://localhost:3000",
+  PUBLIC_WEB_URL: "http://localhost:3001",
   TRIAL_DAYS: "14",
   // Force dev fallbacks across third-party providers so the stack runs
   // offline. Email logs to stdout, Stripe returns mock URLs, telemetry
@@ -46,7 +46,7 @@ const E2E_ENV = {
 
 const WEB_ENV = {
   NEXT_PUBLIC_API_URL: "http://localhost:4000",
-  NEXTAUTH_URL: "http://localhost:3000",
+  NEXTAUTH_URL: "http://localhost:3001",
   NEXTAUTH_SECRET: "e2e-nextauth-secret-at-least-32-chars",
   NEXT_TELEMETRY_DISABLED: "1",
 };
@@ -129,7 +129,7 @@ async function main() {
       try {
         web.kill("SIGKILL");
         api.kill("SIGKILL");
-      } catch {}
+      } catch { }
     }, 5_000).unref();
     try {
       await mongod.stop();
@@ -142,7 +142,7 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   // Keep the process alive — child processes are non-detached so we own
   // their lifecycle.
-  await new Promise(() => {});
+  await new Promise(() => { });
 }
 
 main().catch((err) => {

@@ -1,4 +1,4 @@
-import type { Types } from "mongoose";
+import type { ClientSession, Types } from "mongoose";
 import { currentUsagePeriod, Usage } from "@ecom/db";
 import { getPlan, quotaFor, type PlanDefinition, type UsageMetric } from "./plans.js";
 
@@ -11,6 +11,7 @@ export async function bumpUsage(
   merchantId: Types.ObjectId,
   metric: UsageMetric,
   delta = 1,
+  opts: { session?: ClientSession } = {},
 ): Promise<void> {
   if (delta === 0) return;
   const period = currentUsagePeriod();
@@ -20,7 +21,7 @@ export async function bumpUsage(
       $inc: { [metric]: delta },
       $set: { lastActivityAt: new Date() },
     },
-    { upsert: true },
+    { upsert: true, ...(opts.session ? { session: opts.session } : {}) },
   );
 }
 
@@ -83,14 +84,16 @@ export async function reserveQuota(
   plan: PlanDefinition,
   metric: UsageMetric,
   amount = 1,
+  opts: { session?: ClientSession } = {},
 ): Promise<QuotaCheck> {
   if (amount <= 0) {
     return checkQuota(merchantId, plan, metric, 0);
   }
   const limit = quotaFor(plan, metric);
   const period = currentUsagePeriod();
+  const sessionOpt = opts.session ? { session: opts.session } : {};
   if (limit === null) {
-    await bumpUsage(merchantId, metric, amount);
+    await bumpUsage(merchantId, metric, amount, opts);
     return { allowed: true, used: 0, limit: null, remaining: null, metric };
   }
   if (amount > limit) {
@@ -101,13 +104,13 @@ export async function reserveQuota(
   await Usage.updateOne(
     { merchantId, period },
     { $setOnInsert: { merchantId, period }, $set: { lastActivityAt: new Date() } },
-    { upsert: true },
+    { upsert: true, ...sessionOpt },
   );
   const threshold = limit - amount;
   const reserved = await Usage.findOneAndUpdate(
     { merchantId, period, [metric]: { $lte: threshold } },
     { $inc: { [metric]: amount }, $set: { lastActivityAt: new Date() } },
-    { new: true },
+    { new: true, ...sessionOpt },
   ).lean();
   if (reserved) {
     const usedNow = (reserved as Record<string, unknown>)[metric] as number | undefined ?? amount;
@@ -131,12 +134,14 @@ export async function releaseQuota(
   merchantId: Types.ObjectId,
   metric: UsageMetric,
   amount: number,
+  opts: { session?: ClientSession } = {},
 ): Promise<void> {
   if (amount <= 0) return;
   const period = currentUsagePeriod();
   await Usage.updateOne(
     { merchantId, period },
     { $inc: { [metric]: -amount } },
+    opts.session ? { session: opts.session } : {},
   );
 }
 

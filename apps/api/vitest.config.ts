@@ -1,6 +1,16 @@
 import { defineConfig } from "vitest/config";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "@ecom/db": resolve(here, "../../packages/db/src/index.ts"),
+      "@ecom/types": resolve(here, "../../packages/types/src/index.ts"),
+    },
+  },
   test: {
     globals: false,
     environment: "node",

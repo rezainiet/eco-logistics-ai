@@ -21,10 +21,46 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         </div>
         <nav className="flex-1 space-y-1 px-3 py-4 text-sm">
           <Link
+            href="/admin"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Dashboard
+          </Link>
+          <Link
             href="/admin/billing"
             className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
           >
-            Billing approvals
+            Payment risk queue
+          </Link>
+          <Link
+            href="/admin/fraud"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Fraud overview
+          </Link>
+          <Link
+            href="/admin/alerts"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Alerts
+          </Link>
+          <Link
+            href="/admin/system"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            System health
+          </Link>
+          <Link
+            href="/admin/audit"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Audit log
+          </Link>
+          <Link
+            href="/admin/access"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Admin access
           </Link>
           <Link
             href="/dashboard"

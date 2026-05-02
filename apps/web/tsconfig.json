@@ -10,8 +10,13 @@
     "noEmit": true,
     "incremental": true,
     "plugins": [{ "name": "next" }],
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@ecom/db": ["../../packages/db/src/index.ts"],
+      "@ecom/db/*": ["../../packages/db/src/*"],
+      "@ecom/types": ["../../packages/types/src/index.ts"],
+      "@ecom/types/*": ["../../packages/types/src/*"]
     }
   },
   "include": [

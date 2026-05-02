@@ -6,10 +6,12 @@ import {
   CheckCircle2,
   PhoneCall,
   PhoneOff,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   XCircle,
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,7 @@ import {
 import { toast } from "@/components/ui/toast";
 import { formatBDT, formatRelative } from "@/lib/formatters";
 
+import { humanizeError } from "@/lib/friendly-errors";
 type FilterValue = "all_open" | "pending_call" | "no_answer";
 
 type QueueItem = {
@@ -43,7 +46,13 @@ type QueueItem = {
   total: number;
   riskScore: number;
   level: "low" | "medium" | "high";
-  reviewStatus: "pending_call" | "no_answer" | "verified" | "rejected" | "not_required";
+  reviewStatus:
+    | "pending_call"
+    | "no_answer"
+    | "verified"
+    | "rejected"
+    | "not_required"
+    | "optional_review";
   reasons: string[];
   scoredAt: Date | string | null;
   createdAt: Date | string;
@@ -57,16 +66,31 @@ const LEVEL_CLASS: Record<QueueItem["level"], string> = {
 
 const STATUS_CLASS: Record<QueueItem["reviewStatus"], string> = {
   not_required: "bg-surface-raised text-fg-muted",
+  optional_review: "bg-warning-subtle text-warning",
   pending_call: "bg-warning-subtle text-warning",
   no_answer: "bg-danger-subtle text-danger",
   verified: "bg-success-subtle text-success",
   rejected: "bg-danger-subtle text-danger",
 };
 
+/** How long the merchant has to undo a reject — matches restoreOrder's
+ *  RESTORE_WINDOW_MS but trimmed for a usable banner countdown. */
+const UNDO_BANNER_MS = 30_000;
+
+interface LastRejected {
+  id: string;
+  orderNumber: string;
+  codSaved: number;
+  at: number;
+}
+
 export default function FraudReviewPage() {
   const [filter, setFilter] = useState<FilterValue>("all_open");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [confirmRejectOpen, setConfirmRejectOpen] = useState(false);
+  const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
+  const [lastRejected, setLastRejected] = useState<LastRejected | null>(null);
   const utils = trpc.useUtils();
 
   const queue = trpc.fraud.listPendingReviews.useQuery({
@@ -106,17 +130,71 @@ export default function FraudReviewPage() {
       setSelectedId(null);
       await invalidateAll();
     },
-    onError: (err) => toast.error("Verify failed", err.message),
+    onError: (err) => toast.error("Verify failed", humanizeError(err)),
   });
 
   const reject = trpc.fraud.markRejected.useMutation({
-    onSuccess: async (data) => {
+    onSuccess: async (data, variables) => {
+      const orderNumber =
+        detail.data?.id === variables.id
+          ? detail.data?.orderNumber ?? variables.id
+          : variables.id;
       toast.success("Order rejected", `${formatBDT(data.codSaved)} COD saved`);
+      setLastRejected({
+        id: variables.id,
+        orderNumber,
+        codSaved: data.codSaved ?? 0,
+        at: Date.now(),
+      });
       setSelectedId(null);
+      setConfirmRejectOpen(false);
+      setPendingRejectId(null);
       await invalidateAll();
     },
-    onError: (err) => toast.error("Reject failed", err.message),
+    onError: (err) => {
+      toast.error("Reject failed", humanizeError(err));
+      setConfirmRejectOpen(false);
+      setPendingRejectId(null);
+    },
   });
+
+  const restore = trpc.orders.restoreOrder.useMutation({
+    onSuccess: async () => {
+      toast.success("Order restored", "Back in your review queue.");
+      setLastRejected(null);
+      await invalidateAll();
+    },
+    onError: (err) => toast.error("Restore failed", humanizeError(err)),
+  });
+
+  // Auto-clear the undo banner once the window elapses. The server-side
+  // restoreOrder window is wider (24h), but the banner is a fast-undo
+  // affordance only — after this expires the merchant has to find the
+  // order in cancelled-orders to restore.
+  useEffect(() => {
+    if (!lastRejected) return;
+    const t = setTimeout(() => setLastRejected(null), UNDO_BANNER_MS);
+    return () => clearTimeout(t);
+  }, [lastRejected]);
+
+  // Live "Xs left" countdown so the undo window is obvious instead of an
+  // implicit "auto-dismisses in 30s" copy line. Re-renders once per second
+  // — cheap, single page, no perf concern.
+  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0);
+  useEffect(() => {
+    if (!lastRejected) {
+      setUndoSecondsLeft(0);
+      return;
+    }
+    const tick = () => {
+      const elapsed = Date.now() - lastRejected.at;
+      const left = Math.max(0, Math.ceil((UNDO_BANNER_MS - elapsed) / 1000));
+      setUndoSecondsLeft(left);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [lastRejected]);
 
   const noAnswer = trpc.fraud.markNoAnswer.useMutation({
     onSuccess: async () => {
@@ -124,12 +202,12 @@ export default function FraudReviewPage() {
       setSelectedId(null);
       await invalidateAll();
     },
-    onError: (err) => toast.error("Update failed", err.message),
+    onError: (err) => toast.error("Update failed", humanizeError(err)),
   });
 
   const initiateCall = trpc.call.initiateCall.useMutation({
     onSuccess: () => toast.success("Calling customer…"),
-    onError: (err) => toast.error("Call failed", err.message),
+    onError: (err) => toast.error("Call failed", humanizeError(err)),
   });
 
   const items: QueueItem[] = (queue.data?.items ?? []) as QueueItem[];
@@ -143,6 +221,44 @@ export default function FraudReviewPage() {
         title="Fraud review queue"
         description="Call risky customers to verify COD orders before booking shipment."
       />
+
+      {lastRejected ? (
+        // Sticky so the affordance survives long-scroll review sessions —
+        // the merchant can scroll the queue and still see "I just rejected
+        // this, undo is right here". Without sticky, the banner scrolled
+        // off-screen and the undo surface effectively disappeared.
+        <div
+          role="status"
+          aria-live="polite"
+          className="sticky top-2 z-10 flex items-start gap-3 rounded-lg border border-warning-border bg-warning-subtle/95 p-3 text-xs shadow-md backdrop-blur"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <p className="font-semibold text-fg">
+              Order {lastRejected.orderNumber} rejected
+              {lastRejected.codSaved > 0 ? (
+                <span className="ml-1 text-fg-muted">
+                  · {formatBDT(lastRejected.codSaved)} COD saved
+                </span>
+              ) : null}
+            </p>
+            <p className="text-fg-muted">
+              Click Undo to put it back in the queue.{" "}
+              <span className="tabular-nums">{undoSecondsLeft}s</span> left.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="shrink-0"
+            disabled={restore.isPending}
+            onClick={() => restore.mutate({ id: lastRejected.id })}
+          >
+            <RotateCcw className="mr-1 h-3.5 w-3.5" />
+            {restore.isPending ? "Restoring…" : "Undo"}
+          </Button>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="In queue" value={total.toLocaleString()} icon={ShieldAlert} tone="danger" />
@@ -187,7 +303,19 @@ export default function FraudReviewPage() {
             </Select>
           </CardHeader>
           <CardContent className="p-0">
-            {queue.isLoading ? (
+            {queue.isError ? (
+              <EmptyState
+                icon={AlertTriangle}
+                title="Could not load review queue"
+                description="Something went wrong on our end. Try again in a moment."
+                className="m-4 border-0 bg-transparent"
+                action={
+                  <Button variant="outline" size="sm" onClick={() => queue.refetch()}>
+                    Retry
+                  </Button>
+                }
+              />
+            ) : queue.isLoading ? (
               <div className="space-y-2 p-4">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-16 animate-shimmer rounded-md" />
@@ -392,12 +520,10 @@ export default function FraudReviewPage() {
                     variant="outline"
                     className="flex-1 border-danger-border bg-danger-subtle text-danger hover:bg-danger/20 hover:text-danger disabled:opacity-60"
                     disabled={reject.isPending}
-                    onClick={() =>
-                      reject.mutate({
-                        id: detail.data!.id,
-                        notes: notes.trim() || undefined,
-                      })
-                    }
+                    onClick={() => {
+                      setPendingRejectId(detail.data!.id);
+                      setConfirmRejectOpen(true);
+                    }}
                   >
                     <XCircle className="mr-1.5 h-4 w-4" />
                     {reject.isPending ? "Rejecting…" : "Reject"}
@@ -408,6 +534,32 @@ export default function FraudReviewPage() {
           </CardContent>
         </Card>
       </div>
+
+      <ConfirmDialog
+        open={confirmRejectOpen}
+        onOpenChange={(v) => {
+          setConfirmRejectOpen(v);
+          if (!v) setPendingRejectId(null);
+        }}
+        title="Reject this order?"
+        description={
+          <>
+            The customer's order will be cancelled. You can undo within
+            30 seconds from the banner, or up to 24 hours from the
+            cancelled-orders list.
+          </>
+        }
+        confirmLabel="Reject order"
+        destructive
+        loading={reject.isPending}
+        onConfirm={() => {
+          if (!pendingRejectId) return;
+          reject.mutate({
+            id: pendingRejectId,
+            notes: notes.trim() || undefined,
+          });
+        }}
+      />
     </div>
   );
 }

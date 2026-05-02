@@ -68,12 +68,23 @@ export function resolveTrackingBadge(normalizedStatus?: string | null): Tracking
   return trackingBadge[normalizedStatus] ?? FALLBACK;
 }
 
-export type ReviewStatus = "not_required" | "pending_call" | "verified" | "rejected" | "no_answer";
+export type ReviewStatus =
+  | "not_required"
+  | "optional_review"
+  | "pending_call"
+  | "verified"
+  | "rejected"
+  | "no_answer";
 
 export const REVIEW_BADGE: Record<
   Exclude<ReviewStatus, "not_required">,
   { label: string; className: string; Icon: LucideIcon }
 > = {
+  optional_review: {
+    label: "Watch",
+    className: "bg-warning-subtle text-warning",
+    Icon: ShieldAlert,
+  },
   pending_call: {
     label: "Pending call",
     className: "bg-warning-subtle text-warning",

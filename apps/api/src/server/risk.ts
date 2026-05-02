@@ -32,25 +32,56 @@ export const RISK_TIERS = {
 // but several compounding signals reliably do. Cap at 100 at the end.
 const WEIGHTS = {
   highCod: 18,
-  extremeCod: 30,
+  extremeCod: 40,
   duplicatePhone: 10,
   duplicatePhoneHeavy: 25,
   priorReturns: 22,
   priorCancelled: 14,
   suspiciousDistrict: 16,
-  fakeNamePattern: 18,
+  fakeNamePattern: 25,
   unreachableHistory: 20,
   ipVelocity: 16,
   duplicateAddress: 22,
-  velocityBreach: 28,
+  // Rapid-fire orders from a single phone inside the velocity window are
+  // a textbook fraud pattern (one buyer fanning out multiple deliveries
+  // before a courier rejects any of them). Weight is set above the
+  // medium/high boundary (69) so a single occurrence auto-lands HIGH on
+  // its own, matching the merchant-facing "this should be reviewed"
+  // expectation. Tunable per-merchant via `velocityThreshold`.
+  velocityBreach: 75,
+  // Garbage phones (all-same-digit, wrong country/format) are flagged on their
+  // own — they're never legitimate. Heavy enough that combined with any one
+  // other signal the order tips into HIGH.
+  garbagePhone: 30,
   // Blocked lists are treated as hard-match signals — a single hit pushes the
   // order past the HIGH threshold on its own (weight > mediumMax + lowMax).
   blockedPhone: 100,
   blockedAddress: 100,
 } as const;
 
+/**
+ * Static fallbacks. Used when the merchant has no order history yet — once
+ * `p75OrderValue` / `avgOrderValue` are available we derive thresholds from
+ * those instead, so a high-ticket merchant doesn't trip "high COD" on every
+ * order and a low-ticket merchant doesn't sleep on a 5x outlier.
+ */
 const HIGH_COD_BDT = 4000;
 const EXTREME_COD_BDT = 10000;
+/** Floor that dynamic thresholds can't drop beneath — protects very-new merchants. */
+const HIGH_COD_FLOOR = 1500;
+const EXTREME_COD_FLOOR = 4000;
+/** Multipliers applied to the merchant's p75 order value to derive thresholds. */
+const HIGH_COD_P75_MULTIPLIER = 1.5;
+const EXTREME_COD_P75_MULTIPLIER = 3.0;
+/** Gold-tier definition — buyers with this much delivered history bypass soft signals. */
+const GOLD_TIER_MIN_DELIVERED = 5;
+const GOLD_TIER_MIN_SUCCESS_RATE = 0.85;
+const SILVER_TIER_MIN_DELIVERED = 3;
+const SILVER_TIER_MIN_SUCCESS_RATE = 0.7;
+/** Default base rate for the P(RTO) calibration when the merchant has no tuning yet. */
+const DEFAULT_BASE_RTO_RATE = 0.18;
+/** Stable identifier for the platform-default weight set. */
+export const DEFAULT_WEIGHTS_VERSION = "v2.0";
 const DUP_PHONE_WARN = 3;
 const DUP_PHONE_HEAVY = 6;
 const IP_VELOCITY_WINDOW_MS = 10 * 60 * 1000;
@@ -142,9 +173,43 @@ function normalizePhone(phone: string): string {
   return phone.replace(/\D+/g, "");
 }
 
+/**
+ * Garbage-phone detector. A phone is garbage if it is structurally invalid or
+ * a placeholder. Catches the obvious cases that no merchant blocklist will
+ * ever cover: all-same-digit ("00000000000", "1111111111"), too-short/too-long,
+ * or doesn't match the Bangladesh mobile shape (+8801XXXXXXXXX or 01XXXXXXXXX).
+ *
+ * Conservative: returns false for anything that *might* be a real foreign
+ * number, since we don't want to false-positive merchants serving expats.
+ */
+function isGarbagePhone(rawPhone: string): boolean {
+  const digits = normalizePhone(rawPhone);
+  if (digits.length < 7 || digits.length > 15) return true;
+  if (/^(\d)\1+$/.test(digits)) return true; // all-same-digit
+  // BD mobile shape — if the number *looks* like a BD attempt (starts with
+  // 880, 0, or has 11 digits) but doesn't match the canonical pattern, treat
+  // as garbage. Foreign numbers (no leading 880/0) are left alone.
+  const looksBD = digits.startsWith("880") || digits.startsWith("0") || digits.length === 11;
+  if (looksBD) {
+    // Canonical: 8801[3-9]XXXXXXXX  (13 digits) or 01[3-9]XXXXXXXX (11 digits).
+    const canonical = /^(8801[3-9]\d{8}|01[3-9]\d{8})$/;
+    if (!canonical.test(digits)) return true;
+  }
+  return false;
+}
+
 export type RiskLevel = "low" | "medium" | "high";
+export type CustomerTier = "new" | "standard" | "silver" | "gold";
+
+export interface DynamicThresholds {
+  highCod: number;
+  extremeCod: number;
+  /** Where the threshold came from — surfaced in the agent UI. */
+  source: "merchant_p75" | "merchant_avg" | "merchant_override" | "platform_default";
+}
 export type ReviewStatus =
   | "not_required"
+  | "optional_review"
   | "pending_call"
   | "verified"
   | "rejected"
@@ -156,12 +221,33 @@ export interface RiskSignal {
   detail: string;
 }
 
+export type ConfidenceLabel = "Safe" | "Verify" | "Risky";
+
 export interface RiskResult {
   riskScore: number;
   level: RiskLevel;
   reasons: string[];
   signals: RiskSignal[];
   reviewStatus: ReviewStatus;
+  /** 0-100, mirror of (100 − riskScore). Higher = more trusted. */
+  confidence: number;
+  confidenceLabel: ConfidenceLabel;
+  /** True when one or more rules forced HIGH regardless of weight sum. */
+  hardBlocked: boolean;
+  /**
+   * Calibrated probability that this order will end in RTO. Logistic over the
+   * weight sum, anchored at the merchant's base RTO rate. The dashboard will
+   * surface this as "P(RTO) = 23%" — easier for non-technical merchants to
+   * reason about than a 0–100 score.
+   */
+  pRto: number;
+  pRtoPct: number;
+  /** Trust band derived from this customer's delivered/RTO history. */
+  customerTier: CustomerTier;
+  /** Thresholds actually applied + where they came from. */
+  dynamicThresholds: DynamicThresholds;
+  /** Identifier of the weight set used (for the feedback loop). */
+  weightsVersion: string;
 }
 
 export interface RiskInputOrder {
@@ -186,6 +272,13 @@ export interface RiskHistory {
   phoneVelocityCount: number;
   addressDistinctPhones: number;
   addressReturnedCount: number;
+  /** Decayed delivered count — optional so existing callers stay source-compat. */
+  phoneDeliveredCount?: number;
+  /** Raw (un-decayed) totals — for reputation reporting in the agent UI. */
+  phoneTotalRaw?: number;
+  phoneDeliveredRaw?: number;
+  phoneReturnedRaw?: number;
+  phoneCancelledRaw?: number;
 }
 
 export interface RiskOptions {
@@ -196,12 +289,153 @@ export interface RiskOptions {
   blockedAddresses?: string[];
   /** 0 disables the velocity signal entirely. */
   velocityThreshold?: number;
+  /**
+   * Merchant's 75th-percentile resolved-order COD. When supplied AND the
+   * merchant hasn't pinned an explicit `highCodBdt`, thresholds derive from
+   * this. Pulled from MerchantStats by the ingest layer.
+   */
+  p75OrderValue?: number;
+  /** Mean order value — fallback when we have too few orders for a reliable p75. */
+  avgOrderValue?: number;
+  /**
+   * Per-signal weight multipliers from the monthly tuner. Each multiplier
+   * scales the platform default; missing keys mean "use default". Multipliers
+   * are clamped to [0, 3] to bound runaway adjustments.
+   */
+  weightOverrides?: Record<string, number> | Map<string, number>;
+  /** Anchor for the P(RTO) calibration; 0–1, defaults to platform mean. */
+  baseRtoRate?: number;
+  /** Version tag of the weight set in effect (carried into RiskResult). */
+  weightsVersion?: string;
 }
 
 function classifyLevel(score: number): RiskLevel {
   if (score <= RISK_TIERS.lowMax) return "low";
   if (score <= RISK_TIERS.mediumMax) return "medium";
   return "high";
+}
+
+/**
+ * Pick the COD thresholds for this scoring run. Precedence:
+ *   1. Merchant explicit override (`opts.highCodBdt` / `opts.extremeCodBdt`)
+ *   2. Derived from merchant's 75th-percentile resolved-order COD
+ *   3. Derived from merchant's mean (when p75 isn't available yet)
+ *   4. Platform defaults (HIGH_COD_BDT / EXTREME_COD_BDT)
+ *
+ * Floors clamp the dynamic path so a brand-new merchant with three ৳200
+ * orders doesn't end up with a "high COD" threshold of ৳300.
+ */
+function resolveDynamicThresholds(opts: RiskOptions): DynamicThresholds {
+  if (opts.highCodBdt != null || opts.extremeCodBdt != null) {
+    return {
+      highCod: opts.highCodBdt ?? HIGH_COD_BDT,
+      extremeCod: opts.extremeCodBdt ?? EXTREME_COD_BDT,
+      source: "merchant_override",
+    };
+  }
+  if (opts.p75OrderValue && opts.p75OrderValue > 0) {
+    const high = Math.max(
+      HIGH_COD_FLOOR,
+      Math.round(opts.p75OrderValue * HIGH_COD_P75_MULTIPLIER),
+    );
+    const extreme = Math.max(
+      EXTREME_COD_FLOOR,
+      Math.round(opts.p75OrderValue * EXTREME_COD_P75_MULTIPLIER),
+      high + 1,
+    );
+    return { highCod: high, extremeCod: extreme, source: "merchant_p75" };
+  }
+  if (opts.avgOrderValue && opts.avgOrderValue > 0) {
+    const high = Math.max(
+      HIGH_COD_FLOOR,
+      Math.round(opts.avgOrderValue * HIGH_COD_P75_MULTIPLIER * 1.2),
+    );
+    const extreme = Math.max(
+      EXTREME_COD_FLOOR,
+      Math.round(opts.avgOrderValue * EXTREME_COD_P75_MULTIPLIER * 1.2),
+      high + 1,
+    );
+    return { highCod: high, extremeCod: extreme, source: "merchant_avg" };
+  }
+  return {
+    highCod: HIGH_COD_BDT,
+    extremeCod: EXTREME_COD_BDT,
+    source: "platform_default",
+  };
+}
+
+/**
+ * Bucket the buyer into a trust tier from delivered / resolved history.
+ * Gold buyers (>=5 deliveries, >85% success) bypass behavioural signals
+ * (velocity, fake-name) — they've earned it. Soft signals only; hard
+ * blocks (blocked_phone, garbage_phone) still fire so a stolen-account
+ * scenario isn't laundered through a high-trust phone.
+ */
+export function classifyCustomerTier(history: RiskHistory): CustomerTier {
+  const delivered = history.phoneDeliveredRaw ?? 0;
+  const returned = history.phoneReturnedRaw ?? 0;
+  const cancelled = history.phoneCancelledRaw ?? 0;
+  const resolved = delivered + returned + cancelled;
+  if (resolved === 0) return "new";
+  const successRate = delivered / resolved;
+  if (
+    delivered >= GOLD_TIER_MIN_DELIVERED &&
+    successRate > GOLD_TIER_MIN_SUCCESS_RATE
+  ) {
+    return "gold";
+  }
+  if (
+    delivered >= SILVER_TIER_MIN_DELIVERED &&
+    successRate >= SILVER_TIER_MIN_SUCCESS_RATE
+  ) {
+    return "silver";
+  }
+  return "standard";
+}
+
+/** Soft signals a Gold-tier buyer is allowed to bypass. */
+const GOLD_TIER_BYPASS_KEYS = new Set<string>([
+  "velocity_breach",
+  "fake_name_pattern",
+  "duplicate_phone",
+  "duplicate_phone_heavy",
+]);
+
+/**
+ * Apply per-signal weight overrides from the monthly tuner. Multiplier of
+ * 1.0 keeps the platform default; <1 dampens a noisy signal; >1 amplifies a
+ * predictive one. Clamped to [0, 3] so a regression in the tuner can't
+ * cascade into pathological scoring.
+ */
+function effectiveWeight(
+  key: keyof typeof WEIGHTS,
+  overrides: RiskOptions["weightOverrides"],
+): number {
+  const baseline = WEIGHTS[key];
+  if (!overrides) return baseline;
+  const lookup =
+    overrides instanceof Map
+      ? overrides.get(key as string)
+      : (overrides as Record<string, number>)[key as string];
+  if (typeof lookup !== "number" || !Number.isFinite(lookup)) return baseline;
+  const clamped = Math.max(0, Math.min(3, lookup));
+  return Math.round(baseline * clamped);
+}
+
+/**
+ * Convert weight-sum to a calibrated P(RTO). Logistic curve anchored so the
+ * platform-default mid-score (50) maps to the merchant's base RTO rate.
+ * Higher scores climb toward 1; lower scores collapse toward 0. The
+ * `scale = 18` makes the band between LOW (39) and HIGH (70) a meaningful
+ * 4×–5× probability swing, matching how merchants perceive these tiers.
+ */
+function scoreToProbability(score: number, baseRate: number): number {
+  const anchor = Math.max(0.001, Math.min(0.999, baseRate));
+  // Logit of the base rate is the "0-offset" — at score 50 the curve passes
+  // through the merchant's base rate exactly.
+  const logitBase = Math.log(anchor / (1 - anchor));
+  const z = (score - 50) / 18 + logitBase;
+  return 1 / (1 + Math.exp(-z));
 }
 
 /** Pure function: same inputs → same outputs. */
@@ -212,11 +446,36 @@ export function computeRisk(
 ): RiskResult {
   const signals: RiskSignal[] = [];
   const reasons: string[] = [];
+  // Hard-block triggers — any one forces HIGH regardless of the weight sum.
+  // Tracked separately so we can surface the *cause* in audit + UI.
+  const hardBlockCauses: string[] = [];
 
-  const highCod = opts.highCodBdt ?? HIGH_COD_BDT;
-  const extremeCod = opts.extremeCodBdt ?? EXTREME_COD_BDT;
+  const dynamicThresholds = resolveDynamicThresholds(opts);
+  const highCod = dynamicThresholds.highCod;
+  const extremeCod = dynamicThresholds.extremeCod;
+  const customerTier = classifyCustomerTier(history);
+  const weightFor = (k: keyof typeof WEIGHTS) =>
+    effectiveWeight(k, opts.weightOverrides);
+  const isBypassed = (key: string) =>
+    customerTier === "gold" && GOLD_TIER_BYPASS_KEYS.has(key);
 
-  // --- Merchant blacklists (hard signals, run first) ---------------------
+  // --- Garbage-phone (structural) — HARD BLOCK. A phone that doesn't pass
+  // the BD format check or is all-same-digit is never legitimate. We refuse
+  // to ship to it without manual review.
+  let garbagePhone = false;
+  if (isGarbagePhone(order.customer.phone)) {
+    garbagePhone = true;
+    signals.push({
+      key: "garbage_phone",
+      weight: weightFor("garbagePhone"),
+      detail: `Phone "${order.customer.phone}" is structurally invalid or a placeholder`,
+    });
+    reasons.push("Phone number is invalid or a placeholder");
+    hardBlockCauses.push("garbage_phone");
+  }
+
+  // --- Merchant blacklists — HARD BLOCK. Merchant explicitly opted these
+  // numbers/addresses out; we honor it without a margin of error.
   const normalizedPhone = normalizePhone(order.customer.phone);
   const blockedPhoneHit = (opts.blockedPhones ?? [])
     .map((p) => normalizePhone(p))
@@ -225,10 +484,11 @@ export function computeRisk(
   if (blockedPhoneHit) {
     signals.push({
       key: "blocked_phone",
-      weight: WEIGHTS.blockedPhone,
+      weight: weightFor("blockedPhone"),
       detail: `Phone on merchant blocklist`,
     });
-    reasons.push("Phone on merchant blocklist");
+    reasons.push("Phone is on the merchant block-list");
+    hardBlockCauses.push("blocked_phone");
   }
 
   const blockedAddressHit =
@@ -237,67 +497,105 @@ export function computeRisk(
   if (blockedAddressHit) {
     signals.push({
       key: "blocked_address",
-      weight: WEIGHTS.blockedAddress,
+      weight: weightFor("blockedAddress"),
       detail: `Address on merchant blocklist`,
     });
-    reasons.push("Address on merchant blocklist");
+    reasons.push("Delivery address is on the merchant block-list");
+    hardBlockCauses.push("blocked_address");
   }
 
   // --- COD magnitude -----------------------------------------------------
+  let extremeCodHit = false;
   if (order.cod >= extremeCod) {
+    extremeCodHit = true;
     signals.push({
       key: "extreme_cod",
-      weight: WEIGHTS.extremeCod,
+      weight: weightFor("extremeCod"),
       detail: `COD ৳${order.cod.toLocaleString()} ≥ ৳${extremeCod.toLocaleString()}`,
     });
-    reasons.push(`Very high COD (৳${order.cod.toLocaleString()})`);
+    reasons.push(`Very high COD amount: ৳${order.cod.toLocaleString()}`);
   } else if (order.cod >= highCod) {
     signals.push({
       key: "high_cod",
-      weight: WEIGHTS.highCod,
+      weight: weightFor("highCod"),
       detail: `COD ৳${order.cod.toLocaleString()} ≥ ৳${highCod.toLocaleString()}`,
     });
-    reasons.push(`High COD (৳${order.cod.toLocaleString()})`);
+    reasons.push(`High COD amount: ৳${order.cod.toLocaleString()}`);
   }
 
   // --- Phone duplication -------------------------------------------------
-  if (history.phoneOrdersCount >= DUP_PHONE_HEAVY) {
+  // Gold-tier buyers earn this bypass: a repeat customer is *expected* to
+  // have many prior orders. Standard/silver buyers still trip the signal.
+  if (history.phoneOrdersCount >= DUP_PHONE_HEAVY && !isBypassed("duplicate_phone_heavy")) {
     signals.push({
       key: "duplicate_phone_heavy",
-      weight: WEIGHTS.duplicatePhoneHeavy,
+      weight: weightFor("duplicatePhoneHeavy"),
       detail: `${history.phoneOrdersCount.toFixed(1)} weighted prior orders from this phone`,
     });
-    reasons.push(`${Math.round(history.phoneOrdersCount)} prior orders from this phone`);
-  } else if (history.phoneOrdersCount >= DUP_PHONE_WARN) {
+    reasons.push(
+      `Same phone used in ${Math.round(history.phoneOrdersCount)} previous orders`,
+    );
+  } else if (
+    history.phoneOrdersCount >= DUP_PHONE_WARN &&
+    !isBypassed("duplicate_phone")
+  ) {
     signals.push({
       key: "duplicate_phone",
-      weight: WEIGHTS.duplicatePhone,
+      weight: weightFor("duplicatePhone"),
       detail: `${history.phoneOrdersCount.toFixed(1)} weighted prior orders from this phone`,
     });
-    reasons.push(`Repeat phone (${Math.round(history.phoneOrdersCount)} prior)`);
+    reasons.push(
+      `Same phone used in ${Math.round(history.phoneOrdersCount)} previous orders`,
+    );
   }
 
   // --- Prior negative outcomes (decayed) ---------------------------------
   if (history.phoneReturnedCount > 0) {
     signals.push({
       key: "prior_returns",
-      weight: WEIGHTS.priorReturns,
+      weight: weightFor("priorReturns"),
       detail: `${history.phoneReturnedCount.toFixed(1)} weighted prior return(s)`,
     });
+    const n = Math.max(1, Math.round(history.phoneReturnedCount));
     reasons.push(
-      `${Math.max(1, Math.round(history.phoneReturnedCount))} prior return${
-        history.phoneReturnedCount < 1.5 ? "" : "s"
-      }`,
+      `Customer has ${n} previous failed deliver${n === 1 ? "y" : "ies"} (RTO)`,
     );
   }
 
   if (history.phoneCancelledCount >= 2) {
     signals.push({
       key: "prior_cancelled",
-      weight: WEIGHTS.priorCancelled,
+      weight: weightFor("priorCancelled"),
       detail: `${history.phoneCancelledCount.toFixed(1)} weighted prior cancellations`,
     });
-    reasons.push(`${Math.round(history.phoneCancelledCount)} prior cancellations`);
+    reasons.push(
+      `Customer cancelled ${Math.round(history.phoneCancelledCount)} previous orders`,
+    );
+  }
+
+  // --- Reputation: low success rate when ≥3 prior outcomes -----------------
+  // Counts only orders that have *resolved* (delivered/returned/cancelled);
+  // pending shipments don't count for or against the customer yet.
+  // Raw fields are optional in RiskHistory so the bulk-upload caller doesn't
+  // have to compute them — that path skips this signal.
+  const deliveredRaw = history.phoneDeliveredRaw ?? 0;
+  const returnedRaw = history.phoneReturnedRaw ?? 0;
+  const cancelledRaw = history.phoneCancelledRaw ?? 0;
+  const priorResolved = deliveredRaw + returnedRaw + cancelledRaw;
+  if (priorResolved >= 3) {
+    const successRate = deliveredRaw / priorResolved;
+    if (successRate < 0.4) {
+      const weight =
+        successRate < 0.2 ? weightFor("priorReturns") : weightFor("priorCancelled");
+      signals.push({
+        key: "low_success_rate",
+        weight,
+        detail: `Success rate ${Math.round(successRate * 100)}% (${deliveredRaw}/${priorResolved})`,
+      });
+      reasons.push(
+        `Only ${Math.round(successRate * 100)}% of past orders were delivered (${deliveredRaw} of ${priorResolved})`,
+      );
+    }
   }
 
   // --- District / name heuristics ---------------------------------------
@@ -306,33 +604,51 @@ export function computeRisk(
   );
   DEFAULT_SUSPICIOUS_DISTRICTS.forEach((d) => districts.add(d));
   const district = order.customer.district.trim().toLowerCase();
+  let suspiciousDistrictHit = false;
   if (!district || districts.has(district)) {
+    suspiciousDistrictHit = true;
     signals.push({
       key: "suspicious_district",
-      weight: WEIGHTS.suspiciousDistrict,
+      weight: weightFor("suspiciousDistrict"),
       detail: district ? `District "${order.customer.district}" flagged` : "Missing district",
     });
-    reasons.push(district ? `Suspicious district: ${order.customer.district}` : "Missing district");
+    reasons.push(
+      district
+        ? `Delivery district "${order.customer.district}" is on the suspicious list`
+        : "Delivery district is missing",
+    );
   }
 
-  if (isFakeNamePattern(order.customer.name)) {
+  if (isFakeNamePattern(order.customer.name) && !isBypassed("fake_name_pattern")) {
     signals.push({
       key: "fake_name_pattern",
-      weight: WEIGHTS.fakeNamePattern,
+      weight: weightFor("fakeNamePattern"),
       detail: `Name "${order.customer.name}" matches fake/gibberish pattern`,
     });
-    reasons.push(`Suspicious name pattern`);
+    reasons.push(
+      `Customer name "${order.customer.name}" looks like a placeholder or fake entry`,
+    );
+  }
+
+  // --- Hard-block COMBO: extreme COD + suspicious district. Either alone
+  // doesn't force HIGH, but the combination is consistently a fraud pattern
+  // in BD COD (large prepaid-without-prepaid + ambiguous delivery zone).
+  if (extremeCodHit && suspiciousDistrictHit) {
+    hardBlockCauses.push("extreme_cod_in_suspicious_district");
+    reasons.push(
+      "Very high COD into a suspicious district — auto-flagged for review",
+    );
   }
 
   // --- Call history ------------------------------------------------------
   if (history.phoneUnreachableCount >= 2) {
     signals.push({
       key: "unreachable_history",
-      weight: WEIGHTS.unreachableHistory,
+      weight: weightFor("unreachableHistory"),
       detail: `${history.phoneUnreachableCount.toFixed(1)} weighted unreachable attempts`,
     });
     reasons.push(
-      `Previously unreachable (${Math.round(history.phoneUnreachableCount)}×)`,
+      `Customer was unreachable on ${Math.round(history.phoneUnreachableCount)} previous call attempt(s)`,
     );
   }
 
@@ -340,52 +656,99 @@ export function computeRisk(
   if (history.ipRecentCount >= IP_VELOCITY_THRESHOLD) {
     signals.push({
       key: "ip_velocity",
-      weight: WEIGHTS.ipVelocity,
+      weight: weightFor("ipVelocity"),
       detail: `${history.ipRecentCount} orders from same IP recently`,
     });
-    reasons.push(`High order velocity from same IP`);
+    reasons.push(
+      `${history.ipRecentCount} orders placed from the same IP in the last few minutes`,
+    );
   }
 
-  const velocityThreshold = opts.velocityThreshold ?? 0;
-  if (velocityThreshold > 0 && history.phoneVelocityCount >= velocityThreshold) {
+  // Default: 3 orders from the same phone inside the velocity window. Set
+  // opts.velocityThreshold to a different positive number to override, or to
+  // a negative number (e.g. -1) to disable on a per-merchant basis.
+  const velocityThreshold = opts.velocityThreshold ?? 3;
+  if (
+    velocityThreshold > 0 &&
+    history.phoneVelocityCount >= velocityThreshold &&
+    !isBypassed("velocity_breach")
+  ) {
     signals.push({
       key: "velocity_breach",
-      weight: WEIGHTS.velocityBreach,
+      weight: weightFor("velocityBreach"),
       detail: `${history.phoneVelocityCount} orders from this phone inside window`,
     });
-    reasons.push(`Order velocity breach on this phone`);
+    reasons.push(
+      `${history.phoneVelocityCount} orders from this phone in the last few minutes`,
+    );
   }
 
   // --- Address reuse -----------------------------------------------------
   if (history.addressDistinctPhones >= ADDRESS_REUSE_THRESHOLD) {
     signals.push({
       key: "duplicate_address",
-      weight: WEIGHTS.duplicateAddress,
+      weight: weightFor("duplicateAddress"),
       detail: `${history.addressDistinctPhones} different phones shipped to this address`,
     });
     reasons.push(
-      `Address shared across ${history.addressDistinctPhones} phone numbers`,
+      `Same address used by ${history.addressDistinctPhones} different phone numbers`,
     );
   } else if (history.addressReturnedCount > 0) {
     // Address has a prior RTO even if not widely reused — still a yellow flag.
     signals.push({
       key: "duplicate_address",
-      weight: WEIGHTS.duplicateAddress / 2,
+      weight: weightFor("duplicateAddress") / 2,
       detail: `${history.addressReturnedCount.toFixed(1)} prior return(s) at this address`,
     });
-    reasons.push(`Previous return at this address`);
+    reasons.push(`Previous failed delivery at this address`);
   }
 
   const raw = signals.reduce((sum, s) => sum + s.weight, 0);
-  const riskScore = Math.min(100, Math.round(raw));
+  let riskScore = Math.min(100, Math.round(raw));
+  const hardBlocked = hardBlockCauses.length > 0;
+  // Hard block forces HIGH (>= mediumMax + 1) and pins the score to ≥85 so
+  // the queue ranks these above any computed-medium order.
+  if (hardBlocked) {
+    riskScore = Math.max(riskScore, 85);
+  }
   const level = classifyLevel(riskScore);
+
+  // Confidence is the inverse of risk — what the merchant sees on the order
+  // card. Labels: 0–39 risk → "Safe", 40–69 → "Verify", 70+ → "Risky".
+  const confidence = Math.max(0, Math.min(100, 100 - riskScore));
+  const confidenceLabel: ConfidenceLabel =
+    level === "low" ? "Safe" : level === "medium" ? "Verify" : "Risky";
+
+  // Calibrated probability — the user-facing scalar moving forward. Hard
+  // blocks pin to ≥0.95 since the merchant has explicitly opted these out
+  // (no point hedging the probability when policy already decided).
+  const baseRate =
+    typeof opts.baseRtoRate === "number" && opts.baseRtoRate > 0 && opts.baseRtoRate < 1
+      ? opts.baseRtoRate
+      : DEFAULT_BASE_RTO_RATE;
+  let pRto = scoreToProbability(riskScore, baseRate);
+  if (hardBlocked) pRto = Math.max(pRto, 0.95);
+  const pRtoPct = Math.round(pRto * 1000) / 10; // one decimal place
 
   return {
     riskScore,
     level,
     reasons,
     signals,
-    reviewStatus: level === "high" ? "pending_call" : "not_required",
+    reviewStatus:
+      level === "high"
+        ? "pending_call"
+        : level === "medium"
+          ? "optional_review"
+          : "not_required",
+    confidence,
+    confidenceLabel,
+    hardBlocked,
+    pRto,
+    pRtoPct,
+    customerTier,
+    dynamicThresholds,
+    weightsVersion: opts.weightsVersion ?? DEFAULT_WEIGHTS_VERSION,
   };
 }
 
@@ -396,7 +759,11 @@ export function computeRisk(
  */
 function decayWeight(ageDays: number, halfLifeDays: number): number {
   if (halfLifeDays <= 0) return 1;
-  if (ageDays <= 0) return 1;
+  // Clamp near-zero ages to a full unit weight. Without this, three orders
+  // created back-to-back accumulate to 2.9999993, missing the `>= 3`
+  // duplicate-phone threshold (DUP_PHONE_WARN) due to fp arithmetic in
+  // Math.pow(2, -tinyDelta/halfLife).
+  if (ageDays < 0.001) return 1;
   return Math.pow(2, -ageDays / halfLifeDays);
 }
 
@@ -499,17 +866,31 @@ export async function collectRiskHistory(
     ]);
 
   let phoneOrdersCount = 0;
+  let phoneDeliveredCount = 0;
   let phoneReturnedCount = 0;
   let phoneCancelledCount = 0;
+  let phoneTotalRaw = 0;
+  let phoneDeliveredRaw = 0;
+  let phoneReturnedRaw = 0;
+  let phoneCancelledRaw = 0;
   for (const row of phoneOrders) {
     const age = row.createdAt
       ? Math.max(0, (now - row.createdAt.getTime()) / 86400_000)
       : 0;
     const w = decayWeight(age, halfLifeDays);
     phoneOrdersCount += w;
+    phoneTotalRaw += 1;
     const status = row.order?.status;
-    if (status === "rto") phoneReturnedCount += w;
-    if (status === "cancelled") phoneCancelledCount += w;
+    if (status === "delivered") {
+      phoneDeliveredCount += w;
+      phoneDeliveredRaw += 1;
+    } else if (status === "rto") {
+      phoneReturnedCount += w;
+      phoneReturnedRaw += 1;
+    } else if (status === "cancelled") {
+      phoneCancelledCount += w;
+      phoneCancelledRaw += 1;
+    }
   }
 
   let addressReturnedCount = 0;
@@ -534,6 +915,7 @@ export async function collectRiskHistory(
 
   return {
     phoneOrdersCount,
+    phoneDeliveredCount,
     phoneReturnedCount,
     phoneCancelledCount,
     phoneUnreachableCount,
@@ -541,6 +923,10 @@ export async function collectRiskHistory(
     phoneVelocityCount: phoneVelocity,
     addressDistinctPhones: distinctPhones.size,
     addressReturnedCount,
+    phoneTotalRaw,
+    phoneDeliveredRaw,
+    phoneReturnedRaw,
+    phoneCancelledRaw,
   };
 }
 
@@ -695,6 +1081,13 @@ export const __TEST = {
   WEIGHTS,
   HIGH_COD_BDT,
   EXTREME_COD_BDT,
+  HIGH_COD_FLOOR,
+  EXTREME_COD_FLOOR,
+  HIGH_COD_P75_MULTIPLIER,
+  EXTREME_COD_P75_MULTIPLIER,
+  GOLD_TIER_MIN_DELIVERED,
+  GOLD_TIER_MIN_SUCCESS_RATE,
+  DEFAULT_BASE_RTO_RATE,
   DUP_PHONE_WARN,
   DUP_PHONE_HEAVY,
   IP_VELOCITY_THRESHOLD,
@@ -704,4 +1097,6 @@ export const __TEST = {
   decayWeight,
   isFakeNamePattern,
   hashAddress,
+  resolveDynamicThresholds,
+  scoreToProbability,
 };

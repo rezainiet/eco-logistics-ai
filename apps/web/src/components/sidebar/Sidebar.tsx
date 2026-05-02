@@ -68,10 +68,30 @@ const NAV: NavGroup[] = [
   },
 ];
 
-function isActive(pathname: string | null, href: string): boolean {
-  if (!pathname) return false;
-  if (href === "/dashboard") return pathname === "/dashboard" || pathname === "/dashboard/";
-  return pathname === href || pathname.startsWith(`${href}/`);
+/**
+ * Compute the single most-specific nav href that the pathname matches.
+ * "Most specific" = longest href that is either an exact match or a path
+ * prefix. Prevents both "Analytics" and "Behavior" lighting up at
+ * /dashboard/analytics/behavior — only "Behavior" stays active.
+ *
+ * Returns null when no nav item matches (e.g. on a sub-route the sidebar
+ * does not surface — those routes intentionally show no active highlight).
+ */
+function findActiveHref(
+  pathname: string | null,
+  hrefs: readonly string[],
+): string | null {
+  if (!pathname) return null;
+  let best: string | null = null;
+  for (const href of hrefs) {
+    const matches =
+      href === "/dashboard"
+        ? pathname === "/dashboard" || pathname === "/dashboard/"
+        : pathname === href || pathname.startsWith(`${href}/`);
+    if (!matches) continue;
+    if (!best || href.length > best.length) best = href;
+  }
+  return best;
 }
 
 function NavBadge({ count, tone }: { count: number; tone: "danger" | "brand" }) {
@@ -93,20 +113,46 @@ function NavBadge({ count, tone }: { count: number; tone: "danger" | "brand" }) 
 function NavList({
   onNavigate,
   fraudCount,
+  logoDataUrl,
+  businessName,
 }: {
   onNavigate?: () => void;
   fraudCount: number;
+  logoDataUrl: string | null;
+  businessName: string | null;
 }) {
   const pathname = usePathname();
+  const allHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
+  const activeHref = findActiveHref(pathname, allHrefs);
+  const initials = (businessName ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("") || "L";
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center gap-2.5 border-b border-stroke/8 px-5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand text-sm font-bold text-white shadow-glow">
-          L
+        <span
+          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand text-sm font-bold text-white shadow-glow"
+          aria-hidden
+        >
+          {logoDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoDataUrl}
+              alt=""
+              className="h-full w-full object-contain"
+            />
+          ) : (
+            initials
+          )}
         </span>
         <div className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-sm font-semibold text-fg">Logistics</span>
+          <span className="truncate text-sm font-semibold text-fg">
+            {businessName ?? "Logistics"}
+          </span>
           <span className="truncate text-2xs font-medium uppercase tracking-[0.08em] text-fg-subtle">
             Merchant workspace
           </span>
@@ -121,7 +167,7 @@ function NavList({
             </p>
             {group.items.map((item) => {
               const Icon = item.icon;
-              const active = isActive(pathname, item.href);
+              const active = activeHref === item.href;
               const badge = item.badgeKey === "fraud" ? fraudCount : 0;
               return (
                 <Link
@@ -168,11 +214,24 @@ export function Sidebar() {
   );
   const fraudCount =
     (stats.data?.queue?.pending ?? 0) + (stats.data?.queue?.noAnswer ?? 0);
+  // Pull the merchant's branding + business name so the sidebar header shows
+  // the uploaded logo and their actual business name. Same query that drives
+  // <BrandingProvider>, so this adds zero extra round-trips.
+  const profile = trpc.merchants.getProfile.useQuery(undefined, {
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+  const logoDataUrl = profile.data?.branding?.logoDataUrl ?? null;
+  const businessName = profile.data?.businessName ?? null;
 
   return (
     <>
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-stroke/8 bg-surface-overlay md:flex md:flex-col">
-        <NavList fraudCount={fraudCount} />
+        <NavList
+          fraudCount={fraudCount}
+          logoDataUrl={logoDataUrl}
+          businessName={businessName}
+        />
       </aside>
 
       <Sheet open={open} onOpenChange={setOpen}>
@@ -187,7 +246,12 @@ export function Sidebar() {
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-64 border-stroke/10 bg-surface-overlay p-0">
-          <NavList fraudCount={fraudCount} onNavigate={() => setOpen(false)} />
+          <NavList
+            fraudCount={fraudCount}
+            logoDataUrl={logoDataUrl}
+            businessName={businessName}
+            onNavigate={() => setOpen(false)}
+          />
         </SheetContent>
       </Sheet>
     </>

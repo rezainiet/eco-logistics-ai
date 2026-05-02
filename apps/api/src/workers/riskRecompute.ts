@@ -4,6 +4,7 @@ import { Merchant, type MerchantFraudConfig, Order } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
 import { fireFraudAlert } from "../lib/alerts.js";
+import { updateOrderWithVersion } from "../lib/orderConcurrency.js";
 import {
   collectRiskHistory,
   computeRisk,
@@ -61,7 +62,7 @@ function buildRiskOpts(fc: MerchantFraudConfig): RiskOptions {
     suspiciousDistricts: fc.suspiciousDistricts ?? [],
     blockedPhones: fc.blockedPhones ?? [],
     blockedAddresses: fc.blockedAddresses ?? [],
-    velocityThreshold: fc.velocityThreshold ?? 0,
+    velocityThreshold: fc.velocityThreshold ?? undefined,
   };
 }
 
@@ -97,7 +98,7 @@ export async function processRescoreJob(
     "order.status": { $in: NON_TERMINAL_STATUSES },
     ...(excludeId ? { _id: { $ne: excludeId } } : {}),
   })
-    .select("_id orderNumber customer order.cod source.ip source.addressHash fraud.reviewStatus fraud.level")
+    .select("_id orderNumber customer order.cod source.ip source.addressHash fraud.reviewStatus fraud.level version")
     .lean();
 
   if (openOrders.length === 0) {
@@ -149,8 +150,18 @@ export async function processRescoreJob(
       const wasHigh = order.fraud?.level === "high";
       const nowHigh = risk.level === "high";
 
-      await Order.updateOne(
-        { _id: order._id },
+      // Optimistic-concurrency: the order may have been mutated between the
+      // `Order.find` above and this write — common cases are a merchant
+      // restore (which re-applies the pre-reject snapshot) or a manual fraud
+      // review action. If the version we read is stale we SKIP this order and
+      // let the next rescore trigger pick it up; clobbering a freshly-restored
+      // fraud state would silently undo the merchant's intent.
+      const cas = await updateOrderWithVersion(
+        {
+          _id: order._id as Types.ObjectId,
+          version: (order as { version?: number }).version ?? 0,
+          merchantId,
+        },
         {
           $set: {
             "fraud.detected": risk.level === "high",
@@ -163,6 +174,18 @@ export async function processRescoreJob(
           },
         },
       );
+
+      if (!cas.ok) {
+        console.warn(
+          JSON.stringify({
+            evt: "risk-recompute.version_conflict",
+            orderId: String(order._id),
+            staleVersion: (order as { version?: number }).version ?? 0,
+            trigger: data.trigger,
+          }),
+        );
+        continue;
+      }
 
       rescored += 1;
       void writeAudit({

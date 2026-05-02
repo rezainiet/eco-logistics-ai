@@ -43,7 +43,7 @@ export default function AnalyticsPage() {
       <PageHeader
         eyebrow="Insights"
         title="Analytics"
-        description={`Lifetime RTO rate: ${formatPercent(rtoRate)} · performance + call center + fraud in one view.`}
+        description={`Lifetime failed-delivery rate: ${formatPercent(rtoRate)} · performance + call center + fraud in one view.`}
         actions={
           <Button
             asChild
@@ -74,7 +74,7 @@ export default function AnalyticsPage() {
           loading={loading}
         />
         <StatCard
-          label="RTO"
+          label="Failed"
           value={loading ? "—" : (d?.rto ?? 0).toLocaleString()}
           icon={PackageX}
           tone="danger"
@@ -95,7 +95,14 @@ export default function AnalyticsPage() {
           title="Orders — last 7 days"
           description="Daily volume, deliveries, and RTOs"
         >
-          {last7.isLoading ? (
+          {last7.isError ? (
+            <div className="flex h-64 flex-col items-center justify-center gap-3 text-center text-sm text-fg-muted">
+              <span>Could not load analytics.</span>
+              <Button variant="outline" size="sm" onClick={() => last7.refetch()}>
+                Retry
+              </Button>
+            </div>
+          ) : last7.isLoading ? (
             <div className="h-64 animate-shimmer rounded-md" />
           ) : (last7.data ?? []).length === 0 ? (
             <EmptyState

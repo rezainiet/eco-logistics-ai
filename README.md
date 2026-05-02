@@ -64,7 +64,7 @@ ecommerce-logistics/
    npm run dev
    ```
 
-   - Web: http://localhost:3000
+   - Web: http://localhost:3001
    - API: http://localhost:4000 (tRPC at `/trpc`, health at `/health`)
 
 ## Scripts

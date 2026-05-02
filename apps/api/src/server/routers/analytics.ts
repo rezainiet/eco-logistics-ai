@@ -1,7 +1,7 @@
 import { Types } from "mongoose";
 import { TRPCError } from "@trpc/server";
 import { CallLog, Merchant, MerchantStats, Order } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 import { cached } from "../../lib/cache.js";
 import { getPlan, type AnalyticsLevel } from "../../lib/plans.js";
 
@@ -28,10 +28,6 @@ async function requireAnalyticsLevel(
       message: `${required} analytics requires a higher plan — currently on ${plan.name}`,
     });
   }
-}
-
-function merchantObjectId(ctx: { user: { id: string } }): Types.ObjectId {
-  return new Types.ObjectId(ctx.user.id);
 }
 
 function startOfToday(): Date {

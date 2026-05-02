@@ -25,6 +25,27 @@ import { trpc } from "@/lib/trpc";
 import { formatRelative } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 
+// Map raw camelCase metric identifiers (`fraudReviewsUsed`, `smsSent`...) to
+// human copy. Mirrors the same dictionary in <SubscriptionBanner> so both
+// surfaces speak the same language when nagging the merchant about quota.
+const METRIC_LABELS: Record<string, string> = {
+  fraudReviewsUsed: "fraud reviews this month",
+  fraudReviews: "fraud reviews this month",
+  smsSent: "SMS messages this month",
+  smsUsed: "SMS messages this month",
+  ordersIngested: "orders this month",
+  ordersUsed: "orders this month",
+  ordersCreated: "orders this month",
+  shipmentsBooked: "shipments this month",
+  callsInitiated: "calls this month",
+  callMinutesUsed: "call minutes this month",
+  webhookEvents: "webhook events this month",
+};
+function humanMetric(metric: string): string {
+  if (METRIC_LABELS[metric]) return METRIC_LABELS[metric]!;
+  return metric.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ").toLowerCase();
+}
+
 type NotificationTone = "danger" | "warning" | "info" | "success";
 
 type NotificationItem = {
@@ -103,24 +124,32 @@ export function NotificationsDrawer({
         href: "/dashboard/billing",
       });
     }
-    const blocked = usage.data?.meters.find((m) => m.blocked);
+    // Same defensive guard as <SubscriptionBanner>: suppress phantom
+    // "blocked at zero usage" so a fresh trial doesn't surface an alarming
+    // notification before the merchant has done anything. And prettify the
+    // raw camelCase metric identifier into something a human can read.
+    const blocked = usage.data?.meters.find(
+      (m) => m.blocked && (m.used ?? 0) > 0,
+    );
     if (blocked) {
       out.push({
         id: `usage:blocked:${blocked.metric}`,
         tone: "danger",
         icon: AlertCircle,
-        title: `Quota exceeded: ${blocked.metric}`,
+        title: `Quota exceeded: ${humanMetric(blocked.metric)}`,
         body: "Upgrade your plan to keep operating.",
         href: "/dashboard/billing",
       });
     }
-    const warning = usage.data?.meters.find((m) => m.warning && !m.blocked);
+    const warning = usage.data?.meters.find(
+      (m) => m.warning && !m.blocked && (m.used ?? 0) > 0,
+    );
     if (warning) {
       out.push({
         id: `usage:warn:${warning.metric}`,
         tone: "warning",
         icon: TrendingUp,
-        title: `${Math.round(warning.ratio * 100)}% of ${warning.metric} quota used`,
+        title: `${Math.round(warning.ratio * 100)}% of ${humanMetric(warning.metric)} quota used`,
         body: "Consider upgrading before you hit the limit.",
         href: "/dashboard/billing",
       });

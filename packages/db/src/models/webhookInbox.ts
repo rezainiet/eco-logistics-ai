@@ -7,9 +7,42 @@ const { Schema, model, models } = mongoose;
  * replay (or platform-level retry) never produces a duplicate order.
  *
  * `externalId` is the upstream event id when present (Shopify `X-Shopify-Webhook-Id`),
- * otherwise a hash of the payload + topic. Status flips through processing →
- * succeeded/failed; failed rows are retried by the worker until `attempts >= 5`.
+ * otherwise a hash of the payload + topic. Status flips through received →
+ * processing → succeeded/failed; failed rows are retried by the worker until
+ * `attempts >= 5`.
+ *
+ * **Idempotency durability — INFINITE.** The dedup keys
+ * `(merchantId, provider, externalId)` live FOREVER. Earlier versions reaped
+ * whole rows after 30 days via a TTL index, which silently re-opened the
+ * dedup window for any platform that retries indefinitely (Shopify will
+ * happily redeliver an event a year later if the receiver was unreachable
+ * the first time). The audit caught a concrete failure scenario where a
+ * 32-day-old replay produced a duplicate order; this design closes it.
+ *
+ * Storage is bounded by reaping the *payload* — not the row. The
+ * `webhookRetry` sweeper NULLs `payload` and `payloadBytes` on succeeded
+ * rows whose `payloadReapAt` has passed (default: receivedAt + 90 days).
+ * The remaining slim row (~200 bytes) is enough to dedupe a future
+ * delivery and to surface the resolved order id back to the caller. If a
+ * replayed event arrives after payload reap, the inbox lookup short-
+ * circuits with `duplicate: true` and the caller never re-processes.
+ *
+ * Defense-in-depth: even if a row IS deleted (manual cleanup, partition
+ * loss), the second-line guard is the unique sparse index on Order
+ * `(merchantId, source.externalId)` — `ingestNormalizedOrder` checks
+ * Order.findOne before insert, so a duplicate cannot create a second order
+ * as long as the original order document still exists.
  */
+export const WEBHOOK_PAYLOAD_REAP_DAYS = 90;
+/**
+ * Backward-compatible alias — old code referenced `WEBHOOK_INBOX_TTL_DAYS`
+ * back when whole rows were reaped. The constant is kept so external
+ * consumers don't break, but it now means "payload reap deadline", not
+ * "row deletion deadline".
+ *
+ * @deprecated Use `WEBHOOK_PAYLOAD_REAP_DAYS` for clarity.
+ */
+export const WEBHOOK_INBOX_TTL_DAYS = WEBHOOK_PAYLOAD_REAP_DAYS;
 export const WEBHOOK_STATUSES = ["received", "processing", "succeeded", "failed"] as const;
 export type WebhookStatus = (typeof WEBHOOK_STATUSES)[number];
 
@@ -44,11 +77,30 @@ const webhookInboxSchema = new Schema(
     resolvedOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
     receivedAt: { type: Date, default: () => new Date() },
     processedAt: { type: Date },
+    /**
+     * Payload-reap deadline. Once `now > payloadReapAt` AND the row is
+     * `succeeded`, the `webhookRetry` sweeper NULLs the `payload` and
+     * `payloadBytes` fields. The row itself stays — its dedup keys are
+     * what makes the idempotency window infinite. Defaults to
+     * `receivedAt + WEBHOOK_PAYLOAD_REAP_DAYS`.
+     *
+     * Historical name: `expiresAt`. Renamed for semantic clarity — old
+     * versions used this as a Mongo TTL anchor that deleted whole rows.
+     */
+    payloadReapAt: {
+      type: Date,
+      default: () =>
+        new Date(Date.now() + WEBHOOK_PAYLOAD_REAP_DAYS * 24 * 60 * 60 * 1000),
+    },
+    /** True once the sweeper has cleared `payload`. Stable signal for ops. */
+    payloadReaped: { type: Boolean, default: false },
   },
   { timestamps: true },
 );
 
 // Idempotency key — we never duplicate-process the same upstream event.
+// PERMANENT: there is intentionally NO TTL on this collection. Reaping rows
+// re-opens the dedup window — see the schema doc-comment above.
 webhookInboxSchema.index(
   { merchantId: 1, provider: 1, externalId: 1 },
   { unique: true },
@@ -58,6 +110,17 @@ webhookInboxSchema.index({ status: 1, receivedAt: 1 });
 webhookInboxSchema.index(
   { status: 1, nextRetryAt: 1 },
   { partialFilterExpression: { status: "failed" } },
+);
+// Payload-reap sweeper pickup — succeeded rows whose payload deadline has
+// passed, oldest first. Partial filter keeps the index tiny.
+webhookInboxSchema.index(
+  { payloadReapAt: 1 },
+  {
+    partialFilterExpression: {
+      status: "succeeded",
+      payloadReaped: false,
+    },
+  },
 );
 
 export type WebhookInbox = InferSchemaType<typeof webhookInboxSchema> & {

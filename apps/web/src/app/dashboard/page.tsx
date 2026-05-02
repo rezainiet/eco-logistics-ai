@@ -29,7 +29,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ChartCard } from "@/components/charts/chart-card";
-import { OnboardingChecklist } from "@/components/onboarding/onboarding-checklist";
+import { NewMerchantRedirect } from "@/components/onboarding/new-merchant-redirect";
+import { NextStepBanner } from "@/components/dashboard/next-step-banner";
+import { OperationalBanner } from "@/components/dashboard/operational-banner";
 import {
   CHART_AXIS_STROKE,
   CHART_COLORS,
@@ -82,7 +84,7 @@ export default function DashboardPage() {
     ? [
         { name: "Delivered", value: d.delivered, color: CHART_COLORS.success },
         { name: "Pending", value: d.pending, color: CHART_COLORS.warning },
-        { name: "RTO", value: d.rto, color: CHART_COLORS.danger },
+        { name: "Failed", value: d.rto, color: CHART_COLORS.danger },
       ].filter((s) => s.value > 0)
     : [];
 
@@ -90,6 +92,9 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      <NewMerchantRedirect />
+      <NextStepBanner />
+      <OperationalBanner />
       <PageHeader
         eyebrow="Overview"
         title="Welcome back"
@@ -114,8 +119,6 @@ export default function DashboardPage() {
         }
       />
 
-      <OnboardingChecklist />
-
       <section aria-label="Key metrics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Total orders"
@@ -136,7 +139,7 @@ export default function DashboardPage() {
           loading={loading}
         />
         <StatCard
-          label="RTO rate"
+          label="Failed delivery rate"
           value={loading ? "—" : `${rtoRate.toFixed(1)}%`}
           icon={PackageX}
           tone="danger"
@@ -200,7 +203,7 @@ export default function DashboardPage() {
                 <Legend wrapperStyle={CHART_LEGEND_STYLE} iconType="circle" iconSize={7} />
                 <Bar dataKey="Orders" fill={CHART_COLORS.brand} radius={[6, 6, 0, 0]} maxBarSize={42} />
                 <Bar dataKey="Delivered" fill={CHART_COLORS.success} radius={[6, 6, 0, 0]} maxBarSize={42} />
-                <Bar dataKey="RTO" fill={CHART_COLORS.danger} radius={[6, 6, 0, 0]} maxBarSize={42} />
+                <Bar dataKey="RTO" name="Failed delivery" fill={CHART_COLORS.danger} radius={[6, 6, 0, 0]} maxBarSize={42} />
               </BarChart>
             </ResponsiveContainer>
           )}

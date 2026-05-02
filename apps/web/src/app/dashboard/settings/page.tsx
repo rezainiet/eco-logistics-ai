@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { signOut } from "next-auth/react";
 import {
   AlertCircle,
+  Bot,
   Building2,
   CheckCircle2,
   Clock,
@@ -14,6 +15,8 @@ import {
   Lock,
   LogOut,
   Mail,
+  MessageSquare,
+  Palette,
   Pencil,
   Phone,
   ShieldCheck,
@@ -21,6 +24,14 @@ import {
   User as UserIcon,
   X,
 } from "lucide-react";
+import { AutomationModePicker } from "@/components/automation/automation-mode-picker";
+import { BrandingSection } from "@/components/branding/branding-section";
+import {
+  MERCHANT_COUNTRIES,
+  MERCHANT_LANGUAGES,
+  type MerchantCountry,
+  type MerchantLanguage,
+} from "@ecom/types";
 import { toast } from "@/components/ui/toast";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
@@ -50,34 +61,45 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const COUNTRIES = [
-  { code: "BD", label: "Bangladesh" },
-  { code: "PK", label: "Pakistan" },
-  { code: "IN", label: "India" },
-  { code: "LK", label: "Sri Lanka" },
-  { code: "NP", label: "Nepal" },
-  { code: "ID", label: "Indonesia" },
-  { code: "PH", label: "Philippines" },
-  { code: "VN", label: "Vietnam" },
-  { code: "MY", label: "Malaysia" },
-  { code: "TH", label: "Thailand" },
-] as const;
+// Codes come from @ecom/types (shared with the API and DB); labels are
+// UI-only metadata. Using `Record<MerchantCountry, string>` forces TypeScript
+// to error if a new code is added upstream and we forget to add a label.
+const COUNTRY_LABELS: Record<MerchantCountry, string> = {
+  BD: "Bangladesh",
+  PK: "Pakistan",
+  IN: "India",
+  LK: "Sri Lanka",
+  NP: "Nepal",
+  ID: "Indonesia",
+  PH: "Philippines",
+  VN: "Vietnam",
+  MY: "Malaysia",
+  TH: "Thailand",
+};
+const COUNTRIES = MERCHANT_COUNTRIES.map((code) => ({
+  code,
+  label: COUNTRY_LABELS[code],
+}));
 
-const LANGUAGES = [
-  { code: "en", label: "English" },
-  { code: "bn", label: "বাংলা" },
-  { code: "ur", label: "اردو" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "ta", label: "தமிழ்" },
-  { code: "id", label: "Bahasa Indonesia" },
-  { code: "th", label: "ไทย" },
-  { code: "vi", label: "Tiếng Việt" },
-  { code: "ms", label: "Bahasa Melayu" },
-] as const;
+const LANGUAGE_LABELS: Record<MerchantLanguage, string> = {
+  en: "English",
+  bn: "বাংলা",
+  ur: "اردو",
+  hi: "हिन्दी",
+  ta: "தமிழ்",
+  id: "Bahasa Indonesia",
+  th: "ไทย",
+  vi: "Tiếng Việt",
+  ms: "Bahasa Melayu",
+};
+const LANGUAGES = MERCHANT_LANGUAGES.map((code) => ({
+  code,
+  label: LANGUAGE_LABELS[code],
+}));
 
 const COURIER_PROVIDERS = [
   { id: "pathao", label: "Pathao", needsSecret: true, docs: "https://merchant.pathao.com/" },
-  { id: "steadfast", label: "Steadfast", needsSecret: false, docs: "https://www.steadfast.com.bd/" },
+  { id: "steadfast", label: "Steadfast", needsSecret: true, docs: "https://www.steadfast.com.bd/" },
   { id: "redx", label: "RedX", needsSecret: false, docs: "https://redx.com.bd/" },
   { id: "ecourier", label: "eCourier", needsSecret: true, docs: "https://ecourier.com.bd/" },
   { id: "paperfly", label: "Paperfly", needsSecret: true, docs: "https://paperfly.com.bd/" },
@@ -86,11 +108,13 @@ const COURIER_PROVIDERS = [
 
 type CourierId = (typeof COURIER_PROVIDERS)[number]["id"];
 
-type TabKey = "profile" | "couriers" | "security" | "billing";
+type TabKey = "profile" | "branding" | "couriers" | "automation" | "security" | "billing";
 
 const TABS: Array<{ key: TabKey; label: string; icon: typeof UserIcon }> = [
   { key: "profile", label: "Profile", icon: UserIcon },
+  { key: "branding", label: "Branding", icon: Palette },
   { key: "couriers", label: "Couriers", icon: Truck },
+  { key: "automation", label: "Automation", icon: Bot },
   { key: "security", label: "Security", icon: Lock },
   { key: "billing", label: "Billing", icon: CreditCard },
 ];
@@ -135,7 +159,9 @@ export default function SettingsPage() {
       </nav>
 
       {tab === "profile" && <ProfileSection />}
+      {tab === "branding" && <BrandingSection />}
       {tab === "couriers" && <CouriersSection />}
+      {tab === "automation" && <AutomationModePicker />}
       {tab === "security" && <SecuritySection />}
       {tab === "billing" && <BillingSection />}
 
@@ -249,6 +275,11 @@ function ProfileSection() {
                   className="pl-9"
                 />
               </div>
+              <TestSmsButton
+                phoneOnFile={profile.data?.phone ?? null}
+                phoneInForm={phone}
+                dirty={touched}
+              />
             </Field>
             <Field label="Member since" htmlFor="createdAt">
               <Input id="createdAt" value={createdAt} disabled className="disabled:opacity-70" />
@@ -1195,6 +1226,64 @@ function Field({
       </Label>
       {children}
       {hint && <p className="text-xs text-fg-faint">{hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * "Send test SMS" affordance — proves end-to-end pipeline (provider creds →
+ * carrier delivery) for the merchant before they trust automated SMS for
+ * order confirmations. Disabled when the form has unsaved phone changes,
+ * since the test sends to whatever's persisted, not what's typed.
+ */
+function TestSmsButton({
+  phoneOnFile,
+  phoneInForm,
+  dirty,
+}: {
+  phoneOnFile: string | null;
+  phoneInForm: string;
+  dirty: boolean;
+}) {
+  const phoneChanged = phoneInForm !== (phoneOnFile ?? "");
+  const disabledReason = !phoneOnFile
+    ? "Add and save a phone number first."
+    : phoneChanged && dirty
+      ? "Save your phone change first, then test."
+      : null;
+  const mutation = trpc.merchants.sendTestSms.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Test SMS sent to ••••${data.phoneSuffix}`);
+    },
+    onError: (err) => {
+      toast.error(err.message);
+    },
+  });
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-stroke/8 bg-bg-subtle px-3 py-2 text-xs">
+      <span className="text-fg-faint">
+        Verify your number receives messages from us.
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={mutation.isPending || disabledReason !== null}
+        title={disabledReason ?? undefined}
+        onClick={() => mutation.mutate()}
+      >
+        {mutation.isPending ? (
+          <>
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            Sending…
+          </>
+        ) : (
+          <>
+            <MessageSquare className="mr-1.5 h-3.5 w-3.5" />
+            Send test SMS
+          </>
+        )}
+      </Button>
     </div>
   );
 }

@@ -7,9 +7,12 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
+import Link from "next/link";
 import {
   AlertCircle,
   PackageCheck,
+  PackagePlus,
+  Plug,
   Plus,
   RefreshCw,
   SearchX,
@@ -44,7 +47,14 @@ import { CreateOrderDialog } from "@/components/orders/create-order-dialog";
 import { BulkUploadDialog } from "@/components/orders/bulk-upload-dialog";
 import { BookShipmentDialog } from "@/components/orders/book-shipment-dialog";
 import { TrackingTimelineDrawer } from "@/components/orders/tracking-timeline-drawer";
+import {
+  AutomationBadge,
+  type AutomationState,
+} from "@/components/automation/automation-badge";
+import { BulkAutomationBar } from "@/components/automation/bulk-automation-bar";
+import { OrdersCardList } from "@/components/orders/orders-card-list";
 import { formatBDT, formatDate } from "@/lib/formatters";
+import { humanizeError } from "@/lib/friendly-errors";
 import {
   ORDER_STATUSES,
   type OrderStatus as Status,
@@ -73,6 +83,8 @@ type OrderRow = {
   riskScore: number;
   riskLevel: "low" | "medium" | "high";
   reviewStatus: ReviewStatus;
+  automationState?: AutomationState;
+  bookedByAutomation?: boolean;
   createdAt: string | Date;
 };
 
@@ -144,7 +156,7 @@ export default function OrdersPage() {
       }
       await utils.orders.listOrders.invalidate();
     } catch (err) {
-      toast.error("Refresh failed", (err as Error).message);
+      toast.error("Refresh failed", humanizeError(err));
     } finally {
       setRefreshing((prev) => {
         const next = new Set(prev);
@@ -156,6 +168,11 @@ export default function OrdersPage() {
 
   const rows = (list.data?.items ?? []) as OrderRow[];
   const total = list.data?.total ?? 0;
+  // True when at least one filter is active. Drives the empty-state copy:
+  // a merchant with zero orders and zero filters needs a "get started" CTA,
+  // not a "try broadening the filters" message about filters they never set.
+  const hasActiveFilters =
+    status !== "all" || courier !== "" || phone !== "" || dateFrom !== "";
 
   const bookableIdsOnPage = useMemo(
     () =>
@@ -272,6 +289,22 @@ export default function OrdersPage() {
             <Badge variant="outline" className={`border-transparent capitalize ${orderStatusClass[s]}`}>
               {s.replace("_", " ")}
             </Badge>
+          );
+        },
+      },
+      {
+        header: "Automation",
+        id: "automation",
+        cell: ({ row }) => {
+          const r = row.original;
+          if (!r.automationState || r.automationState === "not_evaluated") {
+            return <span className="text-xs text-fg-faint">—</span>;
+          }
+          return (
+            <AutomationBadge
+              state={r.automationState}
+              bookedByAutomation={r.bookedByAutomation}
+            />
           );
         },
       },
@@ -531,7 +564,7 @@ export default function OrdersPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-stroke/10 bg-surface shadow-card">
+      <div className="hidden overflow-hidden rounded-xl border border-stroke/10 bg-surface shadow-card sm:block">
         <div className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -554,7 +587,28 @@ export default function OrdersPage() {
               ))}
             </TableHeader>
             <TableBody>
-              {list.isLoading ? (
+              {list.isError ? (
+                <TableRow>
+                  <TableCell colSpan={columns.length} className="p-0">
+                    <EmptyState
+                      icon={AlertCircle}
+                      title="Could not load orders"
+                      description="Something went wrong on our end. Try again in a moment."
+                      className="m-4 border-0 bg-transparent"
+                      action={
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-stroke/14 text-fg-muted"
+                          onClick={() => list.refetch()}
+                        >
+                          Retry
+                        </Button>
+                      }
+                    />
+                  </TableCell>
+                </TableRow>
+              ) : list.isLoading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i} className="border-stroke/8">
                     <TableCell colSpan={columns.length} className="py-3.5">
@@ -565,28 +619,60 @@ export default function OrdersPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={columns.length} className="p-0">
-                    <EmptyState
-                      icon={SearchX}
-                      title="No orders match your filters"
-                      description="Try broadening the status, phone number, or date range. Clearing filters returns to your full order list."
-                      className="m-4 border-0 bg-transparent"
-                      action={
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-stroke/14 text-fg-muted"
-                          onClick={() => {
-                            setStatus("all");
-                            setCourier("");
-                            setPhone("");
-                            setDateFrom("");
-                            resetToFirstPage();
-                          }}
-                        >
-                          Reset filters
-                        </Button>
-                      }
-                    />
+                    {hasActiveFilters ? (
+                      <EmptyState
+                        icon={SearchX}
+                        title="No orders match your filters"
+                        description="Try broadening the status, phone number, or date range. Clearing filters returns to your full order list."
+                        className="m-4 border-0 bg-transparent"
+                        action={
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="border-stroke/14 text-fg-muted"
+                            onClick={() => {
+                              setStatus("all");
+                              setCourier("");
+                              setPhone("");
+                              setDateFrom("");
+                              resetToFirstPage();
+                            }}
+                          >
+                            Reset filters
+                          </Button>
+                        }
+                      />
+                    ) : (
+                      <EmptyState
+                        icon={PackagePlus}
+                        title="No orders yet"
+                        description="Connect your store to ingest orders automatically, or create one manually to see how they flow through."
+                        className="m-4 border-0 bg-transparent"
+                        action={
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              asChild
+                              size="sm"
+                              className="bg-brand text-white hover:bg-brand-hover"
+                            >
+                              <Link href="/dashboard/integrations">
+                                <Plug className="mr-1.5 h-3.5 w-3.5" />
+                                Connect store
+                              </Link>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="border-stroke/14 text-fg-muted"
+                              onClick={() => setCreateOpen(true)}
+                            >
+                              <Plus className="mr-1.5 h-3.5 w-3.5" />
+                              Create order
+                            </Button>
+                          </div>
+                        }
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               ) : (
@@ -619,6 +705,22 @@ export default function OrdersPage() {
         </div>
       </div>
 
+
+      {/* Mobile card layout — extracted to <OrdersCardList /> */}
+      <OrdersCardList
+        rows={rows}
+        isLoading={list.isLoading}
+        selected={selected}
+        onToggleRow={toggleRow}
+        onResetFilters={() => {
+          setStatus("all");
+          setCourier("");
+          setPhone("");
+          setDateFrom("");
+          resetToFirstPage();
+        }}
+      />
+
       <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
         <p className="text-xs text-fg-subtle">
           Page <span className="font-medium text-fg">{pageIndex + 1}</span> ·{" "}
@@ -648,6 +750,12 @@ export default function OrdersPage() {
           </Button>
         </div>
       </div>
+
+      <BulkAutomationBar
+        selectedIds={selectedIds}
+        onActionDone={refresh}
+        onClearSelection={() => setSelected(new Set())}
+      />
 
       <CreateOrderDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={refresh} />
       <BulkUploadDialog open={uploadOpen} onOpenChange={setUploadOpen} onUploaded={refresh} />

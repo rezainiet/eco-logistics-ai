@@ -3,7 +3,8 @@ import { Types } from "mongoose";
 import { Integration, type IntegrationProvider } from "@ecom/db";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
-import { processWebhookOnce } from "../ingest.js";
+import { enqueueInboundWebhook } from "../ingest.js";
+import { QUEUE_NAMES, safeEnqueue } from "../../lib/queue.js";
 import {
   exchangeShopifyCode,
   fetchShopifyShopInfo,
@@ -12,6 +13,43 @@ import {
 } from "../../lib/integrations/shopify.js";
 import { writeAudit } from "../../lib/audit.js";
 import { safeStringEqual } from "../../lib/crypto.js";
+
+/**
+ * Maximum age (ms) of an inbound webhook before we reject it as stale. The
+ * inbox unique index already collapses replays into idempotent no-ops, but
+ * the freshness gate stops a captured payload from being weaponised hours or
+ * days later — pairs with the TTL on `WebhookInbox.expiresAt`.
+ */
+const WEBHOOK_FRESHNESS_WINDOW_MS = 5 * 60 * 1000;
+/** Allow a small clock-skew tolerance for upstream timestamps in the future. */
+const WEBHOOK_FUTURE_SKEW_MS = 60 * 1000;
+
+function readUpstreamTimestamp(headers: Record<string, unknown>): Date | null {
+  // Shopify ships ISO8601 in `x-shopify-triggered-at`. Custom-API senders use
+  // `x-event-timestamp` (epoch seconds OR ISO). Woo doesn't send a timestamp
+  // header, so callers without one fall through and skip the freshness check.
+  const candidates = [
+    "x-shopify-triggered-at",
+    "x-event-timestamp",
+    "x-timestamp",
+  ];
+  for (const key of candidates) {
+    const v = headers[key];
+    const raw = Array.isArray(v) ? v[0] : v;
+    if (typeof raw !== "string" || !raw) continue;
+    // Numeric epoch — accept seconds OR milliseconds.
+    if (/^\d+$/.test(raw)) {
+      const n = Number(raw);
+      const ms = n < 1e12 ? n * 1000 : n;
+      const d = new Date(ms);
+      if (!isNaN(d.getTime())) return d;
+      continue;
+    }
+    const d = new Date(raw);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
 
 /**
  * Inbound webhook receiver for commerce platforms. Mounted at
@@ -53,13 +91,35 @@ integrationsWebhookRouter.post(
 
     const adapter = adapterFor(provider as IntegrationProvider);
     const rawBody = req.body as Buffer;
+    if (!Buffer.isBuffer(rawBody)) {
+      // Defence-in-depth: if a future middleware change ever lets the global
+      // JSON parser run first, HMAC verification becomes mathematically
+      // impossible. Fail loudly rather than silently 401 every delivery.
+      console.error(
+        "[webhook] expected Buffer body — middleware ordering regressed",
+      );
+      return res.status(500).json({ ok: false, error: "raw body unavailable" });
+    }
     const rawString = rawBody.toString("utf8");
 
+    // HMAC key resolution differs by platform:
+    //   - Shopify signs every webhook with the app's `client_secret`
+    //     (== our stored `credentials.apiSecret`). The platform doesn't know
+    //     about any secret we mint locally.
+    //   - WooCommerce, custom_api: we configure the secret on their side
+    //     during connect, so `integration.webhookSecret` is the source of
+    //     truth.
     let secret: string | undefined;
     try {
-      secret = integration.webhookSecret
-        ? decryptSecret(integration.webhookSecret)
-        : undefined;
+      if (provider === "shopify") {
+        const stored = (integration.credentials as Record<string, string | undefined> | undefined)
+          ?.apiSecret;
+        secret = stored ? decryptSecret(stored) : undefined;
+      } else {
+        secret = integration.webhookSecret
+          ? decryptSecret(integration.webhookSecret)
+          : undefined;
+      }
     } catch {
       secret = undefined;
     }
@@ -78,6 +138,26 @@ integrationsWebhookRouter.post(
         },
       );
       return res.status(401).json({ ok: false, error: "invalid signature" });
+    }
+
+    // Freshness gate — reject replays of captured payloads. Only enforced
+    // when the upstream sends a verifiable timestamp; absence means the
+    // platform doesn't ship one (Woo) and we must accept the delivery.
+    const upstreamAt = readUpstreamTimestamp(
+      req.headers as Record<string, unknown>,
+    );
+    if (upstreamAt) {
+      const skew = Date.now() - upstreamAt.getTime();
+      if (skew > WEBHOOK_FRESHNESS_WINDOW_MS) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "stale webhook (outside 5m window)" });
+      }
+      if (skew < -WEBHOOK_FUTURE_SKEW_MS) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "future-dated webhook" });
+      }
     }
 
     let payload: unknown;
@@ -106,35 +186,65 @@ integrationsWebhookRouter.post(
       return res.status(400).json({ ok: false, error: "missing external id" });
     }
 
-    const normalized = adapter.normalizeWebhookPayload(topic, payload);
+    // Stamp the inbox row in `received` state. The unique index collapses
+    // duplicate deliveries into a no-op so we can ACK immediately without
+    // ever touching the ingestion pipeline twice.
+    let stamped;
+    try {
+      stamped = await enqueueInboundWebhook({
+        merchantId: integration.merchantId as Types.ObjectId,
+        integrationId: integration._id as Types.ObjectId,
+        provider,
+        topic,
+        externalId,
+        rawPayload: payload,
+        payloadBytes: rawBody.byteLength,
+      });
+    } catch (err) {
+      console.error(
+        "[webhook] inbox stamp failed",
+        (err as Error).message,
+      );
+      // 5xx so the upstream retries — we never lost the event.
+      return res.status(500).json({ ok: false, error: "inbox unavailable" });
+    }
 
-    const result = await processWebhookOnce({
-      merchantId: integration.merchantId as Types.ObjectId,
-      integrationId: integration._id,
-      provider,
-      topic,
-      externalId,
-      rawPayload: payload,
-      payloadBytes: rawBody.byteLength,
-      normalized,
-      source: provider as "shopify" | "woocommerce" | "custom_api",
-      ip: req.ip,
-      userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
-    });
-
-    await Integration.updateOne(
+    // Bookkeeping that doesn't gate the ACK — fire-and-forget.
+    void Integration.updateOne(
       { _id: integration._id },
       { $set: { "webhookStatus.lastEventAt": new Date() } },
+    ).catch((e) =>
+      console.error("[webhook] integration touch failed", (e as Error).message),
     );
 
-    if (result.ok) {
-      return res.json({
+    if (stamped.duplicate) {
+      // Already processed (or in-flight). Echo the prior order id when known.
+      return res.status(202).json({
         ok: true,
-        duplicate: !!result.duplicate,
-        orderId: result.orderId ?? null,
+        duplicate: true,
+        orderId: stamped.resolvedOrderId ?? null,
       });
     }
-    return res.status(202).json({ ok: false, error: result.error });
+
+    // Hand off to the worker. `safeEnqueue` never throws — on Redis outage
+    // it returns ok:false and notifies the merchant, but the inbox row is
+    // already on disk so the next sweep will still pick it up.
+    void safeEnqueue(
+      QUEUE_NAMES.webhookProcess,
+      "webhook-process:ingest",
+      { inboxId: String(stamped.inboxId) },
+      {
+        // Job-level retries are off — the inbox row owns the canonical
+        // backoff schedule via `nextRetryAt`.
+        attempts: 1,
+      },
+      {
+        merchantId: String(integration.merchantId),
+        description: `${provider} webhook ingest`,
+      },
+    );
+
+    return res.status(202).json({ ok: true, queued: true });
   },
 );
 
@@ -159,9 +269,24 @@ export const shopifyOauthRouter = express.Router();
 shopifyOauthRouter.get(
   "/oauth/shopify/callback",
   async (req: Request, res: Response) => {
-    const dashboard = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3000"}/dashboard/integrations`;
+    const dashboard = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3001"}/dashboard/integrations`;
     const fail = (errorCode: string) =>
       res.redirect(`${dashboard}?error=${encodeURIComponent(errorCode)}`);
+
+    // Shopify can land here with an `error=…` param (most commonly
+    // `access_denied` when the merchant clicks "Cancel" on the approval
+    // screen, or `invalid_request` when the install URL was malformed).
+    // Distinguish those from a genuinely missing `code` so the dashboard
+    // can show a friendlier message than "Missing OAuth parameters".
+    const errorParam = typeof req.query.error === "string" ? req.query.error : null;
+    if (errorParam) {
+      // `access_denied` → merchant declined; everything else is mapped to
+      // a generic "we couldn't complete the install" so we don't leak
+      // upstream error vocab into the merchant UI.
+      const code =
+        errorParam === "access_denied" ? "user_cancelled" : "shopify_install_rejected";
+      return fail(code);
+    }
 
     const code = typeof req.query.code === "string" ? req.query.code : null;
     const state = typeof req.query.state === "string" ? req.query.state : null;

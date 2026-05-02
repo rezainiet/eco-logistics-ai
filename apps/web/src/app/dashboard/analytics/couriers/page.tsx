@@ -75,7 +75,7 @@ export default function CourierPerformancePage() {
   const chartData = ranked.slice(0, 8).map((r) => ({
     name: r.courier,
     Delivered: r.delivered,
-    RTO: r.rto,
+    Failed: r.rto,
   }));
 
   const totalShipments = ranked.reduce((s, r) => s + r.shipments, 0);
@@ -87,7 +87,7 @@ export default function CourierPerformancePage() {
       <PageHeader
         eyebrow="Insights"
         title="Courier performance"
-        description="Per-courier delivery rate, RTO rate, transit time and revenue — last 90 days."
+        description="Per-courier delivery rate, failed-delivery rate, transit time and revenue — last 90 days."
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -113,7 +113,7 @@ export default function CourierPerformancePage() {
         />
         <SummaryCard
           icon={PackageX}
-          label="RTO"
+          label="Failed"
           value={totalRto.toLocaleString()}
           sub={
             totalShipments > 0
@@ -138,7 +138,7 @@ export default function CourierPerformancePage() {
               tone="danger"
               icon={ArrowDownRight}
               title={`${worst.courier} is dragging your RTO up`}
-              body={`${formatPercent(worst.rtoRate * 100)} RTO rate across ${worst.shipments.toLocaleString()} shipments. Consider rerouting volume.`}
+              body={`${formatPercent(worst.rtoRate * 100)} failed-delivery rate across ${worst.shipments.toLocaleString()} shipments. Consider rerouting volume.`}
             />
           ) : null}
         </div>
@@ -184,7 +184,7 @@ export default function CourierPerformancePage() {
                 ))}
               </Bar>
               <Bar
-                dataKey="RTO"
+                dataKey="Failed"
                 stackId="a"
                 fill={CHART_COLORS.danger}
                 radius={[6, 6, 0, 0]}
@@ -207,10 +207,10 @@ export default function CourierPerformancePage() {
                 <th className="h-11 px-3 text-left font-semibold">Courier</th>
                 <th className="h-11 px-3 text-right font-semibold">Shipments</th>
                 <th className="h-11 px-3 text-right font-semibold">Delivered</th>
-                <th className="h-11 px-3 text-right font-semibold">RTO</th>
+                <th className="h-11 px-3 text-right font-semibold">Failed</th>
                 <th className="h-11 px-3 text-right font-semibold">In transit</th>
                 <th className="h-11 px-3 text-right font-semibold">Delivery rate</th>
-                <th className="h-11 px-3 text-right font-semibold">RTO rate</th>
+                <th className="h-11 px-3 text-right font-semibold">Failed rate</th>
                 <th className="h-11 px-3 text-right font-semibold">Avg COD</th>
                 <th className="h-11 px-3 text-right font-semibold">Revenue</th>
                 <th className="h-11 px-3 text-right font-semibold">Avg transit</th>

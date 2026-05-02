@@ -9,7 +9,7 @@
 
 export const E2E = {
   apiUrl: "http://localhost:4000",
-  webUrl: "http://localhost:3000",
+  webUrl: "http://localhost:3001",
   adminSecret: "e2e-admin-secret-at-least-twenty-four-chars",
 };
 

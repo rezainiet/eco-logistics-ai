@@ -4,7 +4,14 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@ecom/db": ["../../packages/db/src/index.ts"],
+      "@ecom/db/*": ["../../packages/db/src/*"],
+      "@ecom/types": ["../../packages/types/src/index.ts"],
+      "@ecom/types/*": ["../../packages/types/src/*"]
+    }
   },
   "include": ["src/**/*", "tests/**/*", "vitest.config.ts"]
 }
