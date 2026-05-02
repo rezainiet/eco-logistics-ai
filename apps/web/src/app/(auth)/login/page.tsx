@@ -52,7 +52,38 @@ export default function LoginPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-fg">Welcome back</h1>
         <p className="text-sm text-fg-subtle">Sign in to your merchant workspace.</p>
       </div>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      {/*
+        SECURITY: explicit method="post" + action="" + capturing onSubmit
+        with native preventDefault. Defense-in-depth against credential
+        leaks via the URL query string.
+
+        The bug we're guarding: if React hasn't hydrated yet (slow first
+        compile, hydration error, JS disabled), clicking submit triggers
+        a native form submission. The browser default method is GET,
+        which serializes ALL named fields into the URL query string —
+        i.e. the password ends up in the URL bar, browser history,
+        every reverse-proxy access log, and our own dev server stdout.
+        Saw exactly that happen in dev:
+          GET /Login?email=...&password=... 200
+
+        Three layers of protection so this can't recur:
+          1. method="post" — even on native fallback, no fields go in URL
+          2. action="/api/auth/__nope" — a non-existent endpoint, so a
+             native fall-through gets a 404 (loud) instead of silently
+             reloading with credentials still in memory
+          3. onSubmit's first line is e.preventDefault() — running
+             unconditionally, regardless of whether react-hook-form's
+             handleSubmit later succeeds or throws
+      */}
+      <form
+        method="post"
+        action="/api/auth/__nope"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSubmit(onSubmit)(e);
+        }}
+        className="space-y-4"
+      >
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input

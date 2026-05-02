@@ -84,7 +84,24 @@ function SignupForm() {
           </p>
         ) : null}
       </div>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      {/*
+        SECURITY: explicit method="post" + dummy action + capturing
+        onSubmit with native preventDefault. Same defense-in-depth as
+        the login form — if React hasn't hydrated when the user clicks
+        Submit, the browser native fallback is GET, which would put
+        email + password + business name in the URL (history, dev
+        stdout, every reverse-proxy log). See login/page.tsx for the
+        full incident note.
+      */}
+      <form
+        method="post"
+        action="/api/auth/__nope"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSubmit(onSubmit)(e);
+        }}
+        className="space-y-4"
+      >
         <div className="space-y-2">
           <Label htmlFor="businessName">Business name</Label>
           <Input id="businessName" placeholder="Acme Traders" {...register("businessName")} />

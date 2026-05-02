@@ -82,7 +82,23 @@ export default function ForgotPasswordPage() {
           Enter your email and we'll send you a reset link.
         </p>
       </div>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      {/*
+        SECURITY: explicit method="post" + dummy action + capturing
+        onSubmit with preventDefault. Even though this form only takes
+        an email (lower-stakes than the password forms), we apply the
+        same hardening so the pattern is uniform across every auth
+        surface — easier to audit, no exception that could miss a
+        future field.
+      */}
+      <form
+        method="post"
+        action="/api/auth/__nope"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSubmit(onSubmit)(e);
+        }}
+        className="space-y-4"
+      >
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input

@@ -125,7 +125,23 @@ function ResetForm() {
           Use at least 8 characters. A passphrase you'll remember works well.
         </p>
       </div>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      {/*
+        SECURITY: explicit method="post" + dummy action + capturing
+        onSubmit with native preventDefault. Without this, a slow
+        first-compile / hydration error causes the browser's native
+        form submit to fall through as GET, putting the new password
+        in the URL — history, dev stdout, every reverse-proxy log.
+        See login/page.tsx for the original incident note.
+      */}
+      <form
+        method="post"
+        action="/api/auth/__nope"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void handleSubmit(onSubmit)(e);
+        }}
+        className="space-y-4"
+      >
         <div className="space-y-2">
           <Label htmlFor="password">New password</Label>
           <Input

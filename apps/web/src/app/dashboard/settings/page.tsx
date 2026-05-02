@@ -834,7 +834,25 @@ function SecuritySection() {
           </div>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
+          {/*
+            SECURITY: explicit method="post" + dummy action + capturing
+            onSubmit with native preventDefault. Without this, a slow
+            hydration / JS error causes the browser's native form
+            submission to fall through as GET, putting BOTH the
+            current and new passwords in the URL — history, dev
+            stdout, every reverse-proxy access log. Same defense as
+            login/signup/reset-password. See login/page.tsx for the
+            original incident note.
+          */}
+          <form
+            method="post"
+            action="/api/auth/__nope"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onSubmit(e);
+            }}
+            className="space-y-4"
+          >
             <Field label="Current password" htmlFor="currentPassword" required>
               <Input
                 id="currentPassword"
