@@ -175,6 +175,38 @@ integrationsWebhookRouter.post(
       (req.headers["x-event-topic"] as string | undefined) ||
       "order.created";
 
+    // Control-plane intercept: app/uninstalled is fired by Shopify
+    // when the merchant clicks Uninstall in their admin. It's NOT an
+    // order event — short-circuit before the inbox/ingestion path so
+    // we don't pollute the order queue with a control message that
+    // has no externalId in the order sense. Flip the integration row
+    // to disconnected so the dashboard reflects merchant-side reality
+    // immediately. Idempotent: a duplicate delivery just no-ops the
+    // updateOne. We've already verified HMAC above so the delivery
+    // is trusted.
+    if (provider === "shopify" && topic === "app/uninstalled") {
+      const upd = await Integration.updateOne(
+        { _id: integration._id, status: { $ne: "disconnected" } },
+        {
+          $set: {
+            status: "disconnected",
+            disconnectedAt: new Date(),
+            "webhookStatus.registered": false,
+            "health.lastError": "Merchant uninstalled the app from Shopify.",
+            "health.lastCheckedAt": new Date(),
+            "health.ok": false,
+          },
+        },
+      );
+      console.log("[shopify-webhook] app/uninstalled", {
+        integrationId: String(integration._id),
+        merchantId: String(integration.merchantId),
+        accountKey: integration.accountKey,
+        flipped: upd.modifiedCount > 0,
+      });
+      return res.status(200).json({ ok: true });
+    }
+
     const externalId =
       (req.headers["x-shopify-webhook-id"] as string | undefined) ||
       (req.headers["x-wc-webhook-delivery-id"] as string | undefined) ||

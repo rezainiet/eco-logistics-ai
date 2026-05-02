@@ -381,7 +381,19 @@ export async function registerShopifyWebhooks(args: {
 }): Promise<{ registered: string[]; errors: string[] }> {
   const fetcher = args.fetchImpl ?? fetch;
   const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
-  const topics = args.topics ?? ["orders/create", "orders/updated"];
+  // Default topic set:
+  //   - orders/create + orders/updated → real-time order sync
+  //   - app/uninstalled → fired by Shopify when the merchant clicks
+  //     Uninstall in their admin. Without subscribing, we'd keep
+  //     showing the integration as `connected` in our dashboard
+  //     until the merchant manually clicks trash. With it, the
+  //     handler in webhooks/integrations.ts flips status to
+  //     `disconnected` automatically.
+  const topics = args.topics ?? [
+    "orders/create",
+    "orders/updated",
+    "app/uninstalled",
+  ];
   const registered: string[] = [];
   const errors: string[] = [];
 

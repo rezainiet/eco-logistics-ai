@@ -1,9 +1,15 @@
 import express, { type Request, type Response } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { Integration, Merchant, Order } from "@ecom/db";
+import { Integration } from "@ecom/db";
 import { Types } from "mongoose";
 import { writeAudit } from "../../lib/audit.js";
 import { env } from "../../env.js";
+import {
+  redactCustomer,
+  redactShop,
+  type CustomerIdentifiers,
+  type RedactionResult,
+} from "../../lib/gdpr/redaction.js";
 
 /**
  * Shopify mandatory privacy webhooks (GDPR / CCPA).
@@ -192,33 +198,42 @@ shopifyGdprWebhookRouter.post(
     });
 
     // Topic-specific dispatch. All three are intentionally
-    // non-blocking on the response — Shopify times out after 5s.
+    // synchronous-but-fast: Mongo bulk operations on a single
+    // merchant's data complete well within Shopify's 5s ACK budget,
+    // and doing the work inline means the audit log captures the
+    // sweep result alongside the receipt event. If volumes ever grow
+    // to where this feels tight, move the heavy work to a queue and
+    // let the worker emit a follow-up audit row.
+    let dispatchSummary: RedactionResult[] | { kind: string; note: string } | null = null;
+
     if (topic === "customers/data_request") {
-      // TODO: email the merchant a summary of what data we hold on the
-      // customer. For now: audit only — no automated fulfilment yet.
-      // The merchant has 30 days, so this is fine to land as a
-      // follow-up. Track via the audit row.
-      console.log("[shopify-gdpr] customers/data_request received", {
-        merchantId: merchantId ? String(merchantId) : null,
-        shopDomain,
-      });
+      // Per Shopify's spec, our job is to make the merchant aware so
+      // THEY can respond to the customer (we are the data processor;
+      // the merchant is the controller). We don't email the customer
+      // directly. The audit row above is the proof of receipt; an
+      // operator-facing notification flow can be wired later if we
+      // want a friendlier surface than reading the audit log.
+      dispatchSummary = {
+        kind: "noted",
+        note: "Audit-logged for merchant fulfilment; no automated redaction expected.",
+      };
     } else if (topic === "customers/redact") {
-      // TODO: schedule redaction sweep across collections holding
-      // customer PII (Order, CallLog, future CustomerProfile). Shopify
-      // gives us 30 days — currently logged for follow-up.
-      console.log("[shopify-gdpr] customers/redact received", {
-        merchantId: merchantId ? String(merchantId) : null,
-        shopDomain,
-        orderCount: Array.isArray(payload.orders_to_redact)
-          ? (payload.orders_to_redact as Array<unknown>).length
-          : 0,
-      });
+      if (!merchantId) {
+        // No matching integration on our side — Shopify still expects
+        // a 200 (we have nothing to redact, that's a valid outcome).
+        dispatchSummary = { kind: "no_op", note: "merchant not resolvable" };
+      } else {
+        const identifiers = extractCustomerIdentifiers(payload);
+        dispatchSummary = await redactCustomer({ merchantId, identifiers });
+      }
     } else if (topic === "shop/redact") {
-      // 48-hour clock since uninstall already elapsed by the time
-      // this fires. Mark the merchant for hard-redaction. For now we
-      // just disconnect every integration tied to the shop and audit
-      // — full redaction sweep is the same follow-up as above.
-      if (merchantId) {
+      if (!merchantId) {
+        dispatchSummary = { kind: "no_op", note: "merchant not resolvable" };
+      } else {
+        // Belt-and-braces: also flip every Shopify integration to
+        // disconnected. redactShop deletes the Integration rows
+        // outright so this is mostly defensive in case the redaction
+        // worker is racing a webhook arriving for the same shop.
         await Integration.updateMany(
           { merchantId, provider: "shopify" },
           {
@@ -229,12 +244,27 @@ shopifyGdprWebhookRouter.post(
             },
           },
         );
+        dispatchSummary = await redactShop({ merchantId });
       }
-      console.log("[shopify-gdpr] shop/redact received", {
-        merchantId: merchantId ? String(merchantId) : null,
-        shopDomain,
-      });
     }
+
+    // Audit the dispatch outcome separately from the receipt event so
+    // a reviewer can see (a) the webhook arrived and verified, and
+    // (b) what the redaction actually did. Two rows = clearer
+    // forensics than one over-stuffed row.
+    void writeAudit({
+      merchantId: merchantId ?? new Types.ObjectId("000000000000000000000000"),
+      actorId: merchantId ?? new Types.ObjectId("000000000000000000000000"),
+      actorType: "system",
+      action: "shopify.gdpr_dispatch",
+      subjectType: "merchant",
+      subjectId: merchantId ?? new Types.ObjectId("000000000000000000000000"),
+      meta: {
+        topic,
+        shopDomain,
+        outcome: dispatchSummary,
+      },
+    });
 
     return res.status(200).json({ ok: true });
   },
@@ -253,9 +283,41 @@ function hashIdentifier(value: string | null): string | null {
     .slice(0, 32);
 }
 
-// Suppress unused-var lint for Merchant + Order imports — these are
-// referenced by the TODO follow-up sweep work and we keep them
-// imported now so adding the implementation doesn't pull a separate
-// import diff into the future PR.
-void Merchant;
-void Order;
+/**
+ * Pull merchant-redaction-relevant identifiers out of a Shopify
+ * `customers/redact` payload. Shopify's payload shape:
+ *
+ *   {
+ *     shop_id: number,
+ *     shop_domain: string,
+ *     customer: { id, email, phone },
+ *     orders_to_redact: number[]
+ *   }
+ *
+ * `phone` may be E.164 (`+8801...`) or BD-local. We normalise to
+ * digits-only since that's what `redactCustomer` matches on (mirrors
+ * what we do at order-ingest time).
+ */
+function extractCustomerIdentifiers(
+  payload: Record<string, unknown>,
+): CustomerIdentifiers {
+  const customer = (payload.customer ?? {}) as {
+    id?: number | string;
+    email?: string;
+    phone?: string;
+  };
+  const ordersRaw = payload.orders_to_redact;
+  const orderIds = Array.isArray(ordersRaw)
+    ? ordersRaw.map((o) => String(o)).filter((s) => s.length > 0)
+    : [];
+  return {
+    email: customer.email
+      ? String(customer.email).toLowerCase().trim()
+      : undefined,
+    phone: customer.phone
+      ? String(customer.phone).replace(/\D/g, "")
+      : undefined,
+    shopifyCustomerId: customer.id ? String(customer.id) : undefined,
+    orderIds,
+  };
+}

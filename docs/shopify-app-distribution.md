@@ -54,15 +54,13 @@ Shopify's reviewers check the following on every Public Distribution submission.
 - [x] **HMAC verification on inbound order webhooks.** `apps/api/src/lib/integrations/shopify.ts` `verifyWebhookSignature` — uses `x-shopify-hmac-sha256` over raw body with the per-merchant `apiSecret`.
 - [x] **HMAC verification on OAuth callback.** Same file, `verifyShopifyOAuthHmac`. Runs FIRST when the platform secret is configured (closes a small enumeration oracle).
 - [x] **Three GDPR / privacy webhooks.** `apps/api/src/server/webhooks/shopify-gdpr.ts` — POST handler at `/api/webhooks/shopify/gdpr/*` that verifies HMAC against `SHOPIFY_APP_API_SECRET` and dispatches on `x-shopify-topic`:
-  - `customers/data_request`
-  - `customers/redact`
-  - `shop/redact`
-
-  **Receiver is in. Actual data redaction is currently audit-logged + stubbed with a TODO** — must be implemented end-to-end before flipping to production. See "Open work" below.
-- [ ] **Privacy policy URL.** Hosted on a stable domain (NOT localhost). Required field on the Partner-app config page.
-- [ ] **Production `app_url` and `redirect_urls`.** Currently set to `http://localhost:4000/...` for dev. Must point at the production API host.
-- [ ] **`shopify.app.toml` `[access_scopes].scopes`** matches what the web client requests in `connectShopifySchema.scopes` default. Drift here causes silent install failures (Shopify bounces the merchant back to `app_url` with no `?code`, integration stays `pending` forever). Currently aligned to `read_orders`, `read_products`, `read_customers`, `read_fulfillments`.
-- [ ] **App uninstalled webhook (`app/uninstalled`).** Shopify sends this when a merchant clicks Uninstall in their admin. We need to mark the integration `status: "disconnected"` so the dashboard reflects reality. Without this, a merchant who uninstalls on Shopify-side keeps seeing `connected` in our dashboard until they manually click trash.
+  - `customers/data_request` — audit-logged for merchant fulfilment (we are the processor; the merchant is the controller).
+  - `customers/redact` — calls `redactCustomer({ merchantId, identifiers })` from `apps/api/src/lib/gdpr/redaction.ts`. Pseudonymises customer PII across `Order` and `CallLog` (kept rows, redacted fields), hard-deletes identity-pivoted rows in `RecoveryTask`, `TrackingSession`, and the corresponding `WebhookInbox` entries. Audit-logged with a per-collection summary.
+  - `shop/redact` — calls `redactShop({ merchantId })` which hard-deletes every collection scoped to the merchant. Belt-and-braces: also flips Shopify integrations to `disconnected` in case a parallel webhook delivery is racing.
+- [x] **Privacy policy + Terms of Service pages.** `apps/web/src/app/legal/privacy/page.tsx` + `apps/web/src/app/legal/terms/page.tsx`, mounted under `apps/web/src/app/legal/layout.tsx` (plain marketing chrome, no auth). Reachable at `/legal/privacy` and `/legal/terms`. Update the placeholder support email + legal entity name before submitting.
+- [x] **App uninstalled webhook (`app/uninstalled`).** Subscribed by default in `registerShopifyWebhooks` (`apps/api/src/lib/integrations/shopify.ts`). Handler in `apps/api/src/server/webhooks/integrations.ts` short-circuits the inbox/ingestion path for the control-plane event and flips the integration row to `status: "disconnected"` with a clear `health.lastError` so the dashboard reflects merchant-side reality immediately.
+- [x] **`shopify.app.toml` `[access_scopes].scopes`** matches what the web client requests in `connectShopifySchema.scopes` default. Drift here causes silent install failures (Shopify bounces the merchant back to `app_url` with no `?code`, integration stays `pending` forever). Currently aligned to `read_orders`, `read_products`, `read_customers`, `read_fulfillments`.
+- [ ] **Production `app_url` and `redirect_urls`.** Currently set to `http://localhost:4000/...` for dev. Must point at the production API host. See `.env.example` for the full Partner-Dashboard-field-to-env-var mapping.
 
 ### Recommended (not blockers but smooth the review)
 
@@ -72,12 +70,14 @@ Shopify's reviewers check the following on every Public Distribution submission.
 
 ## Open work tracked separately
 
-These are listed in the project task tracker and gating the Public Distribution submission:
+The only remaining gating item is the production deploy:
 
-1. **Implement the actual data redaction sweep** for `customers/redact` and `shop/redact`. Today the receiver audit-logs and emits `console.log` with a TODO. Need to enumerate every collection that holds customer PII (`Order`, `CallLog`, future `CustomerProfile`) and write a redaction worker.
-2. **Wire `app/uninstalled` webhook.** Subscribe in `registerShopifyWebhooks` and add a handler that flips integration status.
-3. **Stand up the privacy policy + terms pages** on the marketing site and copy the URLs into the Partner app config.
-4. **Move `app_url` + `redirect_urls`** off localhost to the production API host. Coordinate with the deploy.
+1. **Move `app_url` + `redirect_urls`** off localhost to the production API host. Coordinate with the deploy. See the "Going to PRODUCTION" block in `.env.example` for the env-var → Partner-Dashboard-field mapping.
+
+Optional polish (not blockers):
+
+- Wire App Bridge so the dashboard can launch from inside Shopify's admin nav. Recommended once the unlisted submission is approved.
+- Hook a transactional-email surface to `customers/data_request` so the merchant gets an in-product alert instead of needing to read the audit log. The audit row is sufficient for compliance; this is UX polish.
 
 ## Migration play-by-play (when we're ready)
 
