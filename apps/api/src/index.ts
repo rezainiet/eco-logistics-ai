@@ -20,6 +20,7 @@ import {
   integrationsWebhookRouter,
   shopifyOauthRouter,
 } from "./server/webhooks/integrations.js";
+import { shopifyGdprWebhookRouter } from "./server/webhooks/shopify-gdpr.js";
 import { stripeWebhookRouter } from "./server/webhooks/stripe.js";
 import { courierWebhookRouter } from "./server/webhooks/courier.js";
 import { smsInboundWebhookRouter } from "./server/webhooks/sms-inbound.js";
@@ -150,6 +151,11 @@ async function main() {
   // route-internal `express.raw` would otherwise be a no-op once
   // `express.json` has already consumed the stream.
   app.use("/api/integrations/webhook", webhookLimiter, integrationsWebhookRouter);
+  // Shopify mandatory privacy webhooks (customers/data_request,
+  // customers/redact, shop/redact). MUST mount BEFORE the global JSON
+  // parser — these are signed over raw bytes with the platform secret
+  // and are a hard gate for App Store / Public Distribution review.
+  app.use("/api/webhooks/shopify/gdpr", webhookLimiter, shopifyGdprWebhookRouter);
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/health", (_req, res) => res.json({ ok: true }));
