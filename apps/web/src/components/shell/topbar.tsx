@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import {
   Bell,
+  ChevronDown,
   ChevronRight,
   CreditCard,
   LifeBuoy,
@@ -222,6 +223,10 @@ export function Topbar({ userLabel }: { userLabel: string }) {
             <span className="hidden max-w-[140px] truncate text-fg-muted md:inline">
               {userLabel}
             </span>
+            <ChevronDown
+              className="hidden h-3.5 w-3.5 shrink-0 text-fg-faint md:inline"
+              aria-hidden
+            />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">

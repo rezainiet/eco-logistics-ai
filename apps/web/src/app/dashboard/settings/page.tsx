@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { signOut } from "next-auth/react";
 import {
   AlertCircle,
   Bot,
@@ -13,7 +12,6 @@ import {
   Key,
   Loader2,
   Lock,
-  LogOut,
   Mail,
   MessageSquare,
   Palette,
@@ -164,8 +162,6 @@ export default function SettingsPage() {
       {tab === "automation" && <AutomationModePicker />}
       {tab === "security" && <SecuritySection />}
       {tab === "billing" && <BillingSection />}
-
-      <DangerZone />
     </div>
   );
 }
@@ -1142,64 +1138,6 @@ function BillingFactsGrid({
         </div>
       ))}
     </div>
-  );
-}
-
-/* ─────────────────────────────── Danger Zone ─────────────────────────────── */
-
-function DangerZone() {
-  const [open, setOpen] = useState(false);
-  return (
-    <Card className="border-danger/20 bg-surface text-fg">
-      <CardHeader>
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-danger-subtle">
-            <LogOut className="h-5 w-5 text-danger" />
-          </div>
-          <div>
-            <CardTitle className="text-lg font-semibold">Session</CardTitle>
-            <CardDescription className="text-fg-subtle">
-              Sign out from this device. You can sign back in any time.
-            </CardDescription>
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Button
-          variant="outline"
-          onClick={() => setOpen(true)}
-          className="border-danger/30 bg-danger/6 text-danger hover:bg-danger/14"
-        >
-          <LogOut className="mr-2 h-4 w-4" />
-          Sign out
-        </Button>
-      </CardContent>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="border border-stroke/14 bg-surface text-fg">
-          <DialogHeader>
-            <DialogTitle>Sign out?</DialogTitle>
-            <DialogDescription className="text-fg-subtle">
-              You will be returned to the login page.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setOpen(false)}
-              className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface-hover"
-            >
-              Stay signed in
-            </Button>
-            <Button
-              onClick={() => void signOut({ callbackUrl: "/login" })}
-              className="bg-danger text-white hover:bg-danger/90"
-            >
-              Sign out
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </Card>
   );
 }
 

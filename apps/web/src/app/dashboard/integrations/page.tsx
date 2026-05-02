@@ -70,7 +70,7 @@ const PROVIDER_META: Record<
   },
   csv: {
     label: "CSV import",
-    description: "Manual fallback — upload bulk orders via CSV.",
+    description: "Not a connector — bulk-upload a spreadsheet of orders any time from the Orders page.",
     icon: FileText,
     tone: "bg-warning-subtle text-warning",
   },
@@ -205,6 +205,19 @@ export default function IntegrationsPage() {
         );
         return;
       }
+      // One-shop-per-provider guard. Server returns
+      // `integration_provider_one_shop_only:<existing-account-key>` so we
+      // can name the existing store in the toast and tell the merchant
+      // exactly what to do.
+      if (err.message.startsWith("integration_provider_one_shop_only")) {
+        const existing = err.message.split(":")[1] ?? "another store";
+        toast.error(
+          `You're already connected to ${existing}.`,
+          "Disconnect that store first to switch to a different one.",
+        );
+        setOpenProvider(null);
+        return;
+      }
       toast.error(humanizeError(err));
     },
   });
@@ -296,10 +309,16 @@ export default function IntegrationsPage() {
     }
   }, [importProgress.data?.status, utils]);
 
+  // Disconnect needs to invalidate BOTH integrations.list (so the row
+  // disappears from the Connections panel) AND getEntitlements (so the
+  // Shopify/WooCommerce card flips back from disabled "Connected" to
+  // active "Connect" — `existingShopByProvider` and `activeIntegrationCount`
+  // both come out of getEntitlements).
   const disconnect = trpc.integrations.disconnect.useMutation({
     onSuccess: () => {
       toast.success("Integration disconnected");
       void utils.integrations.list.invalidate();
+      void utils.integrations.getEntitlements.invalidate();
     },
     onError: (err) => toast.error(humanizeError(err)),
   });
@@ -480,14 +499,25 @@ export default function IntegrationsPage() {
             key === "csv" ||
             ent.maxIntegrations === 0 ||
             ent.activeIntegrationCount < ent.maxIntegrations;
+          // For domain-keyed connectors (Shopify, WooCommerce) a merchant
+          // may only have ONE active integration. Surface the existing
+          // store right on the card so the merchant doesn't try to add a
+          // second one and hit the server-side guard mid-OAuth.
+          const existingShop =
+            (key === "shopify" || key === "woocommerce") && ent?.existingShopByProvider
+              ? ent.existingShopByProvider[key] ?? null
+              : null;
+          const oneShopBlocked = !!existingShop;
           // slotAvailable is always true for "csv" (set on the line above), so
           // we don't need a redundant key check here.
-          const locked = !providerAllowed || !slotAvailable;
+          const locked = !providerAllowed || !slotAvailable || oneShopBlocked;
           const lockReason = !providerAllowed
             ? `Requires ${TIER_LABEL[ent?.recommendedUpgradeTier ?? "growth"] ?? "upgrade"}`
             : !slotAvailable
               ? `Plan cap (${ent?.activeIntegrationCount}/${ent?.maxIntegrations})`
-              : null;
+              : oneShopBlocked
+                ? `Already connected to ${existingShop}`
+                : null;
           return (
             <Card
               key={key}
@@ -520,12 +550,38 @@ export default function IntegrationsPage() {
               </CardHeader>
               <CardContent className="flex items-center justify-between">
                 <span className="text-xs text-fg-faint">
-                  {list.length === 0 ? "Not connected" : `Last sync: ${formatRelative(list[0]?.lastSyncAt)}`}
+                  {key === "csv"
+                    ? "Manual upload · always available"
+                    : list.length === 0
+                      ? "Not connected"
+                      : `Last sync: ${formatRelative(list[0]?.lastSyncAt)}`}
                 </span>
-                {locked ? (
+                {oneShopBlocked ? (
+                  // Already connected to a store on this provider — surface
+                  // that explicitly instead of routing to billing (which is
+                  // what plan-cap locks do).
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    title={`Already connected to ${existingShop}. Disconnect first to switch stores.`}
+                  >
+                    Connected
+                  </Button>
+                ) : locked ? (
                   <Button asChild size="sm" variant="outline">
                     <a href="/dashboard/billing">
                       <Sparkles className="mr-1 h-3.5 w-3.5" /> Upgrade
+                    </a>
+                  </Button>
+                ) : key === "csv" ? (
+                  // CSV isn't a real connector — there's no API to wire up.
+                  // Send the merchant straight to the Orders page where the
+                  // Bulk Upload dialog lives, instead of opening a modal that
+                  // would just create a placeholder integration record.
+                  <Button asChild size="sm" variant="outline">
+                    <a href="/dashboard/orders?bulk=1">
+                      <FileText className="mr-1 h-3.5 w-3.5" /> Open uploader
                     </a>
                   </Button>
                 ) : (
@@ -819,6 +875,9 @@ export default function IntegrationsPage() {
         onClose={() => setOpenProvider(null)}
         onSubmit={(payload) => connect.mutate(payload)}
         isPending={connect.isPending}
+        platformShopifyConfigured={
+          entitlements.data?.platformShopifyConfigured ?? true
+        }
       />
 
       <InspectWebhookDialog
@@ -949,12 +1008,20 @@ function ConnectDialog({
   onClose,
   onSubmit,
   isPending,
+  platformShopifyConfigured,
 }: {
   open: boolean;
   provider: ProviderKey | null;
   onClose: () => void;
   onSubmit: (payload: ConnectPayload) => void;
   isPending: boolean;
+  /**
+   * Whether the platform has SHOPIFY_APP_API_KEY/SECRET set in env. When
+   * false, "one-click connect" cannot work for any merchant — the modal
+   * surfaces an honest "platform creds not configured" notice and
+   * auto-expands the Advanced panel so the merchant doesn't have to dig.
+   */
+  platformShopifyConfigured: boolean;
 }) {
   const [shopify, setShopify] = useState({
     shopDomain: "",
@@ -967,12 +1034,18 @@ function ConnectDialog({
   const [label, setLabel] = useState("");
 
   // Reset transient form state every time the dialog opens so a half-typed
-  // value from a previous attempt doesn't carry over.
+  // value from a previous attempt doesn't carry over. When the platform's
+  // Shopify Partner-app creds aren't configured, force-open Advanced — the
+  // merchant *has* to paste their own creds for the connect to succeed.
   useEffect(() => {
     if (!open) {
       setShowAdvanced(false);
+      return;
     }
-  }, [open]);
+    if (provider === "shopify" && !platformShopifyConfigured) {
+      setShowAdvanced(true);
+    }
+  }, [open, provider, platformShopifyConfigured]);
 
   // Inline shop-domain validation. Mirrors the backend Zod regex so the
   // merchant gets immediate feedback rather than a round-trip rejection.
@@ -990,18 +1063,40 @@ function ConnectDialog({
         </DialogHeader>
         {provider === "shopify" ? (
           <div className="space-y-4">
-            <div className="rounded-lg border border-success-border/60 bg-success-subtle/40 p-3 text-xs text-fg">
-              <div className="flex items-start gap-2">
-                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
-                <div className="space-y-1">
-                  <p className="font-semibold">One-click connect</p>
-                  <p className="text-fg-muted">
-                    Just enter your Shopify store address. We'll send you to
-                    Shopify to approve — no API keys, no copy-paste.
-                  </p>
+            {platformShopifyConfigured ? (
+              <div className="rounded-lg border border-success-border/60 bg-success-subtle/40 p-3 text-xs text-fg">
+                <div className="flex items-start gap-2">
+                  <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden />
+                  <div className="space-y-1">
+                    <p className="font-semibold">One-click connect</p>
+                    <p className="text-fg-muted">
+                      Just enter your Shopify store address. We'll send you to
+                      Shopify to approve — no API keys, no copy-paste.
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <div className="rounded-lg border border-warning-border/60 bg-warning-subtle/40 p-3 text-xs text-fg">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle
+                    className="mt-0.5 h-4 w-4 shrink-0 text-warning"
+                    aria-hidden
+                  />
+                  <div className="space-y-1">
+                    <p className="font-semibold">Custom-app credentials needed</p>
+                    <p className="text-fg-muted">
+                      The platform's shared Shopify app isn't set up here yet,
+                      so one-click connect isn't available. Paste an API key +
+                      secret from a Shopify custom app below to continue. (Ops:
+                      set <code>SHOPIFY_APP_API_KEY</code> +{" "}
+                      <code>SHOPIFY_APP_API_SECRET</code> in the API env to
+                      enable one-click for everyone.)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="shopify-domain">Your Shopify store address</Label>
               <Input
@@ -1104,7 +1199,20 @@ function ConnectDialog({
                   apiKey: shopify.apiKey.trim() || undefined,
                   apiSecret: shopify.apiSecret.trim() || undefined,
                   accessToken: shopify.accessToken?.trim() || undefined,
-                  scopes: ["read_orders", "write_orders", "read_customers"],
+                  // Must be a SUBSET of what the deployed Shopify app
+                  // declares in its `[access_scopes].scopes` config —
+                  // requesting any scope outside the declared set causes
+                  // Shopify to silently bounce the merchant back to
+                  // `app_url` (no `?code` -> our callback never runs ->
+                  // integration stuck on `pending` forever, no error
+                  // surfaced). When you add a new scope to the deployed
+                  // app version, mirror it here AND vice-versa.
+                  scopes: [
+                    "read_orders",
+                    "read_products",
+                    "read_customers",
+                    "read_fulfillments",
+                  ],
                 })
               }
             >

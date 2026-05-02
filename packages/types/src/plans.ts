@@ -66,8 +66,13 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       orderQuota: 300,
       shipmentQuota: 300,
       fraudReviewQuota: 0,
-      integrationProviders: ["csv"],
-      maxIntegrations: 0,
+      // Starter now ships Shopify alongside CSV so the onboarding promise
+      // ("Connect Shopify or WooCommerce in under 2 minutes") is honoured
+      // by the trial. WooCommerce stays a Growth-tier upsell. maxIntegrations
+      // bumped from 0 to 1 so the merchant can actually wire one connector
+      // up — without that, the provider list is decorative.
+      integrationProviders: ["csv", "shopify"],
+      maxIntegrations: 1,
       behaviorAnalytics: false,
       advancedBehaviorTables: false,
       behaviorRetentionDays: 30,
@@ -77,7 +82,7 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
     highlights: [
       "300 orders / month",
       "1 courier integration",
-      "CSV upload only",
+      "Shopify or CSV sync",
       "30-day analytics window",
       "60 call-center minutes",
       "1 user",

@@ -293,18 +293,35 @@ shopifyOauthRouter.get(
     const shop = typeof req.query.shop === "string" ? req.query.shop : null;
     if (!code || !state || !shop) return fail("missing_params");
 
-    // Shopify ships shop as `<name>.myshopify.com` — reject anything else so
-    // the redirect can't be smuggled into a lookalike domain.
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/.test(shop)) {
+    // Shopify ships shop as `<name>.myshopify.com` in the legacy OAuth flow,
+    // but the new "managed install" flow has been observed to sometimes ship
+    // just `<name>` (no suffix). Normalize defensively before lookup, but
+    // keep the legacy regex check on the *normalized* form so we still
+    // reject anything that doesn't shape up to a real myshopify domain.
+    const normalizedShop = /\.myshopify\.com$/i.test(shop)
+      ? shop.toLowerCase()
+      : `${shop.toLowerCase()}.myshopify.com`;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/.test(normalizedShop)) {
+      console.warn("[shopify-oauth] invalid_shop", { rawShop: shop, normalizedShop });
       return fail("invalid_shop");
     }
 
     const integration = await Integration.findOne({
       provider: "shopify",
-      accountKey: shop.toLowerCase(),
+      accountKey: normalizedShop,
       status: "pending",
     });
-    if (!integration) return fail("integration_not_found");
+    if (!integration) {
+      // Log the lookup so we can diagnose stuck installs without grepping
+      // every redirect. Surfaced in apps/api stdout — never in the merchant
+      // URL bar.
+      console.warn("[shopify-oauth] integration_not_found", {
+        rawShop: shop,
+        normalizedShop,
+        statePresent: !!state,
+      });
+      return fail("integration_not_found");
+    }
 
     const storedNonce = integration.credentials?.installNonce;
     if (!storedNonce || !safeStringEqual(state, storedNonce)) {

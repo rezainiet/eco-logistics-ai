@@ -119,7 +119,17 @@ const connectInputSchema = z.discriminatedUnion("provider", [
 export const integrationsRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
     const merchantId = merchantObjectId(ctx);
-    const rows = await Integration.find({ merchantId }).sort({ createdAt: -1 }).lean();
+    // Hide disconnected rows from the dashboard's Connections panel — when
+    // a merchant clicks the trash icon, they expect the card to look fresh
+    // again. The row stays in the DB (soft delete) so audit trails, prior
+    // ingestion counts, and webhook history are preserved; reconnecting
+    // upserts the same row back to `pending` -> `connected`.
+    const rows = await Integration.find({
+      merchantId,
+      status: { $ne: "disconnected" },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
     return rows.map((row) => ({
       id: String(row._id),
       provider: row.provider as IntegrationProvider,
@@ -165,6 +175,35 @@ export const integrationsRouter = router({
       // CSV is uncapped (manual fallback), enforced inside the helper.
       assertIntegrationProvider(tier, input.provider);
       await assertIntegrationCapacity(merchantId, tier, input.provider);
+
+      // One-shop-per-provider guard. For domain-keyed connectors (Shopify,
+      // WooCommerce) a merchant should only ever have ONE active integration
+      // — connecting a different storefront on top of an existing one is
+      // almost certainly a mistake. Reconnecting the SAME accountKey is
+      // allowed (the upsert below + `confirmOverwrite` flow handle that
+      // case). To switch stores the merchant must disconnect first, which
+      // is one click in the Connections panel.
+      if (input.provider === "shopify" || input.provider === "woocommerce") {
+        const targetAccountKey =
+          input.provider === "shopify"
+            ? input.shopDomain.toLowerCase()
+            : input.siteUrl.toLowerCase();
+        const conflicting = await Integration.findOne({
+          merchantId,
+          provider: input.provider,
+          status: { $in: ["connected", "pending"] },
+          accountKey: { $ne: targetAccountKey },
+        }).select("accountKey status").lean();
+        if (conflicting) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            // Encoded as `<code>:<existing-account-key>` so the web client
+            // can parse + render a friendly message naming the existing
+            // store, without us baking copy into the API.
+            message: `integration_provider_one_shop_only:${conflicting.accountKey}`,
+          });
+        }
+      }
 
       const now = new Date();
       let accountKey: string;
@@ -814,6 +853,36 @@ export const integrationsRouter = router({
       status: { $in: ["pending", "connected"] },
       provider: { $ne: "csv" },
     });
+    // Tells the web client whether the platform has Shopify Partner-app
+    // credentials set in env. When false, "one-click connect" cannot work
+    // for ANY merchant — the modal needs to surface that honestly instead
+    // of repeating "no API keys, no copy-paste" and letting the Continue
+    // call blow up with a generic error.
+    const platformShopifyConfigured = Boolean(
+      env.SHOPIFY_APP_API_KEY && env.SHOPIFY_APP_API_SECRET,
+    );
+
+    // For each domain-keyed provider (shopify/woocommerce), surface the
+    // accountKey of the merchant's existing connected/pending integration
+    // (if any) so the web can disable the Connect button on that card and
+    // explain why with a tooltip naming the existing store. Mirrors the
+    // server-side `integration_provider_one_shop_only` guard in `connect`.
+    const oneShopProviders = ["shopify", "woocommerce"] as const;
+    const existingShopByProvider: Record<string, string | null> = {
+      shopify: null,
+      woocommerce: null,
+    };
+    const existing = await Integration.find({
+      merchantId,
+      provider: { $in: oneShopProviders as unknown as string[] },
+      status: { $in: ["pending", "connected"] },
+    })
+      .select("provider accountKey")
+      .lean();
+    for (const row of existing) {
+      existingShopByProvider[row.provider] = row.accountKey;
+    }
+
     return {
       ...view,
       activeIntegrationCount: activeCount,
@@ -821,6 +890,8 @@ export const integrationsRouter = router({
         view.maxIntegrations <= 0
           ? 0
           : Math.max(0, view.maxIntegrations - activeCount),
+      platformShopifyConfigured,
+      existingShopByProvider,
     };
   }),
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   type ColumnDef,
   flexRender,
@@ -91,6 +92,7 @@ type OrderRow = {
 const PAGE_SIZE = 25;
 
 export default function OrdersPage() {
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<Status | "all">("all");
   const [courier, setCourier] = useState("");
   const [phone, setPhone] = useState("");
@@ -98,6 +100,15 @@ export default function OrdersPage() {
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
   const [createOpen, setCreateOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+
+  // Deep-link from /dashboard/integrations CSV card: ?bulk=1 auto-opens the
+  // bulk uploader so the CSV path is one click instead of two. Also handles
+  // ?new=1 from the onboarding "create your first order" CTA so the dialog
+  // is open the moment the merchant lands here.
+  useEffect(() => {
+    if (searchParams?.get("bulk") === "1") setUploadOpen(true);
+    if (searchParams?.get("new") === "1") setCreateOpen(true);
+  }, [searchParams]);
   const [bookOpen, setBookOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [timelineId, setTimelineId] = useState<string | null>(null);
