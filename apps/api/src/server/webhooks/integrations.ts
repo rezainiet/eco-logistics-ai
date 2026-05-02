@@ -395,6 +395,38 @@ shopifyOauthRouter.get(
         from: integration.accountKey,
         to: normalizedShop,
       });
+
+      // GOTCHA: the unique index `(merchantId, provider, accountKey)`
+      // will reject our save() with E11000 if a stale row already holds
+      // the canonical accountKey for this merchant — typically a row
+      // left over from a previous install/uninstall cycle (status:
+      // "disconnected"). Without this cleanup, the save throws, the
+      // exception falls through unhandled, the merchant sees a hung
+      // page, the row stays "pending", and the next click loops here
+      // forever. Saw exactly that in the logs:
+      //   [shopify-oauth] canonicalizing accountKey { from: 'devs-...',
+      //                                               to: 'dwykhp-en...' }
+      // …repeated 3+ times, integration never flipped to connected.
+      //
+      // Safety: ONLY delete rows whose status is "disconnected" — never
+      // touch a connected row. If somehow a connected row holds the
+      // canonical key (race or manual DB tampering), we'd rather let
+      // E11000 happen and surface an error than silently overwrite
+      // someone's working integration.
+      const orphanCleanup = await Integration.deleteMany({
+        merchantId: integration.merchantId,
+        provider: "shopify",
+        accountKey: normalizedShop,
+        status: "disconnected",
+        _id: { $ne: integration._id },
+      });
+      if (orphanCleanup.deletedCount > 0) {
+        console.log("[shopify-oauth] cleared stale disconnected orphan(s)", {
+          merchantId: String(integration.merchantId),
+          canonicalKey: normalizedShop,
+          deletedCount: orphanCleanup.deletedCount,
+        });
+      }
       integration.accountKey = normalizedShop;
     }
 
@@ -544,7 +576,36 @@ shopifyOauthRouter.get(
       lastError:
         reg.errors.length > 0 ? reg.errors.join("; ").slice(0, 500) : undefined,
     };
-    await integration.save();
+    try {
+      await integration.save();
+    } catch (err) {
+      // Most likely E11000 from the unique (merchantId, provider,
+      // accountKey) index — a stale row holds the canonical accountKey
+      // and orphan cleanup above missed it (e.g. status was something
+      // other than "disconnected"). Audit + redirect with a friendly
+      // error code so the merchant sees something actionable instead
+      // of a hung tab.
+      console.error("[shopify-oauth] save_failed", {
+        shop: normalizedShop,
+        accountKey: integration.accountKey,
+        error: (err as Error).message,
+      });
+      void writeAudit({
+        merchantId: integration.merchantId as Types.ObjectId,
+        actorId: integration.merchantId as Types.ObjectId,
+        actorType: "system",
+        action: "integration.shopify_oauth",
+        subjectType: "integration",
+        subjectId: integration._id,
+        meta: {
+          ok: false,
+          reason: "callback_save_failed",
+          error: (err as Error).message.slice(0, 200),
+          shop: normalizedShop,
+        },
+      });
+      return fail("callback_save_failed");
+    }
 
     void writeAudit({
       merchantId: integration.merchantId as Types.ObjectId,

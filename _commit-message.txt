@@ -1,82 +1,35 @@
-Branding feature + onboarding rework + silent token refresh
+security(auth): harden every auth form against native GET fallback
 
-Most of this is the new merchant-branding flow but I also took a pass
-at the welcome screen and the auth lifecycle while I was in there.
+Saw this in dev stdout while debugging an unrelated Shopify install:
 
-Branding
-- Settings -> Branding tab: drop a logo (PNG/JPG/SVG, <=200KB) and the
-  page auto-extracts a dominant accent colour from it via canvas.
-  Hex override in the same row, plus a live preview so the merchant
-  sees what their accent does to the sidebar tile, an active nav row
-  and a primary button before they commit.
-- New BrandingProvider in the dashboard layout converts the chosen
-  hex to HSL and rewrites --brand / --brand-hover / --brand-active /
-  --brand-fg as inline CSS vars on a wrapping div. Every existing
-  surface that already reads those tokens (active sidebar item,
-  primary buttons, hero ring, "Up next" pill, badges) re-themes for
-  free, no per-component edits.
-- Sidebar tile shows the uploaded logo when present, falls back to
-  initials of the merchant's business name otherwise. Header text
-  uses the real business name instead of the hardcoded "Logistics".
-- Logo stored inline as a data: URL on the merchant doc (capped 280k
-  chars, ~200KB raw + base64 overhead). Distinct from branding.logoUrl
-  which is the public-tracking-page logo - leaves a path for merchants
-  who want different art on the customer surface vs the admin.
-- New merchants.updateBranding mutation. getProfile now surfaces the
-  branding triple so BrandingProvider and the sidebar can read it
-  through the existing query (no extra round-trips).
+    GET /Login?email=masudreza%40gmail.com&password=Masud2003 200 in 325ms
 
-Welcome / onboarding
-- New DashboardHero: time-of-day greeting + first name (passed from
-  the server session so it doesn't flicker on hydration), dynamic
-  subtitle that scales with progress, an SVG progress ring with the
-  done-count badge below it.
-- OnboardingChecklist now renders one expanded "Up next" card with a
-  time estimate and a skip-for-now link, and collapses the remaining
-  steps into compact rows with locked styling for the gated ones.
-  The old wall of five equal-weight rows was paralysing for fresh
-  accounts.
-- Trial-days-left and verify-email promoted from stacked banners
-  into soft pills inside the hero. New DashboardBanners wrapper
-  suppresses the layout-level banners on /dashboard/getting-started
-  so we don't double up.
-- /dashboard stops re-rendering the full checklist - it was showing
-  next-step banner + welcome header + Up-next card + locked rows on
-  the same screen. The slim contextual NextStepBanner stays as a
-  one-row nudge above the KPIs.
-- Orders empty state now branches between "no orders match your
-  filters" (when filters are active) and "no orders yet" (clean
-  account). The reset-filters button on a clean account was confusing
-  - there was nothing to reset.
+If React hasn't hydrated when the user clicks Submit (slow first
+compile, hydration error, JS disabled), the browser falls back to a
+native form submission. The default method is GET, which serializes
+every named field into the URL — credentials end up in the URL bar,
+browser history, every reverse-proxy access log, and our own dev
+server stdout.
 
-Auth lifecycle
-- Silent access-token refresh. TokenRefreshKeeper mounted in the
-  dashboard layout schedules a /auth/refresh ~60s before the access
-  JWT would expire, and also tops up on tab-visible / window-focus
-  for the closed-laptop case. Pushes the new token into the NextAuth
-  session via useSession().update() so the tRPC client picks it up
-  on its next call.
-- queryCache onError dispatches a SESSION_UNAUTHORIZED_EVENT instead
-  of bouncing to /login itself. Keeper picks that up, attempts a
-  silent refresh first, and only signs the merchant out if the
-  refresh itself fails (refresh token expired, session revoked).
-- NextAuth jwt callback handles trigger="update" and persists the
-  fresh apiToken back into the JWT.
-- Stops the "you closed the laptop for an hour, now you're logged
-  out" experience.
+Same defence-in-depth applied to all five auth-adjacent forms so the
+pattern is uniform and easy to audit:
 
-Misc fixes that came up while I was in here
-- subscription-banner + notifications-drawer: the raw camelCase
-  metric identifier `fraudReviewsUsed` was leaking to merchants in
-  banner copy and notification titles. Mapped to human strings
-  ("fraud reviews this month", etc.).
-- Same files: defensive guard against the phantom-blocked-at-zero
-  state. A fresh trial whose meter reports blocked=true with used=0
-  was getting a hostile red "you've hit your quota" banner on the
-  first dashboard view. The real fix is server-side init data; the
-  UI guard stops the bleeding.
-- apps/web/.env.local.example: NEXTAUTH_URL was 3000, but the web
-  app runs on 3001 (port 3000 is intentionally left for whatever
-  other project the dev has open). Mismatch caused signOut() and
-  post-login redirects to land on a different app entirely. Fixed +
-  added a comment so the next dev doesn't trip on it.
+  1. method="post" — even on native fallback, no fields go in the URL
+  2. action="/api/auth/__nope" — non-existent endpoint, so a native
+     fall-through gets a loud 404 instead of silently reloading with
+     credentials still in memory
+  3. onSubmit's first line is e.preventDefault() — runs unconditionally,
+     before react-hook-form's handleSubmit can succeed or throw
+
+Forms hardened:
+  - apps/web/src/app/(auth)/login/page.tsx
+  - apps/web/src/app/(auth)/signup/page.tsx
+  - apps/web/src/app/reset-password/page.tsx
+  - apps/web/src/app/forgot-password/page.tsx (lower-stakes — only
+    takes an email — but applied for consistency so there's no
+    exception that could miss a future field)
+  - apps/web/src/app/dashboard/settings/page.tsx (change-password form)
+
+Note for whoever rotates secrets: the password "Masud2003" appeared
+in dev stdout (and in screenshots taken during the debug session), so
+the local dev account credentials should be rotated.

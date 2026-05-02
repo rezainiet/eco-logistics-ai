@@ -929,6 +929,12 @@ export default function IntegrationsPage() {
                         variant="ghost"
                         disabled={disconnect.isPending}
                         onClick={() => disconnect.mutate({ id: it.id })}
+                        // Icon-only destructive action — without an
+                        // accessible name, screen readers announce it as
+                        // just "button" and Playwright's role/name queries
+                        // can't find it. Title doubles as a hover hint.
+                        aria-label="Disconnect integration"
+                        title="Disconnect integration"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

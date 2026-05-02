@@ -56,6 +56,13 @@ const integrationSchema = new Schema(
       /** OAuth scopes / nonce used during install */
       scopes: { type: [String], default: [] },
       installNonce: { type: String, trim: true, maxlength: 128 },
+      // Wall-clock when we minted the install URL. Used by the OAuth
+      // callback to log "callback arrived Xs after install start" — the
+      // single best signal for distinguishing "Shopify is slow" from
+      // "merchant clicked away" from "our handler is slow". Without
+      // this declared on the schema, Mongoose strict mode silently
+      // drops the write and every callback logs `(no installStartedAt)`.
+      installStartedAt: { type: Date },
     },
     /** HMAC secret used to verify inbound webhooks from this connector. */
     webhookSecret: { type: String },

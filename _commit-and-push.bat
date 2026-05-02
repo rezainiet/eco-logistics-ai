@@ -1,69 +1,67 @@
 @echo off
-REM One-shot commit + push for the dashboard / branding / auth-refresh batch.
-REM Stages exactly the files Claude touched (so unrelated dirty work in your
-REM tree is left alone), commits with the prepared message, pushes, then
-REM deletes itself + the message file.
+REM ----------------------------------------------------------------------
+REM  Commits the auth-form hardening round.
+REM
+REM  Only stages the 5 form files. The other "modified" files in
+REM  `git status` are CRLF/LF line-ending swaps with zero real diff
+REM  (3217 ins / 3217 del = same line count, every line "changed") —
+REM  staging them would balloon the diff with noise. If you want to fix
+REM  the line-ending churn separately, run `git add --renormalize .`
+REM  in its own commit.
+REM
+REM  Run from the repo root with:  .\_commit-and-push.bat
+REM ----------------------------------------------------------------------
 
-setlocal
 cd /d "%~dp0"
 
+REM --- Self-heal: a previous git crash leaves .git\index.lock around.
+REM     If it exists AND no git.exe is currently running, remove it.
 if exist ".git\index.lock" (
-  echo Removing stale .git\index.lock ...
-  del /Q ".git\index.lock"
-)
-if exist ".git\test.tmp" (
-  del /Q ".git\test.tmp"
+  tasklist /FI "IMAGENAME eq git.exe" 2>NUL | find /I "git.exe" >NUL
+  if errorlevel 1 (
+    echo Found stale .git\index.lock with no running git process — removing.
+    del /Q ".git\index.lock"
+  ) else (
+    echo .git\index.lock exists AND git.exe is running. Aborting so we
+    echo don't trample another git process. Wait for it to finish, then
+    echo re-run this script.
+    exit /b 1
+  )
 )
 
-echo Staging changed files ...
+echo.
+echo === Staging the 5 hardened auth forms ===
 git add ^
-  apps/api/src/server/routers/merchants.ts ^
-  packages/db/src/models/merchant.ts ^
-  apps/web/src/app/dashboard/layout.tsx ^
-  apps/web/src/app/dashboard/page.tsx ^
-  apps/web/src/app/dashboard/getting-started/page.tsx ^
-  apps/web/src/app/dashboard/orders/page.tsx ^
-  apps/web/src/app/dashboard/settings/page.tsx ^
-  apps/web/src/app/providers.tsx ^
-  apps/web/src/components/billing/subscription-banner.tsx ^
-  apps/web/src/components/billing/dashboard-banners.tsx ^
-  apps/web/src/components/branding/branding.ts ^
-  apps/web/src/components/branding/branding-provider.tsx ^
-  apps/web/src/components/branding/branding-section.tsx ^
-  apps/web/src/components/auth/token-refresh-keeper.tsx ^
-  apps/web/src/components/onboarding/dashboard-hero.tsx ^
-  apps/web/src/components/onboarding/onboarding-checklist.tsx ^
-  apps/web/src/components/shell/notifications-drawer.tsx ^
-  apps/web/src/components/sidebar/Sidebar.tsx ^
-  apps/web/src/lib/auth.ts ^
-  apps/web/src/lib/auth-refresh.ts ^
-  apps/web/.env.local.example
+  "apps/web/src/app/(auth)/login/page.tsx" ^
+  "apps/web/src/app/(auth)/signup/page.tsx" ^
+  "apps/web/src/app/reset-password/page.tsx" ^
+  "apps/web/src/app/forgot-password/page.tsx" ^
+  "apps/web/src/app/dashboard/settings/page.tsx"
+
 if errorlevel 1 (
-  echo git add failed.
-  pause
+  echo ERROR: git add failed.
   exit /b 1
 )
 
 echo.
-echo Committing ...
+echo === Files staged for this commit ===
+git diff --cached --stat
+
+echo.
+echo === Committing ===
 git commit -F _commit-message.txt
 if errorlevel 1 (
-  echo git commit failed.
-  pause
+  echo ERROR: git commit failed.
   exit /b 1
 )
 
 echo.
-echo Pushing ...
+echo === Pushing ===
 git push
 if errorlevel 1 (
-  echo git push failed.
-  pause
+  echo ERROR: git push failed. Commit is local only.
   exit /b 1
 )
 
 echo.
-echo Done. Cleaning up scaffolding ...
-del /Q _commit-message.txt
-del /Q "%~f0"
-endlocal
+echo === Done. ===

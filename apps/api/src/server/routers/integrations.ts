@@ -327,6 +327,31 @@ export const integrationsRouter = router({
       ) {
         credentialsPayload.accessToken = existingShopifyAccessToken;
       }
+
+      // For a Shopify install, mint the nonce + installStartedAt UP FRONT
+      // so they go into the same atomic upsert below. The previous flow
+      // used a separate `updateOne` afterward to set them via dot-notation,
+      // which was broken in two ways:
+      //   1. installStartedAt wasn't on the schema → strict mode silently
+      //      dropped the write → every callback logged
+      //      "(no installStartedAt)" with no timing signal.
+      //   2. The window between the upsert and the second updateOne was a
+      //      brief but real gap during which a callback could land on a
+      //      row with no install nonce → "integration_not_found".
+      // We mint here so the pending row has full install context the
+      // instant Mongo accepts the upsert.
+      let installNonce: string | undefined;
+      let installStartedAt: Date | undefined;
+      if (input.provider === "shopify" && status === "pending") {
+        installNonce = randomBytes(16).toString("hex");
+        installStartedAt = new Date();
+        credentialsPayload.installNonce = installNonce;
+        // Date instance — Mongoose serialises it; the schema field is
+        // `{ type: Date }` so toISOString round-trips on read.
+        (credentialsPayload as Record<string, unknown>).installStartedAt =
+          installStartedAt;
+      }
+
       const setPayload: Record<string, unknown> = {
         label:
           "label" in input && input.label
@@ -462,33 +487,22 @@ export const integrationsRouter = router({
           meta: { provider: input.provider, reason: "initial_creation" },
         });
       }
-      if (input.provider === "shopify" && status === "pending") {
-        const state = randomBytes(16).toString("hex");
-        const installStartedAt = new Date();
-        // Persist the install timestamp on the credentials blob so the
-        // OAuth callback can compute and log "callback arrived Xs after
-        // install start". That number is the cleanest signal we have for
-        // "Shopify itself is slow" vs "merchant clicked away" vs "our
-        // callback handler is slow" — three very different debugging
-        // paths.
-        await Integration.updateOne(
-          { _id: integration._id },
-          {
-            $set: {
-              "credentials.installNonce": state,
-              "credentials.installStartedAt": installStartedAt.toISOString(),
-            },
-          },
-        );
+      if (
+        input.provider === "shopify" &&
+        status === "pending" &&
+        installNonce &&
+        installStartedAt
+      ) {
         const redirectUri = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/oauth/shopify/callback`;
         // Surface the install-URL parameters to API stdout so a stuck
-        // OAuth flow is debuggable without reproducing it.
+        // OAuth flow is debuggable without reproducing it. nonce +
+        // installStartedAt are already persisted by the upsert above.
         console.log("[shopify-oauth] start install", {
           shop: accountKey,
           appKeyPrefix: resolvedShopifyAppKey.slice(0, 8) + "...",
           redirectUri,
           scopes: input.scopes,
-          statePrefix: state.slice(0, 6) + "...",
+          statePrefix: installNonce.slice(0, 6) + "...",
           installStartedAt: installStartedAt.toISOString(),
         });
         result.installUrl = buildShopifyInstallUrl({
@@ -496,7 +510,7 @@ export const integrationsRouter = router({
           apiKey: resolvedShopifyAppKey,
           redirectUri,
           scopes: input.scopes,
-          state,
+          state: installNonce,
         });
       }
       return result;
