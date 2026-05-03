@@ -474,6 +474,26 @@ export default function IntegrationsPage() {
       setTestingId(id);
     },
     onSuccess: (r, vars) => {
+      // Server-driven auto-disconnect: Shopify token revoked
+      // (typically because the merchant uninstalled the app on
+      // Shopify's side). The integration row is already flipped to
+      // "disconnected" server-side and will vanish from the list on
+      // re-fetch — surface a friendly explainer instead of a generic
+      // red error toast that leaves the merchant guessing.
+      const autoDisconnected =
+        "autoDisconnected" in r && (r as { autoDisconnected?: boolean }).autoDisconnected === true;
+      if (autoDisconnected) {
+        // Suppress the inline test-result banner — the row is about
+        // to disappear, the banner would flash and look broken.
+        setTestResult(null);
+        toast.error(
+          "Shopify revoked this connection",
+          "It looks like the app was uninstalled on Shopify. Click Connect to reconnect.",
+        );
+        void utils.integrations.list.invalidate();
+        void utils.integrations.getEntitlements.invalidate();
+        return;
+      }
       setTestResult({
         id: vars.id,
         ok: r.ok,
@@ -549,8 +569,27 @@ export default function IntegrationsPage() {
   // active "Connect" — `existingShopByProvider` and `activeIntegrationCount`
   // both come out of getEntitlements).
   const disconnect = trpc.integrations.disconnect.useMutation({
-    onSuccess: () => {
-      toast.success("Integration disconnected");
+    onSuccess: (r) => {
+      // Three outcomes the merchant cares about:
+      //   1. Local disconnect + Shopify uninstall both succeeded → green toast.
+      //   2. Local disconnect succeeded but Shopify-side revoke
+      //      didn't acknowledge → success toast WITH a follow-up
+      //      hint so the merchant knows to manually uninstall from
+      //      Shopify if they care (avoids the "trash on dashboard
+      //      didn't actually uninstall the app on Shopify" silent
+      //      mismatch).
+      //   3. Provider has no remote revoke (CSV / custom_api) →
+      //      same green toast, nothing to flag.
+      const remoteRevoked =
+        "remoteRevoked" in r ? (r as { remoteRevoked?: boolean | null }).remoteRevoked : null;
+      if (remoteRevoked === false) {
+        toast.success(
+          "Disconnected on your side",
+          "We couldn't reach Shopify to fully uninstall — you may need to remove the app from your Shopify admin (Settings → Apps).",
+        );
+      } else {
+        toast.success("Integration disconnected");
+      }
       void utils.integrations.list.invalidate();
       void utils.integrations.getEntitlements.invalidate();
     },
@@ -665,12 +704,29 @@ export default function IntegrationsPage() {
   // merchant to manually reload. Two channels for browser coverage:
   //   - BroadcastChannel (modern, same-origin, instant)
   //   - localStorage `storage` event (legacy fallback)
+  //
+  // BUG we're fixing here: the listener used to ONLY invalidate the
+  // React Query cache. The `pendingInstall` state — which renders
+  // the "Finish on Shopify" popup-fallback modal — was left
+  // untouched, so the tab that originally fired the install kept
+  // showing the modal even after the popup tab completed OAuth and
+  // landed on `?connected=shopify`. The merchant saw a phantom
+  // "Open Shopify install" prompt for an install that was already
+  // done. Clearing pendingInstall + successState in the handler
+  // closes the modal on every other tab the moment the broadcast
+  // arrives.
   useEffect(() => {
     if (typeof window === "undefined") return;
     let ch: BroadcastChannel | null = null;
     const handleMessage = () => {
       void utils.integrations.list.invalidate();
       void utils.integrations.recentWebhooks.invalidate();
+      void utils.integrations.getEntitlements.invalidate();
+      // Close any open install/success modals — the connect they
+      // were tracking is now done. Safe to call when modals aren't
+      // open (state is already null).
+      setPendingInstall(null);
+      setSuccessState(null);
     };
     try {
       ch = new BroadcastChannel("ecom:integrations");

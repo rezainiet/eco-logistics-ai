@@ -24,6 +24,7 @@ import type { PlanTier } from "../../lib/plans.js";
 import {
   buildShopifyInstallUrl,
   registerShopifyWebhooks,
+  revokeShopifyAccessToken,
 } from "../../lib/integrations/shopify.js";
 import { registerWooWebhooks } from "../../lib/integrations/woocommerce.js";
 import type { IntegrationCredentials } from "../../lib/integrations/types.js";
@@ -544,7 +545,41 @@ export const integrationsRouter = router({
         lastCheckedAt: new Date(),
       };
       if (!result.ok) {
-        integration.status = "error";
+        // Detect the "credentials irrecoverably revoked" case and
+        // soft-disconnect, instead of leaving the integration stuck in
+        // "error" forever (which keeps consuming the merchant's
+        // one-shop slot and surfaces a useless Test/Reconnect dance).
+        //
+        // For Shopify, a 401 / "Invalid API key or access token" from
+        // the Admin API means the OAuth access token has been
+        // permanently invalidated — the only thing that does that is
+        // a merchant-side uninstall (or a manual rotate, which our
+        // flow doesn't expose). Either way, the row will never
+        // recover without a full reconnect, so flipping it to
+        // "disconnected" is the correct UX: the card frees up, the
+        // merchant clicks Connect, fresh token, working integration.
+        //
+        // We catch this here as a backstop in case the
+        // `app/uninstalled` webhook didn't reach us (network blip,
+        // pre-subscription install, Shopify outage). For any 5xx /
+        // network / transient error we keep the existing "error"
+        // status so the merchant can retry.
+        const detail = (result.detail ?? "").toLowerCase();
+        const isPermanentAuthFailure =
+          integration.provider === "shopify" &&
+          (detail.includes("401") ||
+            detail.includes("invalid api key") ||
+            detail.includes("access token") ||
+            detail.includes("unrecognized login"));
+        if (isPermanentAuthFailure) {
+          integration.status = "disconnected";
+          integration.disconnectedAt = new Date();
+          if (integration.webhookStatus) {
+            integration.webhookStatus.registered = false;
+          }
+        } else {
+          integration.status = "error";
+        }
       } else if (integration.status === "error") {
         // A successful test clears the prior error state — merchant fixed
         // the credential problem, treat the integration as connected again.
@@ -557,9 +592,23 @@ export const integrationsRouter = router({
         action: "integration.test",
         subjectType: "integration",
         subjectId: integration._id,
-        meta: { provider: integration.provider, ok: result.ok, latencyMs },
+        meta: {
+          provider: integration.provider,
+          ok: result.ok,
+          latencyMs,
+          autoDisconnected: integration.status === "disconnected",
+        },
       });
-      return { ok: result.ok, detail: result.detail ?? null, latencyMs };
+      return {
+        ok: result.ok,
+        detail: result.detail ?? null,
+        latencyMs,
+        // Web client uses this to surface the friendly "we
+        // auto-disconnected — click Connect to start fresh" toast
+        // and immediately invalidate the integrations.list query so
+        // the row disappears.
+        autoDisconnected: integration.status === "disconnected",
+      };
     }),
 
   fetchSample: protectedProcedure
@@ -775,6 +824,78 @@ export const integrationsRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
       }
       const merchantId = merchantObjectId(ctx);
+
+      // Read the row BEFORE flipping it so we can hit Shopify's
+      // revoke endpoint with the live access token. If we flipped
+      // first then revoked, a crash between the two writes would
+      // leave the merchant with a healthy Shopify-side install but
+      // a disconnected row on our side — the exact asymmetry the
+      // merchant complained about ("trash on dashboard didn't
+      // uninstall the app on Shopify").
+      const existing = await Integration.findOne({
+        _id: new Types.ObjectId(input.id),
+        merchantId,
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "integration not found" });
+      }
+
+      // Best-effort symmetric uninstall on Shopify's side. Three
+      // ground rules:
+      //   1. NEVER block the local disconnect on this — the merchant
+      //      should always be able to disconnect, even if Shopify is
+      //      down or the token's already invalid.
+      //   2. ALWAYS audit the outcome so a stranded Shopify-side
+      //      install is debuggable.
+      //   3. Don't decrypt creds for providers that have no
+      //      revocation API yet (woocommerce TBD, csv/custom_api
+      //      have nothing to revoke).
+      let shopifyRevoke:
+        | { ok: true }
+        | { ok: true; alreadyRevoked: true; status: number }
+        | { ok: false; kind: string; detail: string }
+        | null = null;
+      if (existing.provider === "shopify") {
+        const stored = (existing.credentials as Record<string, string | undefined> | undefined)
+          ?.accessToken;
+        if (stored) {
+          let token: string | null = null;
+          try {
+            token = decryptSecret(stored);
+          } catch {
+            shopifyRevoke = {
+              ok: false,
+              kind: "credential_decrypt_failed",
+              detail: "stored access token unreadable — skipping remote revoke",
+            };
+          }
+          if (token) {
+            try {
+              const r = await revokeShopifyAccessToken({
+                shopDomain: existing.accountKey,
+                accessToken: token,
+              });
+              shopifyRevoke = r;
+            } catch (err) {
+              // fetchWithTimeout already rescues most errors; this
+              // is a belt-and-braces in case the helper itself
+              // throws unexpectedly.
+              shopifyRevoke = {
+                ok: false,
+                kind: "uncaught",
+                detail: (err as Error).message.slice(0, 200),
+              };
+            }
+          }
+        } else {
+          shopifyRevoke = {
+            ok: false,
+            kind: "no_access_token",
+            detail: "row had no stored access token (e.g. install never completed)",
+          };
+        }
+      }
+
       const integration = await Integration.findOneAndUpdate(
         { _id: new Types.ObjectId(input.id), merchantId },
         {
@@ -782,6 +903,11 @@ export const integrationsRouter = router({
             status: "disconnected",
             disconnectedAt: new Date(),
             "webhookStatus.registered": false,
+            // Wipe the access token on disconnect — we no longer
+            // need it, and a disconnected row holding a usable
+            // token is a small but real exfiltration risk if the
+            // DB is ever leaked.
+            "credentials.accessToken": undefined,
           },
         },
         { new: true },
@@ -789,15 +915,28 @@ export const integrationsRouter = router({
       if (!integration) {
         throw new TRPCError({ code: "NOT_FOUND", message: "integration not found" });
       }
+
       void writeAudit({
         merchantId,
         actorId: merchantId,
         action: "integration.disconnected",
         subjectType: "integration",
         subjectId: integration._id,
-        meta: { provider: integration.provider },
+        meta: {
+          provider: integration.provider,
+          shopifyRevoke,
+        },
       });
-      return { id: String(integration._id), disconnected: true };
+      return {
+        id: String(integration._id),
+        disconnected: true,
+        // Echoed back so the web client can flag a stranded
+        // Shopify-side install in a follow-up toast if the remote
+        // revoke wasn't acknowledged. Pure UX hint — local state is
+        // already correct.
+        remoteRevoked:
+          shopifyRevoke === null ? null : shopifyRevoke.ok === true,
+      };
     }),
 
   /**

@@ -537,3 +537,82 @@ export async function fetchShopifyShopInfo(args: {
     },
   };
 }
+
+/**
+ * Discriminated result for revokeShopifyAccessToken. Callers
+ * typically don't BLOCK the merchant-facing disconnect on a remote
+ * revoke failure — the merchant should always be able to disconnect
+ * locally — but they DO want the outcome on the audit row so a
+ * stranded Shopify-side install (app still listed in the merchant's
+ * Shopify admin) is debuggable from the audit log.
+ */
+export type ShopifyRevokeResult =
+  | { ok: true }
+  // Already revoked / never installed: 401/403/404 from Shopify all
+  // mean "we have nothing to do here". Treat as success on our side.
+  | { ok: true; alreadyRevoked: true; status: number }
+  | { ok: false; kind: "transient"; detail: string }
+  | { ok: false; kind: "remote_error"; status: number; detail: string };
+
+/**
+ * Revoke the merchant's access token on Shopify's side. Triggers
+ * Shopify to:
+ *   1. Remove the app from the merchant's Shopify admin (Apps section)
+ *   2. Cancel every webhook subscription tied to this token
+ *   3. Fire `app/uninstalled` back to our handler (which idempotently
+ *      no-ops since we already disconnected locally)
+ *
+ * Endpoint: DELETE /admin/api/2024-04/api_permissions/current.json
+ * Documented at:
+ * https://shopify.dev/docs/api/admin-rest/2024-04/resources/accesstoken#delete-api-permissions-current
+ *
+ * Behaviour notes worth knowing:
+ *   - 200 / 204     → token revoked.
+ *   - 401 / 403     → token was already invalid (merchant uninstalled
+ *                     from Shopify side, or token is stale). We treat
+ *                     this as success — there's nothing left to revoke.
+ *   - 404           → endpoint not found for this access token (also
+ *                     "already revoked").
+ *   - 5xx / network → transient. Caller should still soft-disconnect
+ *                     locally and surface a "couldn't reach Shopify"
+ *                     audit entry so the merchant can manually
+ *                     uninstall from Shopify if they care to.
+ */
+export async function revokeShopifyAccessToken(args: {
+  shopDomain: string;
+  accessToken: string;
+  fetchImpl?: typeof fetch;
+}): Promise<ShopifyRevokeResult> {
+  const fetcher = args.fetchImpl ?? fetch;
+  const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      fetcher,
+      `https://${shop}/admin/api/2024-04/api_permissions/current.json`,
+      {
+        method: "DELETE",
+        headers: {
+          "X-Shopify-Access-Token": args.accessToken,
+          Accept: "application/json",
+        },
+      },
+      "revokeShopifyAccessToken",
+    );
+  } catch (err) {
+    return { ok: false, kind: "transient", detail: (err as Error).message };
+  }
+  if (res.ok || res.status === 204) {
+    return { ok: true };
+  }
+  if (res.status === 401 || res.status === 403 || res.status === 404) {
+    return { ok: true, alreadyRevoked: true, status: res.status };
+  }
+  const detail = await res.text().catch(() => "");
+  return {
+    ok: false,
+    kind: "remote_error",
+    status: res.status,
+    detail: detail.slice(0, 200),
+  };
+}
