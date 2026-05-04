@@ -2,7 +2,23 @@ import { timingSafeEqual } from "node:crypto";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { Types } from "mongoose";
 import { z } from "zod";
-import { Merchant, SUBSCRIPTION_TIERS } from "@ecom/db";
+import {
+  AuditLog,
+  CallLog,
+  ImportJob,
+  Integration,
+  Merchant,
+  MerchantStats,
+  Notification,
+  Order,
+  Payment,
+  RecoveryTask,
+  SUBSCRIPTION_TIERS,
+  TrackingEvent,
+  TrackingSession,
+  Usage,
+  WebhookInbox,
+} from "@ecom/db";
 import { env } from "../env.js";
 import { invalidateSubscriptionCache } from "./trpc.js";
 
@@ -126,3 +142,61 @@ adminRouter.get("/merchant/:id", requireAdminSecret, async (req: Request, res: R
   if (!m) return res.status(404).json({ error: "not found" });
   return res.json(m);
 });
+
+/**
+ * Build/repair indexes on Atlas. autoIndex is intentionally OFF in
+ * production (set in lib/db.ts) so deploys don't stall behind a slow
+ * index build. There IS a `npm run db:sync-indexes` script, but on
+ * Railway free tier we don't have an easy "run one-off command" path —
+ * this endpoint is the equivalent over X-Admin-Secret. Idempotent: re-
+ * running creates nothing if everything is already in place. Returns a
+ * per-model summary of what was built / dropped.
+ *
+ * Background: a missing partial-unique index on
+ * (merchantId, source.externalId) caused webhook order.created +
+ * order.updated races to land twice. The ingest path was hardened to
+ * catch E11000 — but it can only catch E11000 when the index is
+ * actually present, so we need a way to build it without redeploying.
+ */
+adminRouter.post("/sync-indexes", requireAdminSecret, async (_req: Request, res: Response) => {
+  const MODELS: Array<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
+    ["AuditLog", AuditLog as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["CallLog", CallLog as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["ImportJob", ImportJob as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Integration", Integration as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Merchant", Merchant as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["MerchantStats", MerchantStats as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Notification", Notification as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Order", Order as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Payment", Payment as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["RecoveryTask", RecoveryTask as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["TrackingEvent", TrackingEvent as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["TrackingSession", TrackingSession as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["Usage", Usage as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["WebhookInbox", WebhookInbox as unknown as { syncIndexes: () => Promise<unknown> }],
+  ];
+  const summary: Record<string, { created?: string[]; dropped?: string[]; error?: string }> = {};
+  let created = 0;
+  let dropped = 0;
+  for (const [name, model] of MODELS) {
+    try {
+      const result = (await model.syncIndexes()) as
+        | string[]
+        | { created?: string[]; dropped?: string[] }
+        | undefined;
+      let droppedNames: string[] = [];
+      let createdNames: string[] = [];
+      if (Array.isArray(result)) {
+        droppedNames = result;
+      } else if (result && typeof result === "object") {
+        droppedNames = result.dropped ?? [];
+        createdNames = result.created ?? [];
+      }
+      created += createdNames.length;
+      dropped += droppedNames.length;
+      summary[name] = { created: createdNames, dropped: droppedNames };
+      console.log(
+        `[admin/sync-indexes] ${name}: created=${createdNames.length} dropped=${droppedNames.length}`,
+      );
+    } catch (err) {
+      const msg = (err as Error).message;

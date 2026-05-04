@@ -161,7 +161,17 @@ export async function ingestNormalizedOrder(
       normalized.externalOrderNumber ??
       `${opts.source.toUpperCase().slice(0, 4)}-${normalized.externalId.slice(-8)}`;
 
-    const orderDoc = await Order.create({
+    // Race-safe insert. Two workers can each pass the findOne dedup above
+    // (rapid-fire order.created + order.updated webhooks for the same WC
+    // order do this all the time) and reach the create in parallel. The
+    // unique partial index on `(merchantId, source.externalId)` makes the
+    // second insert throw E11000; we catch it here and treat it as a
+    // duplicate. Belt-and-suspenders to the findOne above — both protect
+    // against different races (findOne keeps reads off the create path on
+    // the cold path; the catch keeps writes correct on the hot path).
+    let orderDoc;
+    try {
+      orderDoc = await Order.create({
       merchantId: opts.merchantId,
       orderNumber,
       customer: {
@@ -196,7 +206,35 @@ export async function ingestNormalizedOrder(
         customerEmail: normalized.customer.email ?? undefined,
         placedAt: normalized.placedAt,
       },
-    });
+      });
+    } catch (err: unknown) {
+      // Mongo's duplicate-key error code. The most common cause is the
+      // race described above the create call: two workers passed the
+      // findOne and both reached create. The unique partial index on
+      // `(merchantId, source.externalId)` rejects the loser. Re-fetch the
+      // winner so the caller still gets a valid orderId, and report it
+      // as a duplicate so the integration counter doesn't double-bump.
+      const e = err as { code?: number; message?: string } | null;
+      if (e && e.code === 11000) {
+        // Refund the quota we reserved for this insert. The winner already
+        // has its own reservation; if we leave ours in place the merchant
+        // gets double-charged for one upstream order on every webhook race.
+        await releaseQuota(opts.merchantId, plan, "ordersCreated", 1).catch(() => {});
+        const winner = await Order.findOne({
+          merchantId: opts.merchantId,
+          "source.externalId": normalized.externalId,
+        })
+          .select("_id")
+          .lean();
+        if (winner) {
+          return { ok: true, duplicate: true, orderId: String(winner._id) };
+        }
+        // Fell through — should not happen unless the index is also
+        // matching on something other than what we filtered on. Surface as
+        // a hard failure so it's loud rather than silently mis-attributed.
+      }
+      throw err;
+    }
 
     // Persist the prediction for the monthly weight tuner. Best-effort:
     // a failure here MUST NOT undo the order create. Idempotent via the
@@ -710,63 +748,3 @@ export async function resolveIdentityForOrder(args: {
   if (!args.phone && !args.email) return { stitchedSessions: 0, stitchedEvents: 0 };
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  // Match on every plausible phone variant so legacy sessions written before
-  // E.164-normalization rolled out still stitch to new orders.
-  const orFilter: Array<Record<string, unknown>> = [];
-  if (args.phone) {
-    const variants = phoneLookupVariants(args.phone);
-    orFilter.push(variants.length > 1 ? { phone: { $in: variants } } : { phone: args.phone });
-  }
-  if (args.email) orFilter.push({ email: args.email.toLowerCase() });
-
-  const sessionUpdate = await TrackingSession.updateMany(
-    {
-      merchantId: args.merchantId,
-      $or: orFilter,
-      lastSeenAt: { $gte: since },
-      resolvedOrderId: { $exists: false },
-    },
-    {
-      $set: {
-        resolvedOrderId: args.orderId,
-        resolvedAt: new Date(),
-        ...(args.phone ? { phone: args.phone } : {}),
-        ...(args.email ? { email: args.email.toLowerCase() } : {}),
-      },
-    },
-  );
-
-  const eventUpdate = await TrackingEvent.updateMany(
-    {
-      merchantId: args.merchantId,
-      $or: orFilter,
-      occurredAt: { $gte: since },
-    },
-    {
-      $set: {
-        ...(args.phone ? { phone: args.phone } : {}),
-        ...(args.email ? { email: args.email.toLowerCase() } : {}),
-      },
-    },
-  );
-
-  if (sessionUpdate.modifiedCount > 0) {
-    void writeAudit({
-      merchantId: args.merchantId,
-      actorId: args.merchantId,
-      actorType: "system",
-      action: "tracking.identified",
-      subjectType: "order",
-      subjectId: args.orderId,
-      meta: {
-        sessions: sessionUpdate.modifiedCount,
-        events: eventUpdate.modifiedCount,
-      },
-    });
-  }
-
-  return {
-    stitchedSessions: sessionUpdate.modifiedCount ?? 0,
-    stitchedEvents: eventUpdate.modifiedCount ?? 0,
-  };
-}
