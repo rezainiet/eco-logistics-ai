@@ -252,3 +252,102 @@ export const wooAdapter: IntegrationAdapter = {
     }
   },
 };
+
+/**
+ * Delete a list of webhook subscription IDs from a WooCommerce store.
+ * Called from the integration disconnect flow so the merchant doesn't
+ * keep getting deliveries to an endpoint we no longer accept.
+ *
+ * Per-id outcome:
+ *   - 200/204 → counted as `deleted`
+ *   - 404      → counted as `alreadyGone` (subscription already removed
+ *                upstream — equivalent for our purposes)
+ *   - other    → recorded as an error string
+ *
+ * Auth: Basic by default; falls through to querystring for stores that
+ * sit behind reverse proxies which strip the Authorization header
+ * (Cloudflare, some WAF rules). The persisted strategy is passed in so
+ * we don't re-discover it on every call.
+ */
+export async function deleteWooWebhooks(args: {
+  siteUrl: string;
+  consumerKey: string;
+  consumerSecret: string;
+  webhookIds: number[];
+  authStrategy?: "basic" | "querystring";
+  fetchImpl?: typeof fetch;
+}): Promise<
+  | { ok: true; deleted: number; alreadyGone: number }
+  | { ok: false; kind: string; detail: string }
+> {
+  const fetcher = args.fetchImpl ?? fetch;
+  const base = args.siteUrl.replace(/\/$/, "");
+  const useQuerystring = args.authStrategy === "querystring";
+  const basicAuth =
+    "Basic " +
+    Buffer.from(`${args.consumerKey}:${args.consumerSecret}`).toString(
+      "base64",
+    );
+  const qs = useQuerystring
+    ? `&consumer_key=${encodeURIComponent(args.consumerKey)}&consumer_secret=${encodeURIComponent(args.consumerSecret)}`
+    : "";
+
+  let deleted = 0;
+  let alreadyGone = 0;
+  const errors: string[] = [];
+
+  for (const id of args.webhookIds) {
+    if (typeof id !== "number" || !Number.isFinite(id) || id <= 0) {
+      errors.push(`invalid id: ${String(id)}`);
+      continue;
+    }
+    const url = `${base}/wp-json/wc/v3/webhooks/${id}?force=true${qs}`;
+    try {
+      const res = await fetcher(url, {
+        method: "DELETE",
+        headers: useQuerystring
+          ? { Accept: "application/json" }
+          : {
+              Authorization: basicAuth,
+              Accept: "application/json",
+            },
+      });
+      if (res.ok || res.status === 204) {
+        deleted += 1;
+      } else if (res.status === 404) {
+        alreadyGone += 1;
+      } else if (!useQuerystring && (res.status === 401 || res.status === 403)) {
+        // Auth header was stripped by an upstream proxy. Retry once with
+        // querystring auth — same behaviour registerWooWebhooks uses on
+        // first contact.
+        const retryUrl = `${base}/wp-json/wc/v3/webhooks/${id}?force=true&consumer_key=${encodeURIComponent(args.consumerKey)}&consumer_secret=${encodeURIComponent(args.consumerSecret)}`;
+        const retry = await fetcher(retryUrl, {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+        });
+        if (retry.ok || retry.status === 204) {
+          deleted += 1;
+        } else if (retry.status === 404) {
+          alreadyGone += 1;
+        } else {
+          const detail = await retry.text().catch(() => "");
+          errors.push(`${id}: ${retry.status} ${detail.slice(0, 120)}`);
+        }
+      } else {
+        const detail = await res.text().catch(() => "");
+        errors.push(`${id}: ${res.status} ${detail.slice(0, 120)}`);
+      }
+    } catch (err) {
+      errors.push(`${id}: ${(err as Error).message.slice(0, 120)}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      kind: "remote_error",
+      detail: errors.slice(0, 5).join("; ").slice(0, 200),
+    };
+  }
+  return { ok: true, deleted, alreadyGone };
+}

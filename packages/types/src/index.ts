@@ -60,21 +60,22 @@ export * from "./plans.js";
 // ---------------------------------------------------------------------------
 // Single source of truth shared by the web form, the tRPC `connect` mutation,
 // and any future CLI tooling. Rule:
-//   - https:// is allowed for any host
-//   - http:// is allowed ONLY for local-development hosts:
-//       localhost, 127.0.0.1, ::1, and *.local / *.test / *.localhost
-//   - Anything else (other schemes, IPs over plain http, missing host) rejects
-// Keep the implementation dependency-free — this module is shared with the
+//   - https for any host
+//   - http only for local-dev hosts: localhost, 127.0.0.1, ::1, and
+//     *.local / *.test / *.localhost
+//   - Anything else (other schemes, IPs over plain http, missing host)
+//     rejects.
+// Implementation kept dependency-free; this module is shared with the
 // web client.
 
 export const WOO_SITE_URL_ERROR =
-  "Site URL must be https:// (http:// allowed only for localhost / *.local / *.test)";
+  "Site URL must use https (http only allowed for localhost / *.local / *.test)";
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+const WOO_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
-function isLocalHost(hostname: string): boolean {
+function wooIsLocalHost(hostname: string): boolean {
   const h = hostname.toLowerCase();
-  if (LOCAL_HOSTS.has(h)) return true;
+  if (WOO_LOCAL_HOSTS.has(h)) return true;
   return (
     h.endsWith(".local") ||
     h.endsWith(".test") ||
@@ -92,6 +93,6 @@ export function isAllowedWooSiteUrl(input: unknown): boolean {
   }
   if (!parsed.hostname) return false;
   if (parsed.protocol === "https:") return true;
-  if (parsed.protocol === "http:") return isLocalHost(parsed.hostname);
+  if (parsed.protocol === "http:") return wooIsLocalHost(parsed.hostname);
   return false;
 }
