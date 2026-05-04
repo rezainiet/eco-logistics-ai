@@ -97,6 +97,39 @@ async function main() {
 
   await connectDb();
   await assertRedisOrExit();
+
+  // Fire-and-forget index sync. autoIndex is OFF in production (lib/db.ts)
+  // so a fresh Atlas DB starts with no model indexes — including the
+  // partial-unique on (merchantId, source.externalId) the ingest race fix
+  // relies on. Running syncIndexes() at boot makes every deploy self-heal:
+  // the api binds to its port and starts serving immediately, while index
+  // builds happen in the background. Builds on a fresh DB take ~milliseconds
+  // since collections are tiny; on a large DB they take longer but never
+  // block the port-bind handshake the Railway healthcheck depends on.
+  void (async () => {
+    try {
+      const { Order, WebhookInbox, Integration, Merchant, ImportJob } = await import("@ecom/db");
+      const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
+        ["Order", Order as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["WebhookInbox", WebhookInbox as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["Integration", Integration as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["Merchant", Merchant as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["ImportJob", ImportJob as unknown as { syncIndexes: () => Promise<unknown> }],
+      ];
+      for (const [name, model] of models) {
+        try {
+          const t0 = Date.now();
+          await model.syncIndexes();
+          console.log(`[boot/syncIndexes] ${name} ok in ${Date.now() - t0}ms`);
+        } catch (err) {
+          console.error(`[boot/syncIndexes] ${name} failed:`, (err as Error).message);
+        }
+      }
+    } catch (err) {
+      console.error("[boot/syncIndexes] outer failure:", (err as Error).message);
+    }
+  })();
+
   await initQueues();
   if (env.REDIS_URL) {
     registerTrackingSyncWorker();
@@ -182,54 +215,4 @@ async function main() {
   // reads, all live here. There is NO global IP limiter on it: a single
   // merchant pulling 1M orders/day legitimately burns ~12 req/sec from one
   // egress. Fairness and abuse protection come from two layers that DO
-  // discriminate by tenant: (1) auth-gated procedures via the per-merchant
-  // token bucket in safeEnqueue / mutation paths, and (2) the dedicated
-  // login/signup/passwordReset/webhook/publicTracking limiters mounted on
-  // their own routes above. A single global counter would cap the entire
-  // platform at one tenant's worth of traffic.
-  app.use(
-    "/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
-
-  // Final error handler — anything that propagates out of a non-tRPC route
-  // (raw webhook handlers, ingest collector, etc.) ends up here. We log,
-  // capture to telemetry, and respond with a generic 500 so we never leak
-  // internals.
-  app.use(
-    (
-      err: Error,
-      req: import("express").Request,
-      res: import("express").Response,
-      _next: import("express").NextFunction,
-    ) => {
-      console.error(`[api] unhandled ${req.method} ${req.path}:`, err.message);
-      captureException(err, {
-        tags: { source: "express", method: req.method, path: req.path },
-      });
-      if (res.headersSent) return;
-      res.status(500).json({ ok: false, error: "internal_error" });
-    },
-  );
-
-  const server = app.listen(env.API_PORT, () => {
-    console.log(`[api] listening on http://localhost:${env.API_PORT}`);
-  });
-
-  const shutdown = async (signal: string) => {
-    console.log(`[api] ${signal} received, shutting down`);
-    server.close();
-    await shutdownQueues().catch((err) => console.error("[api] queue shutdown", err));
-    process.exit(0);
-  };
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-}
-
-main().catch((err) => {
-  console.error("[api] fatal", err);
-  process.exit(1);
-});
+  // discriminate
