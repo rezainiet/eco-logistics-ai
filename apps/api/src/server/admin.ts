@@ -200,3 +200,129 @@ adminRouter.post("/sync-indexes", requireAdminSecret, async (_req: Request, res:
       );
     } catch (err) {
       const msg = (err as Error).message;
+      summary[name] = { error: msg };
+      console.error(`[admin/sync-indexes] ${name} failed:`, msg);
+    }
+  }
+  return res.json({ ok: true, created, dropped, models: summary });
+});
+
+/**
+ * Reset a merchant's password to a known value. X-Admin-Secret guarded.
+ * Used to recover login when the operator has lost the original credentials,
+ * or to bootstrap a clean test merchant. Mirrors the bcrypt(10) hash that
+ * `auth.ts` uses on signup + password change so the login flow can validate
+ * it the same way.
+ *
+ * Body: { email, newPassword, actor }
+ *   - email: target merchant's email
+ *   - newPassword: must be >= 8 chars
+ *   - actor: free-text who-did-it tag (audit log)
+ */
+const resetPasswordSchema = z.object({
+  email: z.string().email(),
+  newPassword: z.string().min(8).max(200),
+  actor: z.string().min(1).max(120),
+});
+
+adminRouter.post(
+  "/reset-merchant-password",
+  requireAdminSecret,
+  async (req: Request, res: Response) => {
+    const parsed = resetPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    const { email, newPassword, actor } = parsed.data;
+
+    const { default: bcrypt } = await import("bcryptjs");
+    const merchant = await Merchant.findOne({ email: email.toLowerCase() });
+    if (!merchant) {
+      return res.status(404).json({ error: "merchant not found" });
+    }
+    merchant.passwordHash = await bcrypt.hash(newPassword, 10);
+    await merchant.save();
+
+    console.log(
+      `[admin] reset-merchant-password merchant=${merchant._id} email=${email} actor=${actor}`,
+    );
+    return res.json({ ok: true, id: String(merchant._id), email: merchant.email });
+  },
+);
+
+/**
+ * Dedupe Order docs by (merchantId, source.externalId). Keeps the OLDEST
+ * (lowest createdAt) and deletes the rest. After cleanup, calls
+ * Order.syncIndexes() so the partial-unique on
+ * (merchantId, source.externalId) and the unique on
+ * (merchantId, orderNumber) get rebuilt cleanly. X-Admin-Secret guarded.
+ *
+ * Background: rapid-fire webhook races (order.created + order.updated for
+ * the same external order) can land two Order docs on a fresh DB where
+ * autoIndex is OFF (lib/db.ts). Once dups exist, syncIndexes refuses to
+ * build the unique index because the existing data violates it. This
+ * endpoint breaks that deadlock idempotently: dedupe → rebuild indexes.
+ *
+ * Returns a summary {dupGroupsFound, docsDeleted, syncIndexesResult}.
+ */
+adminRouter.post("/dedupe-orders", requireAdminSecret, async (_req: Request, res: Response) => {
+  // Find duplicate (merchantId, source.externalId) groups. Skip docs
+  // missing source.externalId — those can't race-collide.
+  const dupGroups = await Order.aggregate<{
+    _id: { merchantId: unknown; externalId: string };
+    ids: Array<unknown>;
+    count: number;
+  }>([
+    { $match: { "source.externalId": { $exists: true, $ne: null } } },
+    {
+      $group: {
+        _id: { merchantId: "$merchantId", externalId: "$source.externalId" },
+        ids: { $push: { id: "$_id", createdAt: "$createdAt" } },
+        count: { $sum: 1 },
+      },
+    },
+    { $match: { count: { $gt: 1 } } },
+  ]);
+
+  let docsDeleted = 0;
+  for (const group of dupGroups) {
+    const sorted = (group.ids as Array<{ id: unknown; createdAt: Date }>).sort(
+      (a, b) =>
+        (a.createdAt instanceof Date ? a.createdAt.getTime() : 0) -
+        (b.createdAt instanceof Date ? b.createdAt.getTime() : 0),
+    );
+    // keep the oldest, delete the rest
+    const toDelete = sorted.slice(1).map((r) => r.id);
+    if (toDelete.length === 0) continue;
+    const result = await Order.deleteMany({ _id: { $in: toDelete } });
+    docsDeleted += result.deletedCount ?? 0;
+    console.log(
+      `[admin/dedupe-orders] kept ${String(sorted[0]?.id)} deleted ${toDelete.length} extras for externalId=${
+        group._id.externalId
+      }`,
+    );
+  }
+
+  // Now rebuild Order indexes — the previous syncIndexes attempt failed
+  // because of these dups; with them gone, the unique on
+  // (merchantId, orderNumber) and the partial-unique on
+  // (merchantId, source.externalId) should both build cleanly.
+  let syncIndexesResult: unknown = null;
+  let syncIndexesError: string | null = null;
+  try {
+    syncIndexesResult = await (
+      Order as unknown as { syncIndexes: () => Promise<unknown> }
+    ).syncIndexes();
+  } catch (err) {
+    syncIndexesError = (err as Error).message;
+    console.error("[admin/dedupe-orders] syncIndexes failed:", syncIndexesError);
+  }
+
+  return res.json({
+    ok: true,
+    dupGroupsFound: dupGroups.length,
+    docsDeleted,
+    syncIndexes: syncIndexesError ? { error: syncIndexesError } : syncIndexesResult,
+  });
+});
+
