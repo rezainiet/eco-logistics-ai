@@ -5,10 +5,10 @@
     "rootDir": "src",
     "outDir": "dist",
     "paths": {
-      "@ecom/db": ["../../packages/db/src/index.d.ts"],
-      "@ecom/db/*": ["../../packages/db/src/*"],
-      "@ecom/types": ["../../packages/types/src/index.d.ts"],
-      "@ecom/types/*": ["../../packages/types/src/*"]
+      "@ecom/db": ["../../packages/db/dist/index.d.ts"],
+      "@ecom/db/*": ["../../packages/db/dist/*"],
+      "@ecom/types": ["../../packages/types/dist/index.d.ts"],
+      "@ecom/types/*": ["../../packages/types/dist/*"]
     }
   },
   "include": ["src/**/*"],
