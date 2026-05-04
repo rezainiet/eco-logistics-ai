@@ -54,3 +54,44 @@ export const MERCHANT_LANGUAGES = [
 export type MerchantLanguage = (typeof MERCHANT_LANGUAGES)[number];
 
 export * from "./plans.js";
+
+// ---------------------------------------------------------------------------
+// WooCommerce site URL validation
+// ---------------------------------------------------------------------------
+// Single source of truth shared by the web form, the tRPC `connect` mutation,
+// and any future CLI tooling. Rule:
+//   - https:// is allowed for any host
+//   - http:// is allowed ONLY for local-development hosts:
+//       localhost, 127.0.0.1, ::1, and *.local / *.test / *.localhost
+//   - Anything else (other schemes, IPs over plain http, missing host) rejects
+// Keep the implementation dependency-free — this module is shared with the
+// web client.
+
+export const WOO_SITE_URL_ERROR =
+  "Site URL must be https:// (http:// allowed only for localhost / *.local / *.test)";
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+function isLocalHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (LOCAL_HOSTS.has(h)) return true;
+  return (
+    h.endsWith(".local") ||
+    h.endsWith(".test") ||
+    h.endsWith(".localhost")
+  );
+}
+
+export function isAllowedWooSiteUrl(input: unknown): boolean {
+  if (typeof input !== "string" || input.length === 0) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return false;
+  }
+  if (!parsed.hostname) return false;
+  if (parsed.protocol === "https:") return true;
+  if (parsed.protocol === "http:") return isLocalHost(parsed.hostname);
+  return false;
+}
