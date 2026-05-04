@@ -3,20 +3,21 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.js",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.js"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json",
     "./*": {
-      "types": "./src/*.ts",
-      "default": "./src/*.js"
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
     }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.json --noEmit false --outDir dist --rootDir src",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
