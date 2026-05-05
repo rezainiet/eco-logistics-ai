@@ -90,6 +90,19 @@ integrationsWebhookRouter.post(
     if (integration.status !== "connected") {
       return res.status(409).json({ ok: false, error: "integration not connected" });
     }
+    // Soft-pause: merchant clicked "Pause ingestion" in the dashboard.
+    // We acknowledge the upstream with 202 (so Shopify/Woo don't queue
+    // the delivery for retry forever) but skip the inbox stamp + worker
+    // dispatch entirely. Resuming is a single click and does NOT
+    // backfill missed deliveries — that's the merchant's call via
+    // "Sync now" once they're ready.
+    if (integration.pausedAt) {
+      return res.status(202).json({
+        ok: true,
+        paused: true,
+        pausedAt: integration.pausedAt,
+      });
+    }
 
     const adapter = adapterFor(provider as IntegrationProvider);
     const rawBody = req.body as Buffer;

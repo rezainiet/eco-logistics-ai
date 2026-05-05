@@ -13,6 +13,7 @@ import {
 } from "../../lib/manual-payments.js";
 import { writeAudit } from "../../lib/audit.js";
 import { computeTrialState, daysLeftUntil } from "../../lib/billing.js";
+import { previewIntegrationCapacityChange } from "../../lib/entitlements.js";
 import {
   getPlan,
   isPlanTier,
@@ -89,6 +90,57 @@ function summarizeSubscription(sub: {
 export const billingRouter = router({
   /** Static catalogue — safe for the public pricing surface too. */
   listPlans: protectedProcedure.query(() => listPlans()),
+
+  /**
+   * Dry-run a plan change. Returns exactly which integrations would be
+   * disabled if the merchant moved from their current plan to
+   * `targetTier`. Read-only — no DB writes — so the dashboard can call
+   * this on every tier-selector change without rate-limit fear.
+   *
+   * Powers the "downgrade warning" modal: instead of a vague "you may
+   * lose features" toast, the merchant sees the EXACT list of
+   * connectors that will be disconnected.
+   *
+   * Empty `disabled`+`providerLocked` means the merchant fits cleanly
+   * under the new tier — the dashboard renders an info banner instead
+   * of the full warning modal.
+   */
+  previewPlanChange: protectedProcedure
+    .input(
+      z.object({
+        targetTier: z.enum(PLAN_TIERS),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      const merchant = await Merchant.findById(merchantId)
+        .select("subscription.tier")
+        .lean();
+      if (!merchant) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+      }
+      const fromTier = (merchant.subscription?.tier as PlanTier | undefined) ?? "starter";
+      const fromIdx = PLAN_TIERS.indexOf(fromTier);
+      const toIdx = PLAN_TIERS.indexOf(input.targetTier);
+      const isDowngrade = toIdx < fromIdx;
+      const isUpgrade = toIdx > fromIdx;
+      // Even on upgrades we run the preview — produces zero entries for
+      // a pure upgrade (cap goes UP), but cheap and consistent. Saves
+      // the client from branching on direction before showing the
+      // "your plan is going to change" UI.
+      const preview = await previewIntegrationCapacityChange(
+        merchantId,
+        input.targetTier,
+      );
+      return {
+        from: fromTier,
+        to: input.targetTier,
+        isDowngrade,
+        isUpgrade,
+        sameTier: !isDowngrade && !isUpgrade,
+        preview,
+      };
+    }),
 
   /** Merchant dashboard payload: current plan, usage meters, quota progress. */
   getPlan: protectedProcedure.query(async ({ ctx }) => {

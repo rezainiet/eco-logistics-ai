@@ -4,6 +4,7 @@ import {
   type FetchSampleResult,
   type IntegrationAdapter,
   type IntegrationCredentials,
+  type NormalizationOutcome,
   type NormalizedOrder,
 } from "./types.js";
 
@@ -45,8 +46,23 @@ interface CustomPayload {
   metadata?: Record<string, unknown>;
 }
 
-function normalizeCustom(payload: CustomPayload): NormalizedOrder | null {
-  if (!payload?.externalId || !payload.customer?.phone) return null;
+function normalizeCustom(
+  payload: CustomPayload,
+): NormalizationOutcome | null {
+  // Custom-API: same skip-envelope discipline as the platform adapters.
+  // Missing externalId → can't dedupe; missing phone → can't deliver.
+  // Both must surface as `needs_attention` rather than silent drops so
+  // the merchant's backend developer can see why their POST didn't land.
+  if (!payload?.externalId) {
+    return { __skip: true, reason: "missing_external_id" };
+  }
+  if (!payload.customer?.phone) {
+    return {
+      __skip: true,
+      reason: "missing_phone",
+      externalId: String(payload.externalId),
+    };
+  }
   const items = (payload.items ?? []).map((it) => ({
     name: it.name || "Item",
     sku: it.sku || undefined,

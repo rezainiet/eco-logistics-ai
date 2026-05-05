@@ -1,14 +1,15 @@
 import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
-import { Merchant, Payment } from "@ecom/db";
+import { Merchant, Notification, Payment } from "@ecom/db";
 import {
   invalidateSubscriptionCache,
   router,
   scopedAdminProcedure,
 } from "../trpc.js";
 import { writeAdminAudit, writeAudit } from "../../lib/audit.js";
-import { getPlan, PLAN_TIERS } from "../../lib/plans.js";
+import { getPlan, PLAN_TIERS, type PlanTier } from "../../lib/plans.js";
+import { enforceIntegrationCapacity } from "../../lib/entitlements.js";
 import {
   buildPaymentApprovedEmail,
   sendEmail,
@@ -528,6 +529,104 @@ export const adminBillingRouter = router({
       await merchant.save();
       invalidateSubscriptionCache(String(merchant._id));
 
+      // FIX: previously, the plan was written without checking whether
+      // the merchant's current footprint (integration count, provider
+      // mix) fit under the new tier's caps. A merchant on Scale (5
+      // integrations) downgraded to Starter (1) would silently retain
+      // all 5 connectors — the cap was only enforced on the next
+      // `connect` call. Now we run `enforceIntegrationCapacity`
+      // synchronously so the merchant sees a consistent state
+      // immediately. Idempotent — re-running with the same target tier
+      // is a no-op once enforcement has settled.
+      const downgradeFrom = (prevTier as PlanTier | undefined) ?? null;
+      const isDowngrade =
+        downgradeFrom !== null &&
+        PLAN_TIERS.indexOf(plan.tier) < PLAN_TIERS.indexOf(downgradeFrom);
+      let enforcement: Awaited<
+        ReturnType<typeof enforceIntegrationCapacity>
+      > | null = null;
+      try {
+        enforcement = await enforceIntegrationCapacity(
+          merchant._id as Types.ObjectId,
+          plan.tier,
+        );
+      } catch (err) {
+        // Don't fail the plan change on a capacity-enforcement glitch —
+        // log it loudly so ops can manually reconcile, and persist a
+        // sentinel so we know the row needs follow-up. The plan write
+        // already succeeded; the merchant's billing state is correct
+        // even if a couple of orphaned connectors linger.
+        console.error(
+          "[adminBilling.changePlan] enforceIntegrationCapacity failed",
+          {
+            merchantId: String(merchant._id),
+            targetTier: plan.tier,
+            error: (err as Error).message,
+          },
+        );
+      }
+
+      // Notify the merchant when an enforcement actually disabled
+      // something. Two distinct buckets (provider-locked vs over-cap)
+      // because the remediation differs: provider-locked needs an
+      // upgrade to a tier that allows the provider; over-cap can be
+      // resolved by reconnecting after upgrading OR by accepting the
+      // disabled connectors as-is.
+      const totalDisabled =
+        (enforcement?.disabled.length ?? 0) +
+        (enforcement?.providerLocked.length ?? 0);
+      if (totalDisabled > 0 && enforcement) {
+        const merchantOid = merchant._id as Types.ObjectId;
+        const lines: string[] = [];
+        if (enforcement.providerLocked.length > 0) {
+          const providers = Array.from(
+            new Set(enforcement.providerLocked.map((r) => r.provider)),
+          ).join(", ");
+          lines.push(
+            `${enforcement.providerLocked.length} ${providers} connector${enforcement.providerLocked.length === 1 ? "" : "s"} disabled — your new plan doesn't include ${providers}.`,
+          );
+        }
+        if (enforcement.disabled.length > 0) {
+          lines.push(
+            `${enforcement.disabled.length} integration${enforcement.disabled.length === 1 ? "" : "s"} disabled — your new plan caps integrations at ${enforcement.cap}.`,
+          );
+        }
+        try {
+          await Notification.updateOne(
+            {
+              merchantId: merchantOid,
+              dedupeKey: `plan-downgrade-enforcement:${String(merchant._id)}:${plan.tier}`,
+            },
+            {
+              $setOnInsert: {
+                merchantId: merchantOid,
+                kind: "subscription.plan_downgrade_enforced",
+                severity: "warning",
+                title: `Plan changed to ${plan.name} — some integrations were disabled`,
+                body: lines.join(" "),
+                link: "/dashboard/integrations",
+                subjectType: "merchant" as const,
+                subjectId: merchantOid,
+                meta: {
+                  from: downgradeFrom,
+                  to: plan.tier,
+                  cap: enforcement.cap,
+                  disabled: enforcement.disabled,
+                  providerLocked: enforcement.providerLocked,
+                },
+                dedupeKey: `plan-downgrade-enforcement:${String(merchant._id)}:${plan.tier}`,
+              },
+            },
+            { upsert: true },
+          );
+        } catch (notifyErr) {
+          console.error(
+            "[adminBilling.changePlan] downgrade notification failed",
+            (notifyErr as Error).message,
+          );
+        }
+      }
+
       void writeAdminAudit({
         merchantId: merchant._id,
         actorId: new Types.ObjectId(ctx.user.id),
@@ -538,7 +637,20 @@ export const adminBillingRouter = router({
         subjectId: merchant._id,
         prevState: prev,
         nextState: subscriptionSnapshot(sub),
-        meta: { from: prevTier ?? null, to: plan.tier, note: input.note ?? null },
+        meta: {
+          from: prevTier ?? null,
+          to: plan.tier,
+          note: input.note ?? null,
+          isDowngrade,
+          enforcement: enforcement
+            ? {
+                activeBefore: enforcement.activeBefore,
+                cap: enforcement.cap,
+                disabledCount: enforcement.disabled.length,
+                providerLockedCount: enforcement.providerLocked.length,
+              }
+            : null,
+        },
         ip: ctx.request.ip,
         userAgent: ctx.request.userAgent,
       });
@@ -554,6 +666,17 @@ export const adminBillingRouter = router({
         meta: { from: prevTier ?? null, to: plan.tier, note: input.note ?? null },
       });
 
-      return { merchantId: String(merchant._id), tier: plan.tier };
+      return {
+        merchantId: String(merchant._id),
+        tier: plan.tier,
+        enforcement: enforcement
+          ? {
+              activeBefore: enforcement.activeBefore,
+              cap: enforcement.cap,
+              disabled: enforcement.disabled,
+              providerLocked: enforcement.providerLocked,
+            }
+          : null,
+      };
     }),
 });

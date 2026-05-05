@@ -43,7 +43,27 @@ export const WEBHOOK_PAYLOAD_REAP_DAYS = 90;
  * @deprecated Use `WEBHOOK_PAYLOAD_REAP_DAYS` for clarity.
  */
 export const WEBHOOK_INBOX_TTL_DAYS = WEBHOOK_PAYLOAD_REAP_DAYS;
-export const WEBHOOK_STATUSES = ["received", "processing", "succeeded", "failed"] as const;
+/**
+ * Webhook inbox lifecycle states.
+ *
+ *   received        — row stamped, awaiting processing
+ *   processing      — worker has it in flight
+ *   succeeded       — order created OR topic ignored (non-order event)
+ *   failed          — transient failure; worker will retry per nextRetryAt
+ *   needs_attention — order-shaped event we CANNOT process and will not
+ *                     retry (e.g. customer phone missing). Surfaces in
+ *                     the dashboard so the merchant can fix the
+ *                     storefront and trigger a manual replay.
+ *                     **Not retried automatically** — that's the whole
+ *                     point of carving it out from "failed".
+ */
+export const WEBHOOK_STATUSES = [
+  "received",
+  "processing",
+  "succeeded",
+  "failed",
+  "needs_attention",
+] as const;
 export type WebhookStatus = (typeof WEBHOOK_STATUSES)[number];
 
 const webhookInboxSchema = new Schema(
@@ -73,6 +93,13 @@ const webhookInboxSchema = new Schema(
     nextRetryAt: { type: Date },
     /** Set once `attempts` hits the cap and we give up + alert the merchant. */
     deadLetteredAt: { type: Date },
+    /**
+     * Why the row was routed to `needs_attention` rather than retried.
+     * Set by the adapter normalizer (e.g. `missing_phone`,
+     * `missing_external_id`). Surfaces in the merchant-facing inbox so
+     * they can correlate the exact reason with their storefront config.
+     */
+    skipReason: { type: String, trim: true, maxlength: 60 },
     /** Set once an Order has been created/updated as a result. */
     resolvedOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
     receivedAt: { type: Date, default: () => new Date() },
@@ -110,6 +137,12 @@ webhookInboxSchema.index({ status: 1, receivedAt: 1 });
 webhookInboxSchema.index(
   { status: 1, nextRetryAt: 1 },
   { partialFilterExpression: { status: "failed" } },
+);
+// Merchant inbox view of unresolved-but-not-retryable rows. Partial filter
+// keeps the index tiny — most rows succeed cleanly and never enter this set.
+webhookInboxSchema.index(
+  { merchantId: 1, receivedAt: -1 },
+  { partialFilterExpression: { status: "needs_attention" } },
 );
 // Payload-reap sweeper pickup — succeeded rows whose payload deadline has
 // passed, oldest first. Partial filter keeps the index tiny.

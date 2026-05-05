@@ -17,8 +17,11 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
+import type { PlanTier } from "@ecom/types";
 import { trpc } from "@/lib/trpc";
 import { BdPaymentRails, PaymentStatusBadge } from "@/components/billing/bd-payment-rails";
+import { DowngradeWarningDialog } from "@/components/billing/downgrade-warning-dialog";
+import { UsageOverview } from "@/components/billing/usage-overview";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -177,6 +180,44 @@ export default function BillingPage() {
     onError: (err) => toast.error("Couldn't start subscription", humanizeError(err)),
   });
 
+  // Plan-change confirmation gate. We funnel the three "go to this
+  // plan" buttons (Subscribe / Pay one-shot / Pay manually) through
+  // this state so a downgrade can be previewed before the actual
+  // mutation fires. `pending.action` decides which mutation to run on
+  // confirm — the dialog stays neutral about the mechanism.
+  const [pendingTierChange, setPendingTierChange] = useState<{
+    tier: PlanTier;
+    action: "subscribe" | "checkout" | "manual";
+  } | null>(null);
+  const confirmTierChange = () => {
+    if (!pendingTierChange) return;
+    if (pendingTierChange.action === "subscribe") {
+      subscribe.mutate({ plan: pendingTierChange.tier });
+    } else if (pendingTierChange.action === "checkout") {
+      stripeCheckout.mutate({ plan: pendingTierChange.tier });
+    } else {
+      // Manual path — pre-fill the form, close the dialog, scroll
+      // to the form. The actual submission still happens inside the
+      // form's `onSubmit`, so the dialog acts as a soft confirmation
+      // step + downgrade preview, not the final commitment.
+      setForm((f) => ({
+        ...f,
+        plan: pendingTierChange.tier,
+        // Re-look up the price from the plan catalogue rather than
+        // trusting state; the catalogue is the source of truth.
+        amount: String(
+          plans.data?.find((p) => p.tier === pendingTierChange.tier)
+            ?.priceBDT ?? f.amount,
+        ),
+      }));
+      toast.info(
+        "Plan selected",
+        "Scroll down to the payment form to complete the change.",
+      );
+    }
+    setPendingTierChange(null);
+  };
+
   const openPortal = trpc.billing.createPortalSession.useMutation({
     onSuccess: (data) => {
       window.location.href = data.url;
@@ -235,6 +276,24 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-6">
+      {/* Confirmation modal for any tier change — runs the dry-run
+          preview against the merchant's current integration footprint
+          and shows exactly which connectors will be disabled. Mounted
+          at the page root so any of the three "go to plan X" buttons
+          can trigger it via shared state. */}
+      <DowngradeWarningDialog
+        open={pendingTierChange !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingTierChange(null);
+        }}
+        targetTier={pendingTierChange?.tier ?? null}
+        onConfirm={confirmTierChange}
+        isConfirming={
+          (pendingTierChange?.action === "subscribe" && subscribe.isPending) ||
+          (pendingTierChange?.action === "checkout" && stripeCheckout.isPending)
+        }
+      />
+
       {/* BD-first payment rails — surfaces bKash/Nagad/bank instructions
           ahead of Stripe for the local merchant audience. Hidden when no
           PAY_*_NUMBER env entries are configured. */}
@@ -245,6 +304,12 @@ export default function BillingPage() {
           Manage your plan, track monthly usage, and submit payments.
         </p>
       </header>
+
+      {/* Usage panel — orders/shipments/fraud-reviews/calls/integrations
+          rolled up. Triggers an upgrade CTA at 80% and a hard banner
+          at 100%. Re-fetches on tRPC cache invalidation so usage
+          reflects the latest webhook within a minute. */}
+      <UsageOverview />
 
       {/* Banners */}
       {subscription?.trialExpired ? (
@@ -474,7 +539,17 @@ export default function BillingPage() {
                   <div className="space-y-2">
                     <Button
                       className="w-full"
-                      onClick={() => subscribe.mutate({ plan: p.tier })}
+                      // Funnel through the downgrade-warning gate so a
+                      // tier-down click previews disabled integrations
+                      // before the Stripe redirect. Upgrades pass
+                      // through the same gate but the dialog renders
+                      // a green "no integrations affected" notice.
+                      onClick={() =>
+                        setPendingTierChange({
+                          tier: p.tier,
+                          action: "subscribe",
+                        })
+                      }
                       disabled={isCurrent || subscribe.isPending}
                     >
                       {subscribe.isPending && subscribe.variables?.plan === p.tier ? (
@@ -487,7 +562,12 @@ export default function BillingPage() {
                     <Button
                       className="w-full"
                       variant="outline"
-                      onClick={() => stripeCheckout.mutate({ plan: p.tier })}
+                      onClick={() =>
+                        setPendingTierChange({
+                          tier: p.tier,
+                          action: "checkout",
+                        })
+                      }
                       disabled={isCurrent || stripeCheckout.isPending}
                     >
                       {stripeCheckout.isPending && stripeCheckout.variables?.plan === p.tier ? (
@@ -498,7 +578,12 @@ export default function BillingPage() {
                     <Button
                       className="w-full"
                       variant="ghost"
-                      onClick={() => setForm((f) => ({ ...f, plan: p.tier, amount: String(p.priceBDT) }))}
+                      onClick={() =>
+                        setPendingTierChange({
+                          tier: p.tier,
+                          action: "manual",
+                        })
+                      }
                       disabled={isCurrent}
                     >
                       {isCurrent ? "—" : "Pay manually (bKash/Nagad)"}

@@ -123,6 +123,13 @@ export async function syncOneIntegration(
   if (integration.status !== "connected") {
     return { enqueued: 0, duplicates: 0, failed: 0 };
   }
+  // Soft-pause: mirror the webhook-route short-circuit so polling
+  // doesn't backfill orders the merchant explicitly told us to ignore.
+  // No state change to lastSyncedAt — when they resume, we pick up
+  // exactly where we left off.
+  if (integration.pausedAt) {
+    return { enqueued: 0, duplicates: 0, failed: 0 };
+  }
   if (!(POLLED_PROVIDERS as readonly string[]).includes(integration.provider)) {
     return { enqueued: 0, duplicates: 0, failed: 0 };
   }

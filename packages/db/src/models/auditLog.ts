@@ -56,6 +56,29 @@ export const AUDIT_ACTIONS = [
   "integration.webhook",
   "integration.webhook_replayed",
   "integration.webhook_dead_lettered",
+  /**
+   * Adapter classified an inbound webhook as order-shaped but
+   * unprocessable (e.g. customer phone missing). Routed to the
+   * `needs_attention` inbox bucket — does NOT auto-retry. The merchant
+   * must fix the storefront and trigger a manual replay. Distinct from
+   * `integration.webhook_dead_lettered` which is the retry-cap-exhausted
+   * case for transient errors.
+   */
+  "integration.webhook_needs_attention",
+  /**
+   * Soft-pause / resume of an integration's ingestion. Distinct from
+   * `connected` / `disconnected` because the credentials and upstream
+   * subscription remain intact across a pause — the row just stops
+   * accepting events.
+   */
+  "integration.paused",
+  "integration.resumed",
+  /**
+   * Merchant manually marked stuck inbox rows as resolved (e.g. for
+   * test orders that don't need to ingest). Logged as a single batch
+   * audit so a merchant clearing 500 rows doesn't flood the audit log.
+   */
+  "integration.issues_resolved",
   "integration.webhook_secret_rotated",
   "integration.secret_revealed",
   "integration.shopify_oauth",

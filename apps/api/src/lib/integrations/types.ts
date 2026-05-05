@@ -32,6 +32,41 @@ export interface NormalizedOrder {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Reasons an upstream order looked like a real order-create event but couldn't
+ * be turned into a `NormalizedOrder` we can safely insert. These are
+ * **non-retryable** — they need merchant intervention (storefront config
+ * change, phone-required checkout, etc.) and must be surfaced as
+ * `needs_attention` inbox rows so the merchant can see and fix them.
+ */
+export type NormalizationSkipReason =
+  | "missing_phone"
+  | "missing_external_id"
+  | "invalid_payload";
+
+/**
+ * "Order-shaped event we can't process" envelope. Distinct from `null` (which
+ * means "topic is not an order create — ignore"). Adapters emit this when the
+ * webhook IS an order event but a required field is missing; downstream
+ * (`replayWebhookInbox`) routes these to the `needs_attention` inbox bucket
+ * and DOES NOT retry — the merchant has to fix the storefront for future
+ * deliveries to succeed.
+ */
+export interface NormalizationSkip {
+  __skip: true;
+  reason: NormalizationSkipReason;
+  /** Optional upstream id for the merchant-facing diagnostic UI. */
+  externalId?: string;
+}
+
+export type NormalizationOutcome = NormalizedOrder | NormalizationSkip;
+
+export function isNormalizationSkip(
+  v: NormalizationOutcome | null | undefined,
+): v is NormalizationSkip {
+  return !!v && typeof v === "object" && (v as NormalizationSkip).__skip === true;
+}
+
 export interface ConnectionTestResult {
   ok: boolean;
   detail?: string;
@@ -59,10 +94,21 @@ export interface IntegrationAdapter {
   testConnection(creds: IntegrationCredentials): Promise<ConnectionTestResult>;
   fetchSampleOrders(creds: IntegrationCredentials, limit?: number): Promise<FetchSampleResult>;
   /**
-   * Convert an upstream webhook payload into a normalized order. Returns null
-   * when the topic is not order-creation and should be ignored.
+   * Convert an upstream webhook payload into a normalized order.
+   *
+   * Returns:
+   *  - `NormalizedOrder` — order is processable; ingest pipeline runs.
+   *  - `NormalizationSkip` (`{ __skip: true, reason }`) — the event IS an
+   *    order create/update we'd normally process, but a required field
+   *    (e.g. customer phone) is missing. Caller routes to `needs_attention`
+   *    and does NOT retry — the storefront must be fixed first.
+   *  - `null` — topic is not an order event (e.g. `customers/data_request`).
+   *    Caller marks the inbox row succeeded with reason "ignored".
    */
-  normalizeWebhookPayload(topic: string, payload: unknown): NormalizedOrder | null;
+  normalizeWebhookPayload(
+    topic: string,
+    payload: unknown,
+  ): NormalizationOutcome | null;
   /** Verify the upstream HMAC signature on a webhook delivery. */
   verifyWebhookSignature(args: {
     rawBody: string | Buffer;

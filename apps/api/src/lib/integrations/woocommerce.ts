@@ -1,12 +1,15 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   IntegrationError,
+  isNormalizationSkip,
   type ConnectionTestResult,
   type FetchSampleResult,
   type IntegrationAdapter,
   type IntegrationCredentials,
+  type NormalizationOutcome,
   type NormalizedOrder,
 } from "./types.js";
+import { safeFetch } from "./safe-fetch.js";
 
 /**
  * WooCommerce REST API connector.
@@ -28,7 +31,10 @@ function authHeader(creds: IntegrationCredentials): string {
 }
 
 async function callWoo<T>(creds: IntegrationCredentials, path: string): Promise<T> {
-  const res = await fetch(`${siteBase(creds)}/wp-json/wc/v3${path}`, {
+  // FIX (SSRF): use safeFetch which DNS-resolves and rejects private/
+  // loopback/link-local addresses. Closes the rebinding gap left by the
+  // static URL validator at connect time. No-op in dev/test.
+  const res = await safeFetch(`${siteBase(creds)}/wp-json/wc/v3${path}`, {
     headers: {
       Authorization: authHeader(creds),
       Accept: "application/json",
@@ -81,15 +87,30 @@ interface WooOrderPayload {
   line_items?: WooLineItem[];
 }
 
-function normalizeWooOrder(payload: WooOrderPayload): NormalizedOrder | null {
-  if (!payload?.id) return null;
+function normalizeWooOrder(
+  payload: WooOrderPayload,
+): NormalizationOutcome | null {
+  // Missing upstream id → cannot dedupe or correlate. Surface as a
+  // needs_attention skip so the merchant sees something happened.
+  if (!payload?.id) {
+    return { __skip: true, reason: "missing_external_id" };
+  }
   const ship = payload.shipping ?? {};
   const billing = payload.billing ?? {};
   const name =
     `${ship.first_name ?? billing.first_name ?? ""} ${ship.last_name ?? billing.last_name ?? ""}`.trim() ||
     "Customer";
   const phone = ship.phone || billing.phone || "";
-  if (!phone) return null;
+  // FIX: previously dropped to `null` (silent ignore). Now emits a skip
+  // envelope that the inbox replay path routes to `needs_attention`,
+  // notifying the merchant rather than disappearing the order.
+  if (!phone) {
+    return {
+      __skip: true,
+      reason: "missing_phone",
+      externalId: String(payload.id),
+    };
+  }
   const address =
     [ship.address_1 || billing.address_1, ship.address_2 || billing.address_2]
       .filter(Boolean)
@@ -152,9 +173,15 @@ export async function registerWooWebhooks(args: {
 
   let existing: Map<string, string> = new Map();
   try {
-    const listRes = await fetcher(`${base}/wp-json/wc/v3/webhooks?per_page=100`, {
-      headers: { Authorization: auth, Accept: "application/json" },
-    });
+    // FIX (SSRF): route the listing through safeFetch so a merchant-
+    // supplied site URL whose hostname resolves into a private range is
+    // rejected before any request fires. The injected `fetcher` is the
+    // transport used INSIDE safeFetch (so test mocks still work).
+    const listRes = await safeFetch(
+      `${base}/wp-json/wc/v3/webhooks?per_page=100`,
+      { headers: { Authorization: auth, Accept: "application/json" } },
+      fetcher,
+    );
     if (listRes.ok) {
       const body = (await listRes.json()) as Array<{ topic?: string; delivery_url?: string; status?: string }>;
       for (const w of body) {
@@ -173,21 +200,27 @@ export async function registerWooWebhooks(args: {
       continue;
     }
     try {
-      const res = await fetcher(`${base}/wp-json/wc/v3/webhooks`, {
-        method: "POST",
-        headers: {
-          Authorization: auth,
-          "Content-Type": "application/json",
-          Accept: "application/json",
+      // FIX (SSRF): see safeFetch comment above. Same guard applied to
+      // the create-webhook call.
+      const res = await safeFetch(
+        `${base}/wp-json/wc/v3/webhooks`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: auth,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            name: `Logistics ${topic}`,
+            topic,
+            delivery_url: args.callbackUrl,
+            secret: args.webhookSecret,
+            status: "active",
+          }),
         },
-        body: JSON.stringify({
-          name: `Logistics ${topic}`,
-          topic,
-          delivery_url: args.callbackUrl,
-          secret: args.webhookSecret,
-          status: "active",
-        }),
-      });
+        fetcher,
+      );
       if (res.ok) {
         registered.push(topic);
       } else {
@@ -220,9 +253,15 @@ export const wooAdapter: IntegrationAdapter = {
         creds,
         `/orders?per_page=${Math.min(50, Math.max(1, limit))}`,
       );
+      // Sample preview: drop null (irrelevant topics) AND skip envelopes
+      // (orders that need merchant attention). The webhook path will
+      // surface the skip envelopes via the inbox; here we just want a
+      // clean preview of orders that would actually ingest cleanly.
       const sample = (orders ?? [])
         .map((o) => normalizeWooOrder(o))
-        .filter((o): o is NormalizedOrder => o !== null);
+        .filter((o): o is NormalizedOrder =>
+          o !== null && !isNormalizationSkip(o),
+        );
       return { ok: true, count: sample.length, sample };
     } catch (err) {
       return { ok: false, count: 0, sample: [], error: (err as Error).message };
@@ -303,15 +342,21 @@ export async function deleteWooWebhooks(args: {
     }
     const url = `${base}/wp-json/wc/v3/webhooks/${id}?force=true${qs}`;
     try {
-      const res = await fetcher(url, {
-        method: "DELETE",
-        headers: useQuerystring
-          ? { Accept: "application/json" }
-          : {
-              Authorization: basicAuth,
-              Accept: "application/json",
-            },
-      });
+      // FIX (SSRF): same guard for DELETE — a malicious site URL must
+      // not be able to talk to internal infra even on disconnect.
+      const res = await safeFetch(
+        url,
+        {
+          method: "DELETE",
+          headers: useQuerystring
+            ? { Accept: "application/json" }
+            : {
+                Authorization: basicAuth,
+                Accept: "application/json",
+              },
+        },
+        fetcher,
+      );
       if (res.ok || res.status === 204) {
         deleted += 1;
       } else if (res.status === 404) {
@@ -321,10 +366,14 @@ export async function deleteWooWebhooks(args: {
         // querystring auth — same behaviour registerWooWebhooks uses on
         // first contact.
         const retryUrl = `${base}/wp-json/wc/v3/webhooks/${id}?force=true&consumer_key=${encodeURIComponent(args.consumerKey)}&consumer_secret=${encodeURIComponent(args.consumerSecret)}`;
-        const retry = await fetcher(retryUrl, {
-          method: "DELETE",
-          headers: { Accept: "application/json" },
-        });
+        const retry = await safeFetch(
+          retryUrl,
+          {
+            method: "DELETE",
+            headers: { Accept: "application/json" },
+          },
+          fetcher,
+        );
         if (retry.ok || retry.status === 204) {
           deleted += 1;
         } else if (retry.status === 404) {

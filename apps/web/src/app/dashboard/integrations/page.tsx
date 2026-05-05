@@ -44,6 +44,7 @@ import { InlineLockedFeature } from "@/components/billing/locked-feature";
 import { TrackerInstallBadge } from "@/components/integrations/tracker-install-badge";
 import { ImportProgressDialog } from "@/components/integrations/import-progress-dialog";
 import { InspectWebhookDialog } from "@/components/integrations/inspect-webhook-dialog";
+import { SystemStatusPanel } from "@/components/integrations/system-status-panel";
 
 type ProviderKey = "shopify" | "woocommerce" | "custom_api" | "csv";
 
@@ -775,15 +776,29 @@ export default function IntegrationsPage() {
         title="Integrations"
         description="Connect Shopify, WooCommerce, your custom commerce stack, or fall back to CSV — orders, fraud scoring, and notifications are wired in automatically."
         actions={
-          <Button variant="outline" onClick={() => list.refetch()}>
-            <RefreshCcw className="mr-2 h-4 w-4" /> Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Direct route to the issues triage view — same data the
+                SystemStatusPanel surfaces, but with per-row replay /
+                resolve actions. Always visible so the merchant has a
+                stable entry point even when the system is healthy. */}
+            <Button asChild variant="ghost">
+              <a href="/dashboard/integrations/issues">View issues</a>
+            </Button>
+            <Button variant="outline" onClick={() => list.refetch()}>
+              <RefreshCcw className="mr-2 h-4 w-4" /> Refresh
+            </Button>
+          </div>
         }
       />
 
       {entitlements.data ? (
         <EntitlementBanner ent={entitlements.data} />
       ) : null}
+
+      {/* System-wide health pulse — pulled out of the per-card view so
+          merchants see "is the whole pipeline healthy?" before drilling
+          into individual connectors. Auto-refreshes every 30s. */}
+      <SystemStatusPanel />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {(Object.keys(PROVIDER_META) as ProviderKey[]).map((key) => {

@@ -26,7 +26,11 @@ import { getPlan } from "../lib/plans.js";
 import { invalidate } from "../lib/cache.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
 import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
-import type { NormalizedOrder } from "../lib/integrations/types.js";
+import {
+  isNormalizationSkip,
+  type NormalizationSkip,
+  type NormalizedOrder,
+} from "../lib/integrations/types.js";
 
 /**
  * Ingest a normalized order from an external channel (Shopify webhook, Woo
@@ -219,7 +223,12 @@ export async function ingestNormalizedOrder(
         // Refund the quota we reserved for this insert. The winner already
         // has its own reservation; if we leave ours in place the merchant
         // gets double-charged for one upstream order on every webhook race.
-        await releaseQuota(opts.merchantId, plan, "ordersCreated", 1).catch(() => {});
+        // FIX: previously called as `releaseQuota(merchantId, plan, "ordersCreated", 1)`
+        // which mis-aligned with the (merchantId, metric, amount) signature in
+        // usage.ts:133 — `plan` landed in the metric slot, "ordersCreated"
+        // in the amount slot, and the $inc silently no-op'd. Aligned with the
+        // signature now; quota refund actually applies.
+        await releaseQuota(opts.merchantId, "ordersCreated", 1).catch(() => {});
         const winner = await Order.findOne({
           merchantId: opts.merchantId,
           "source.externalId": normalized.externalId,
@@ -423,7 +432,12 @@ export async function processWebhookOnce(args: {
   externalId: string;
   rawPayload: unknown;
   payloadBytes: number;
-  normalized: NormalizedOrder | null;
+  /**
+   * Adapter normalization result. `null` = topic not relevant (ignored);
+   * `NormalizationSkip` = order-shaped but unprocessable (routed to
+   * needs_attention without retry); `NormalizedOrder` = ingest.
+   */
+  normalized: NormalizedOrder | NormalizationSkip | null;
   source: IngestSource;
   ip?: string;
   userAgent?: string;
@@ -465,6 +479,41 @@ export async function processWebhookOnce(args: {
       { $set: { status: "succeeded", processedAt: new Date(), lastError: "ignored" } },
     );
     return { ok: true };
+  }
+
+  // Skip envelope — adapter classified the event as order-shaped but
+  // unprocessable. Mirror replayWebhookInbox: park as needs_attention and
+  // do NOT schedule a retry. The synchronous caller (tests, dashboard
+  // import preview) gets ok:false back so they can show the merchant
+  // exactly what's wrong.
+  if (isNormalizationSkip(args.normalized)) {
+    await WebhookInbox.updateOne(
+      { _id: inboxRow._id },
+      {
+        $set: {
+          status: "needs_attention",
+          processedAt: new Date(),
+          skipReason: args.normalized.reason,
+          lastError: `needs_attention: ${args.normalized.reason}`,
+        },
+      },
+    );
+    await fireWebhookNeedsAttentionAlert(
+      {
+        _id: inboxRow._id,
+        merchantId: args.merchantId,
+        integrationId: args.integrationId,
+        provider: args.provider,
+        topic: args.topic,
+        externalId: args.externalId,
+        lastError: `needs_attention: ${args.normalized.reason}`,
+      },
+      args.normalized,
+    );
+    return {
+      ok: false,
+      error: `needs_attention: ${args.normalized.reason}`,
+    };
   }
 
   const result = await ingestNormalizedOrder(args.normalized, {
@@ -551,8 +600,25 @@ export interface ReplayWebhookResult {
   duplicate?: boolean;
   orderId?: string;
   error?: string;
-  status: "succeeded" | "failed" | "dead_lettered" | "skipped";
+  /**
+   * Outcome status for the caller:
+   *  - succeeded        — order created or duplicate, OR topic was ignored
+   *  - failed           — transient failure, will retry per nextRetryAt
+   *  - dead_lettered    — out of retries, merchant alerted
+   *  - needs_attention  — adapter said the event is order-shaped but
+   *                       unprocessable (missing phone etc.) — won't retry
+   *  - skipped          — row was already terminal (succeeded/needs_attention)
+   *                       and nothing was done
+   */
+  status:
+    | "succeeded"
+    | "failed"
+    | "dead_lettered"
+    | "needs_attention"
+    | "skipped";
   attempts: number;
+  /** Populated when status is needs_attention. */
+  skipReason?: string;
 }
 
 /**
@@ -588,6 +654,18 @@ export async function replayWebhookInbox(args: {
       attempts: inbox.attempts ?? 0,
     };
   }
+  // `needs_attention` is a deliberately-terminal state (no auto-retry). The
+  // worker sweep must NOT re-run these — only an explicit manual replay
+  // (after the merchant fixes their storefront) should re-enter ingestion.
+  if (inbox.status === "needs_attention" && !args.manual) {
+    return {
+      ok: false,
+      status: "skipped",
+      attempts: inbox.attempts ?? 0,
+      skipReason: inbox.skipReason ?? undefined,
+      error: inbox.lastError ?? undefined,
+    };
+  }
 
   if (!hasAdapter(inbox.provider as IntegrationProvider)) {
     return {
@@ -610,6 +688,28 @@ export async function replayWebhookInbox(args: {
     inbox.nextRetryAt = undefined;
     await inbox.save();
     return { ok: true, status: "succeeded", attempts: inbox.attempts ?? 0 };
+  }
+
+  // Skip envelope — order-shaped but unprocessable (e.g. missing phone).
+  // Park in `needs_attention`, surface a notification to the merchant, and
+  // DO NOT schedule a retry. The same payload will fail the same way every
+  // time; only a storefront fix + manual replay can recover it.
+  if (isNormalizationSkip(normalized)) {
+    inbox.status = "needs_attention";
+    inbox.processedAt = new Date();
+    inbox.skipReason = normalized.reason;
+    inbox.lastError = `needs_attention: ${normalized.reason}`;
+    inbox.nextRetryAt = undefined;
+    // attempts stays as-is — these aren't retries, they're terminal classifications.
+    await inbox.save();
+    await fireWebhookNeedsAttentionAlert(inbox, normalized);
+    return {
+      ok: false,
+      status: "needs_attention",
+      attempts: inbox.attempts ?? 0,
+      skipReason: normalized.reason,
+      error: `needs_attention: ${normalized.reason}`,
+    };
   }
 
   const result = await ingestNormalizedOrder(normalized, {
@@ -679,6 +779,88 @@ export async function replayWebhookInbox(args: {
     status: "failed",
     attempts,
   };
+}
+
+/**
+ * Fire a merchant-facing notification when an inbox row hits the
+ * `needs_attention` terminal state. The dedupe key is per-row so a single
+ * stuck order doesn't spam — but every distinct order with the same root
+ * cause (e.g. 50 orders missing phone) still produces a notification each,
+ * which is the right behavior because the merchant needs to know the scale
+ * of the problem.
+ *
+ * Severity is `warning` (not `critical` like the dead-letter alert) — these
+ * orders are recoverable as soon as the storefront is fixed and the merchant
+ * clicks Replay; nothing is permanently lost.
+ */
+async function fireWebhookNeedsAttentionAlert(
+  inbox: {
+    _id: Types.ObjectId;
+    merchantId: Types.ObjectId | unknown;
+    integrationId?: Types.ObjectId | unknown;
+    provider: string;
+    topic: string;
+    externalId: string;
+    lastError?: string | null;
+  },
+  skip: NormalizationSkip,
+): Promise<void> {
+  const merchantId = inbox.merchantId as Types.ObjectId;
+  const integrationId = inbox.integrationId as Types.ObjectId | undefined;
+  const dedupeKey = `webhook-needs-attention:${String(inbox._id)}`;
+  // Human-readable message keyed on the skip reason. Kept short so the
+  // notification list renders cleanly; the inbox detail UI carries the
+  // full payload for debugging.
+  const reasonCopy: Record<string, string> = {
+    missing_phone: "Customer phone is missing — fix at checkout to deliver.",
+    missing_external_id: "Order id missing in payload — likely malformed.",
+    invalid_payload: "Payload structure was not recognized.",
+  };
+  const detail = reasonCopy[skip.reason] ?? skip.reason;
+  try {
+    await Notification.updateOne(
+      { merchantId, dedupeKey },
+      {
+        $setOnInsert: {
+          merchantId,
+          kind: "integration.webhook_needs_attention",
+          severity: "warning",
+          title: `${inbox.provider} order needs attention`,
+          body: `${inbox.topic} (id ${inbox.externalId}): ${detail}`,
+          link: `/dashboard/integrations?inboxId=${String(inbox._id)}`,
+          subjectType: "integration" as const,
+          subjectId: integrationId ?? (inbox._id as Types.ObjectId),
+          meta: {
+            provider: inbox.provider,
+            topic: inbox.topic,
+            externalId: inbox.externalId,
+            skipReason: skip.reason,
+          },
+          dedupeKey,
+        },
+      },
+      { upsert: true },
+    );
+  } catch (err) {
+    console.error(
+      "[webhook] needs-attention notification failed",
+      (err as Error).message,
+    );
+  }
+  void writeAudit({
+    merchantId,
+    actorId: merchantId,
+    actorType: "system",
+    action: "integration.webhook_needs_attention",
+    subjectType: "integration",
+    subjectId: integrationId ?? (inbox._id as Types.ObjectId),
+    meta: {
+      provider: inbox.provider,
+      topic: inbox.topic,
+      externalId: inbox.externalId,
+      skipReason: skip.reason,
+    },
+  });
 }
 
 async function fireWebhookDeadLetterAlert(inbox: {

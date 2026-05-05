@@ -6,6 +6,7 @@ import { verifyStripeWebhook } from "../../lib/stripe.js";
 import { invalidateSubscriptionCache } from "../trpc.js";
 import { writeAudit } from "../../lib/audit.js";
 import { getPlan, isPlanTier, PLAN_TIERS, type PlanTier } from "../../lib/plans.js";
+import { enforceDowngradeIfNeeded } from "../../lib/entitlements.js";
 import {
   buildPaymentApprovedEmail,
   buildPaymentFailedEmail,
@@ -255,6 +256,10 @@ export async function activateFromCheckoutSession(args: {
 
   merchant.subscription = merchant.subscription ?? {};
   const sub = merchant.subscription as Record<string, unknown>;
+  // Capture prevTier before overwriting — checkout is rarely a downgrade
+  // (most merchants check out from trial), but if a paid merchant
+  // re-checks-out at a lower tier we must still enforce capacity.
+  const prevTier = sub.tier as PlanTier | undefined;
   sub.tier = plan.tier;
   sub.rate = plan.priceBDT;
   sub.status = "active";
@@ -265,6 +270,15 @@ export async function activateFromCheckoutSession(args: {
   sub.pendingPaymentId = null;
   await merchant.save();
   invalidateSubscriptionCache(String(merchant._id));
+
+  // FIX (downgrade enforcement): defensive call — no-op when prevTier
+  // is undefined (trial→paid) or when plan.tier >= prevTier.
+  void enforceDowngradeIfNeeded({
+    merchantId: merchant._id as Types.ObjectId,
+    prevTier,
+    newTier: plan.tier,
+    source: "stripe_checkout",
+  });
 
   existing.status = "approved";
   existing.providerEventId = args.eventId;
@@ -482,6 +496,9 @@ async function handleSubscriptionUpdated(
   if (cpe) subDoc.currentPeriodEnd = cpe;
 
   // Plan switch via Stripe Portal — re-derive tier from the price id.
+  // Capture the previous tier BEFORE we overwrite it so the downgrade
+  // helper below can compare old vs new and run capacity enforcement.
+  const prevTier = subDoc.tier as PlanTier | undefined;
   const priceId = sub.items?.data?.[0]?.price?.id;
   const tier = planTierFromPriceId(priceId);
   if (tier) {
@@ -502,6 +519,22 @@ async function handleSubscriptionUpdated(
 
   await merchant.save();
   invalidateSubscriptionCache(String(merchant._id));
+
+  // FIX (downgrade enforcement): if the Stripe portal switched the
+  // merchant to a lower tier (e.g. Scale → Starter), the previous code
+  // updated `subDoc.tier` and walked away — leaving any provider-locked
+  // (Woo on Starter) or over-cap integrations active. Now we run the
+  // shared helper which calls `enforceIntegrationCapacity` and fires a
+  // merchant-facing notification listing what was disabled. Pure no-op
+  // for upgrades or same-tier writes.
+  if (tier) {
+    void enforceDowngradeIfNeeded({
+      merchantId: merchant._id as Types.ObjectId,
+      prevTier,
+      newTier: tier,
+      source: "stripe_portal",
+    });
+  }
 
   void writeAudit({
     merchantId: merchant._id,
@@ -568,8 +601,11 @@ async function handleInvoicePaymentSucceeded(
   const periodEnd = fromUnixSeconds(inv.period_end) ?? addDays(new Date(), env.STRIPE_PERIOD_DAYS);
 
   // Idempotent merchant flip — every field is a set, never a delta.
+  // Capture the previous tier BEFORE the assignment so the downgrade
+  // helper below sees the real before-state.
   merchant.subscription = merchant.subscription ?? {};
   const subDoc = merchant.subscription as Record<string, unknown>;
+  const prevTier = subDoc.tier as PlanTier | undefined;
   subDoc.status = "active";
   subDoc.tier = plan.tier;
   subDoc.rate = plan.priceBDT;
@@ -588,6 +624,18 @@ async function handleInvoicePaymentSucceeded(
   }
   await merchant.save();
   invalidateSubscriptionCache(String(merchant._id));
+
+  // FIX (downgrade enforcement): the recurring invoice can land at a
+  // tier lower than the merchant's previous one if they used the Stripe
+  // portal to switch plans mid-cycle and the new period rolled over.
+  // Run the same shared helper as the portal handler — no-op for
+  // upgrades / same-tier renewals.
+  void enforceDowngradeIfNeeded({
+    merchantId: merchant._id as Types.ObjectId,
+    prevTier,
+    newTier: plan.tier,
+    source: "stripe_invoice",
+  });
 
   // Upsert the Payment row keyed on invoiceId. setOnInsert handles the
   // first-time insert; the $set keeps converging to the final values on

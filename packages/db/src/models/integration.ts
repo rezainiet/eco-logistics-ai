@@ -85,6 +85,18 @@ const integrationSchema = new Schema(
     connectedAt: { type: Date },
     disconnectedAt: { type: Date },
     lastSyncAt: { type: Date },
+    /**
+     * Soft pause — when set, the webhook ingestion route short-circuits
+     * with `202 paused` and the polling worker skips this row. The
+     * upstream connection (creds, webhook subscriptions) is left
+     * intact, so resuming is a single click. Distinct from
+     * `disconnected` (which tears the connection down). When `pausedAt`
+     * is set, `pausedReason` carries the merchant-supplied note shown
+     * in the dashboard banner ("Paused for fraud audit", etc.).
+     */
+    pausedAt: { type: Date },
+    pausedReason: { type: String, trim: true, maxlength: 200 },
+    pausedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },
 );

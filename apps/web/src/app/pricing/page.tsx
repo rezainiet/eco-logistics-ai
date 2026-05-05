@@ -4,11 +4,17 @@ import {
   CheckCircle2,
   CreditCard,
   Crown,
+  Lock,
+  Minus,
   ShieldCheck,
   Sparkles,
   Zap,
 } from "lucide-react";
-import { listPlans, type PlanTier } from "@ecom/types";
+import {
+  listPlans,
+  type PlanIntegrationProvider,
+  type PlanTier,
+} from "@ecom/types";
 
 export const metadata = {
   title: "Pricing — Logistics",
@@ -35,7 +41,11 @@ const TRUST_POINTS = [
 const FAQ = [
   {
     q: "Can I switch plans later?",
-    a: "Yes — upgrades take effect immediately, downgrades apply at the next renewal so you never lose access mid-cycle.",
+    a: "Yes — upgrades take effect immediately. Downgrades apply at the next renewal; if your current footprint exceeds the new plan (e.g. you have 3 integrations and downgrade to a 1-integration plan), the dashboard will tell you exactly what gets disabled before you confirm.",
+  },
+  {
+    q: "What counts toward the integration cap?",
+    a: "Any active Shopify, WooCommerce, or Custom-API connector counts. CSV upload is uncapped on every plan and never counts.",
   },
   {
     q: "How does the trial work?",
@@ -53,6 +63,62 @@ const FAQ = [
 
 function formatBDT(n: number): string {
   return `৳${n.toLocaleString()}`;
+}
+
+const PROVIDER_LABEL: Record<PlanIntegrationProvider, string> = {
+  csv: "CSV upload",
+  shopify: "Shopify",
+  woocommerce: "WooCommerce",
+  custom_api: "Custom API",
+};
+
+/**
+ * Build the bullet list rendered on each plan card. Replaces the
+ * source-of-truth `highlights` array with strings derived from
+ * `features` so the wording stays in sync with the actual gates.
+ *
+ * Why not just use `p.highlights`? The static highlights drifted from
+ * the runtime caps — Growth's "Shopify + WooCommerce sync" implied two
+ * connectors but `maxIntegrations` is 1, which generated post-purchase
+ * confusion. Deriving the bullets from `features` makes that class of
+ * mismatch impossible.
+ */
+function buildPlanBullets(p: ReturnType<typeof listPlans>[number]): string[] {
+  const f = p.features;
+  const integrationsLine =
+    f.maxIntegrations === 0
+      ? "CSV upload only — no live connectors"
+      : f.maxIntegrations === 1
+        ? `1 live integration (choose one of: ${f.integrationProviders
+            .filter((x) => x !== "csv")
+            .map((x) => PROVIDER_LABEL[x])
+            .join(" / ")}) + unlimited CSV`
+        : `${f.maxIntegrations} live integrations (mix any of: ${f.integrationProviders
+            .filter((x) => x !== "csv")
+            .map((x) => PROVIDER_LABEL[x])
+            .join(", ")}) + unlimited CSV`;
+
+  const retentionLine =
+    f.behaviorRetentionDays === null
+      ? "Unlimited analytics retention"
+      : `${f.behaviorRetentionDays}-day analytics window`;
+
+  const fraudLine =
+    f.fraudReviewQuota === null
+      ? "Unlimited fraud reviews"
+      : f.fraudReviewQuota === 0
+        ? "Fraud review not included (upgrade to enable)"
+        : `${f.fraudReviewQuota.toLocaleString()} fraud reviews / month`;
+
+  return [
+    `${f.orderQuota.toLocaleString()} orders / month`,
+    integrationsLine,
+    retentionLine,
+    fraudLine,
+    `${f.callMinutes.toLocaleString()} call-center minutes`,
+    `${f.seats} ${f.seats === 1 ? "user" : "users"}`,
+    `${f.courierLimit} courier integration${f.courierLimit === 1 ? "" : "s"}`,
+  ];
 }
 
 export default function PricingPage() {
@@ -145,7 +211,13 @@ export default function PricingPage() {
                   <p className="text-2xs text-fg-faint">≈ ${p.priceUSD} USD</p>
                 </div>
                 <ul className="space-y-1.5 text-xs text-fg-muted">
-                  {p.highlights.map((h) => (
+                  {/* Derived bullets — kept in sync with `features`
+                      caps so we never promise something the runtime
+                      gate denies. Replaces the legacy static
+                      `highlights` array (which drifted from
+                      maxIntegrations on Growth and caused real
+                      support tickets). */}
+                  {buildPlanBullets(p).map((h) => (
                     <li key={h} className="flex items-start gap-2">
                       <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
                       <span>{h}</span>
@@ -166,6 +238,137 @@ export default function PricingPage() {
               </div>
             );
           })}
+        </div>
+      </section>
+
+      {/* Feature-by-feature comparison. Surfaces the EXACT gating
+          rules so merchants know what their tier blocks before they
+          subscribe — not after. Generated from `features` so a plan
+          edit auto-updates the table. */}
+      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-12">
+        <div className="rounded-2xl border border-stroke/10 bg-surface p-6 shadow-card md:p-8">
+          <div className="mb-5 flex items-start gap-4">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-subtle text-brand">
+              <Lock className="h-5 w-5" />
+            </span>
+            <div>
+              <h2 className="text-lg font-semibold text-fg">What's gated by tier</h2>
+              <p className="mt-1 text-sm text-fg-subtle">
+                The exact caps the platform enforces server-side. If a
+                row says "—" your tier doesn't have it; "Unlimited" means
+                no quota, ever.
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-stroke/10 text-left text-fg-muted">
+                  <th className="py-2 pr-3 font-medium">Feature</th>
+                  {plans.map((p) => (
+                    <th
+                      key={p.tier}
+                      className={`py-2 px-3 font-medium ${p.tier === FEATURED ? "text-brand" : "text-fg"}`}
+                    >
+                      {p.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stroke/5">
+                <ComparisonRow
+                  label="Orders / month"
+                  values={plans.map((p) => p.features.orderQuota.toLocaleString())}
+                />
+                <ComparisonRow
+                  label="Active integrations (excl. CSV)"
+                  values={plans.map((p) =>
+                    p.features.maxIntegrations.toString(),
+                  )}
+                />
+                <ComparisonRow
+                  label="Shopify"
+                  values={plans.map((p) =>
+                    p.features.integrationProviders.includes("shopify")
+                      ? "✓"
+                      : "—",
+                  )}
+                />
+                <ComparisonRow
+                  label="WooCommerce"
+                  values={plans.map((p) =>
+                    p.features.integrationProviders.includes("woocommerce")
+                      ? "✓"
+                      : "—",
+                  )}
+                />
+                <ComparisonRow
+                  label="Custom API"
+                  values={plans.map((p) =>
+                    p.features.integrationProviders.includes("custom_api")
+                      ? "✓"
+                      : "—",
+                  )}
+                />
+                <ComparisonRow
+                  label="Fraud review"
+                  values={plans.map((p) =>
+                    p.features.fraudReviewQuota === null
+                      ? "Unlimited"
+                      : p.features.fraudReviewQuota === 0
+                        ? "—"
+                        : `${p.features.fraudReviewQuota.toLocaleString()} / mo`,
+                  )}
+                />
+                <ComparisonRow
+                  label="Behavior analytics"
+                  values={plans.map((p) =>
+                    p.features.behaviorAnalytics ? "✓" : "—",
+                  )}
+                />
+                <ComparisonRow
+                  label="Analytics retention"
+                  values={plans.map((p) =>
+                    p.features.behaviorRetentionDays === null
+                      ? "Unlimited"
+                      : `${p.features.behaviorRetentionDays} days`,
+                  )}
+                />
+                <ComparisonRow
+                  label="Behavior data exports"
+                  values={plans.map((p) =>
+                    p.features.behaviorExports ? "✓" : "—",
+                  )}
+                />
+                <ComparisonRow
+                  label="Couriers"
+                  values={plans.map((p) =>
+                    p.features.courierLimit.toString(),
+                  )}
+                />
+                <ComparisonRow
+                  label="Call-center minutes"
+                  values={plans.map((p) =>
+                    p.features.callMinutes.toLocaleString(),
+                  )}
+                />
+                <ComparisonRow
+                  label="Team seats"
+                  values={plans.map((p) => p.features.seats.toString())}
+                />
+                <ComparisonRow
+                  label="SLA + priority support"
+                  values={plans.map((p) =>
+                    p.features.slaFeatures ? "✓" : "—",
+                  )}
+                />
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-4 text-2xs text-fg-faint">
+            Need higher caps than Enterprise? <Link className="text-brand hover:underline" href="/contact">Talk to us</Link> — we
+            negotiate one-off ceilings for high-volume merchants.
+          </p>
         </div>
       </section>
 
@@ -239,6 +442,8 @@ export default function PricingPage() {
       </section>
 
       <footer className="relative z-10 border-t border-stroke/8">
+        {/* Footer kept minimal — comparison table above is the
+            informational anchor, footer is just navigation. */}
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-6 text-xs text-fg-subtle md:flex-row">
           <p>© {new Date().getFullYear()} Logistics · Built for Bangladesh e-commerce.</p>
           <div className="flex items-center gap-5">
@@ -257,3 +462,31 @@ export default function PricingPage() {
     </main>
   );
 }
+
+/**
+ * One row in the feature-gating comparison table. Renders an em-dash
+ * for "—" cells in muted color so missing features read clearly without
+ * looking like an error.
+ */
+function ComparisonRow({
+  label,
+  values,
+}: {
+  label: string;
+  values: string[];
+}) {
+  return (
+    <tr>
+      <td className="py-2 pr-3 text-fg-muted">{label}</td>
+      {values.map((v, i) => (
+        <td
+          key={i}
+          className={`px-3 py-2 ${v === "—" ? "text-fg-faint" : "text-fg"}`}
+        >
+          {v === "—" ? <Minus className="h-3.5 w-3.5" aria-label="Not included" /> : v}
+        </td>
+      ))}
+    </tr>
+  );
+}
+

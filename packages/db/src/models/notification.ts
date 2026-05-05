@@ -13,6 +13,24 @@ export const NOTIFICATION_KINDS = [
   "fraud.velocity_breach",
   "fraud.blocked_match",
   "integration.webhook_failed",
+  /**
+   * Adapter classified an inbound order-shaped webhook as unprocessable
+   * (missing customer phone, malformed payload). The order is parked in
+   * the `needs_attention` inbox bucket — not retried automatically — and
+   * the merchant must fix the storefront and click Replay. Distinct from
+   * `integration.webhook_failed` (which is dead-lettered after exhausted
+   * retries on a transient error) because there's a clear, merchant-side
+   * remediation path.
+   */
+  "integration.webhook_needs_attention",
+  /**
+   * The merchant's plan was changed to a tier whose caps don't fit their
+   * current footprint, so `enforceIntegrationCapacity` disabled the
+   * excess connectors. Fired with severity=warning and includes the list
+   * of disabled rows in `meta` so the dashboard can surface a "click to
+   * upgrade and reconnect" CTA.
+   */
+  "subscription.plan_downgrade_enforced",
   "recovery.cart_pending",
   "automation.stale_pending",
   "automation.watchdog_exhausted",

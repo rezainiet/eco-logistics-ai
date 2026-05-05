@@ -1,10 +1,12 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   IntegrationError,
+  isNormalizationSkip,
   type ConnectionTestResult,
   type FetchSampleResult,
   type IntegrationAdapter,
   type IntegrationCredentials,
+  type NormalizationOutcome,
   type NormalizedOrder,
 } from "./types.js";
 
@@ -136,13 +138,31 @@ interface ShopifyOrderPayload {
   payment_gateway_names?: string[];
 }
 
-function normalizeShopifyOrder(payload: ShopifyOrderPayload): NormalizedOrder | null {
-  if (!payload?.id) return null;
+function normalizeShopifyOrder(
+  payload: ShopifyOrderPayload,
+): NormalizationOutcome | null {
+  // Missing upstream id == we can't dedupe or correlate. Surface as a
+  // needs_attention skip so the merchant sees something happened, rather
+  // than silently dropping. Use the JSON's nominal id slot when present.
+  if (!payload?.id) {
+    return { __skip: true, reason: "missing_external_id" };
+  }
   const ship = payload.shipping_address ?? {};
   const customer = payload.customer ?? {};
   const name = ship.name?.trim() || `${customer.first_name ?? ""} ${customer.last_name ?? ""}`.trim() || "Customer";
   const phone = ship.phone || customer.phone || "";
-  if (!phone) return null;
+  // FIX: phone-required orders used to silently `return null`, which the
+  // replay path treated as "topic not relevant" and marked succeeded with
+  // no merchant visibility. Now we emit a skip envelope; the caller routes
+  // it to `needs_attention` so the merchant gets a Notification and can
+  // see exactly which orders need a storefront fix.
+  if (!phone) {
+    return {
+      __skip: true,
+      reason: "missing_phone",
+      externalId: String(payload.id),
+    };
+  }
   const address = [ship.address1, ship.address2].filter(Boolean).join(", ") || "Address pending";
   const district = ship.city?.trim() || ship.province?.trim() || "Unknown";
   const items = (payload.line_items ?? []).map((li) => ({
@@ -198,9 +218,15 @@ export const shopifyAdapter: IntegrationAdapter = {
         creds,
         `/orders.json?status=any&limit=${Math.min(50, Math.max(1, limit))}`,
       );
+      // For the merchant-preview "Test connection" UI we drop both
+      // ignored topics (null) and skip envelopes (missing required fields).
+      // The webhook path uses the same normalizer but routes skips to
+      // `needs_attention` instead of dropping them.
       const sample = (data.orders ?? [])
         .map((o) => normalizeShopifyOrder(o))
-        .filter((o): o is NormalizedOrder => o !== null);
+        .filter((o): o is NormalizedOrder =>
+          o !== null && !isNormalizationSkip(o),
+        );
       return { ok: true, count: sample.length, sample };
     } catch (err) {
       return { ok: false, count: 0, sample: [], error: (err as Error).message };
