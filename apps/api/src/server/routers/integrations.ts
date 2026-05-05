@@ -593,6 +593,19 @@ export const integrationsRouter = router({
             accessToken: input.accessToken,
             callbackUrl,
           });
+          // Surface the raw registration result in deploy logs so operators
+          // can debug subscription failures without needing to query the
+          // integration's webhookStatus directly. Without this we lose the
+          // actual Shopify error messages (HMAC, scope, malformed URL etc.)
+          // because they're only persisted in webhookStatus.lastError on
+          // the Integration doc, which isn't surfaced in the dashboard yet.
+          console.log(
+            `[integrations.connect/shopify] integration=${String(
+              integration._id,
+            )} callbackUrl=${callbackUrl} registered=${JSON.stringify(
+              reg.registered,
+            )} errors=${JSON.stringify(reg.errors)}`,
+          );
           await Integration.updateOne(
             { _id: integration._id },
             {
@@ -605,18 +618,22 @@ export const integrationsRouter = router({
               },
             },
           );
-          // Audit-log the topics registered so operators can verify
-          // post-connect what real-time delivery the merchant gets.
+          // Audit-log under the EXISTING enum value used by the manual
+          // retry path. Adding a new enum entry would require a schema
+          // migration; reusing the retried action is fine because the
+          // audit's meta still distinguishes the connect-time call (it
+          // includes the callbackUrl) from the retry mutation.
           void writeAudit({
             merchantId,
             actorId: merchantId,
-            action: "integration.shopify_webhooks_registered",
+            action: "integration.shopify_webhooks_retried",
             subjectType: "integration",
             subjectId: integration._id,
             meta: {
               registered: reg.registered,
               errors: reg.errors,
               callbackUrl,
+              source: "connect",
             },
           });
         } catch (err) {
