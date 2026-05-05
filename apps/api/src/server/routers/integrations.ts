@@ -573,6 +573,67 @@ export const integrationsRouter = router({
         }
       }
 
+      // Auto-register Shopify webhooks when the merchant supplied an
+      // access token via the "Advanced" path (i.e. status flipped to
+      // "connected" without going through OAuth). Mirrors the OAuth
+      // callback's registration block (server/webhooks/integrations.ts).
+      // Without this the integration shows "connected" in the UI but
+      // Shopify never POSTs to /api/integrations/webhook/shopify/{id}
+      // because no subscription was ever created server-side.
+      if (
+        input.provider === "shopify" &&
+        status === "connected" &&
+        "accessToken" in input &&
+        input.accessToken
+      ) {
+        const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/shopify/${String(integration._id)}`;
+        try {
+          const reg = await registerShopifyWebhooks({
+            shopDomain: integration.accountKey,
+            accessToken: input.accessToken,
+            callbackUrl,
+          });
+          await Integration.updateOne(
+            { _id: integration._id },
+            {
+              $set: {
+                "webhookStatus.registered": reg.registered.length > 0,
+                "webhookStatus.lastError":
+                  reg.errors.length > 0
+                    ? reg.errors.join("; ").slice(0, 500)
+                    : null,
+              },
+            },
+          );
+          // Audit-log the topics registered so operators can verify
+          // post-connect what real-time delivery the merchant gets.
+          void writeAudit({
+            merchantId,
+            actorId: merchantId,
+            action: "integration.shopify_webhooks_registered",
+            subjectType: "integration",
+            subjectId: integration._id,
+            meta: {
+              registered: reg.registered,
+              errors: reg.errors,
+              callbackUrl,
+            },
+          });
+        } catch (err) {
+          // Never fail connect on registration — merchant can hit
+          // retryShopifyWebhooks afterwards, or operate without
+          // real-time sync if Shopify is down.
+          await Integration.updateOne(
+            { _id: integration._id },
+            {
+              $set: {
+                "webhookStatus.lastError": (err as Error).message.slice(0, 500),
+              },
+            },
+          );
+        }
+      }
+
       void writeAudit({
         merchantId,
         actorId: merchantId,
