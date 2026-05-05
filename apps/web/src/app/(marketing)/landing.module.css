@@ -1,0 +1,1487 @@
+/*
+ * Cordon landing — scoped styles.
+ *
+ * Strategy: a single module-scoped wrapper class (.cordonPage) gives this
+ * sheet its scoping boundary. Every nested rule uses :global() so the
+ * existing class names in the JSX work unchanged AND the JS animation hooks
+ * (`.cordon-counter`, `#cordon-nav`) can find their targets via plain DOM
+ * selectors. Outside the .cordonPage subtree, none of these rules apply —
+ * dashboards / auth / admin are untouched.
+ */
+
+.cordonPage {
+  --c-bg: #0A0A0B;
+  --c-surface: #111113;
+  --c-surface-2: #18181B;
+  --c-surface-3: #1F1F23;
+  --c-border: #27272A;
+  --c-border-strong: #3F3F46;
+  --c-text: #FAFAFA;
+  --c-text-2: #A1A1AA;
+  --c-text-3: #71717A;
+  --c-accent: #C6F84F;
+  --c-accent-2: #8AE619;
+  --c-accent-glow: rgba(198, 248, 79, 0.18);
+  --c-radius: 14px;
+  --c-radius-lg: 22px;
+
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.005em;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.cordonPage * { box-sizing: border-box; }
+.cordonPage ::selection { background: var(--c-accent); color: #0A0A0B; }
+
+.cordonPage :global(.serif) {
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.cordonPage :global(.mono) { font-family: var(--font-mono), monospace; }
+
+.cordonPage :global(.container) { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+.cordonPage :global(section) { padding: 120px 0; position: relative; }
+@media (max-width: 768px) {
+  .cordonPage :global(section) { padding: 72px 0; }
+}
+
+/* Nav — backdrop-filter is the single most expensive paint property
+   on a fixed element, repainting every scroll frame. We keep it on
+   desktop only; mobile falls back to a near-opaque solid background
+   that gives the same visual impression at 60fps. */
+.cordonPage :global(.nav) {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: rgba(10, 10, 11, 0.92);
+  border-bottom: 1px solid transparent;
+  z-index: 100;
+  transition: border-color .3s, background .3s;
+}
+.cordonPage :global(.nav.scrolled) { border-color: var(--c-border); }
+
+@media (min-width: 900px) {
+  .cordonPage :global(.nav) {
+    background: rgba(10, 10, 11, 0.7);
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
+  }
+  .cordonPage :global(.nav.scrolled) { background: rgba(10, 10, 11, 0.85); }
+}
+.cordonPage :global(.nav-inner) { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.cordonPage :global(.logo) {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; letter-spacing: -0.02em; font-size: 17px;
+  color: var(--c-text); text-decoration: none;
+}
+.cordonPage :global(.logo-dot) {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 14px var(--c-accent);
+}
+.cordonPage :global(.nav-links) { display: flex; gap: 32px; align-items: center; }
+.cordonPage :global(.nav-links a) { color: var(--c-text-2); text-decoration: none; font-size: 14px; transition: color .2s; }
+.cordonPage :global(.nav-links a:hover) { color: var(--c-text); }
+.cordonPage :global(.nav-cta) { display: flex; gap: 12px; align-items: center; }
+
+/* Buttons */
+.cordonPage :global(.btn) {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none; cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform .15s, background .2s, border-color .2s, color .2s, box-shadow .25s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.cordonPage :global(.btn-primary) { background: var(--c-accent); color: #0A0A0B; }
+.cordonPage :global(.btn-primary:hover) {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 32px -10px var(--c-accent-glow), 0 0 0 1px var(--c-accent-2);
+  background: var(--c-accent-2);
+}
+.cordonPage :global(.btn-secondary) { background: transparent; color: var(--c-text); border-color: var(--c-border); }
+.cordonPage :global(.btn-secondary:hover) { border-color: var(--c-border-strong); background: var(--c-surface); }
+.cordonPage :global(.btn-ghost) { color: var(--c-text-2); padding: 8px 12px; }
+.cordonPage :global(.btn-ghost:hover) { color: var(--c-text); }
+.cordonPage :global(.btn-lg) { padding: 16px 28px; font-size: 15px; }
+.cordonPage :global(.btn .arrow) { transition: transform .25s; display: inline-block; }
+.cordonPage :global(.btn:hover .arrow) { transform: translateX(4px); }
+
+/* Hero */
+.cordonPage :global(.hero) { padding-top: 180px; padding-bottom: 80px; position: relative; overflow: hidden; }
+.cordonPage :global(.hero-bg) {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, var(--c-accent-glow), transparent 60%),
+    linear-gradient(to bottom, transparent 70%, var(--c-bg));
+  pointer-events: none;
+}
+.cordonPage :global(.hero-grid) {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 80%);
+  pointer-events: none;
+}
+.cordonPage :global(.hero-content) { position: relative; max-width: 920px; }
+.cordonPage :global(.eyebrow) {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  font-size: 12px; color: var(--c-text-2);
+  margin-bottom: 28px;
+  font-family: var(--font-mono), monospace;
+  letter-spacing: 0.02em;
+}
+.cordonPage :global(.eyebrow .pulse) {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 8px var(--c-accent);
+  animation: cordonPulse 1.8s ease-in-out infinite;
+}
+@keyframes cordonPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+.cordonPage :global(h1.hero-title) {
+  font-size: clamp(40px, 6vw, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+.cordonPage :global(h1.hero-title .accent) { color: var(--c-accent); }
+.cordonPage :global(.hero-sub) {
+  font-size: 19px; color: var(--c-text-2);
+  max-width: 660px;
+  line-height: 1.55;
+  margin-bottom: 36px;
+}
+.cordonPage :global(.hero-ctas) { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 36px; }
+.cordonPage :global(.hero-meta) { display: flex; gap: 24px; flex-wrap: wrap; color: var(--c-text-3); font-size: 13px; }
+.cordonPage :global(.hero-meta span) { display: flex; align-items: center; gap: 8px; }
+.cordonPage :global(.hero-meta .check) { color: var(--c-accent); }
+
+/* Stat strip */
+.cordonPage :global(.stat-strip) {
+  margin-top: 80px;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  background: var(--c-surface);
+  overflow: hidden;
+  position: relative;
+}
+.cordonPage :global(.stat) { padding: 28px 32px; border-right: 1px solid var(--c-border); }
+.cordonPage :global(.stat:last-child) { border-right: none; }
+.cordonPage :global(.stat-num) {
+  font-family: var(--font-mono), monospace;
+  font-size: 32px; font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--c-text); margin-bottom: 4px;
+}
+.cordonPage :global(.stat-num .unit), .cordonPage :global(.stat-num .prefix) { color: var(--c-accent); font-size: 22px; }
+.cordonPage :global(.stat-num .prefix) { margin-right: 2px; }
+.cordonPage :global(.stat-label) { color: var(--c-text-3); font-size: 13px; }
+@media (max-width: 768px) {
+  .cordonPage :global(.stat-strip) { grid-template-columns: repeat(2, 1fr); }
+  .cordonPage :global(.stat:nth-child(2)) { border-right: none; }
+  .cordonPage :global(.stat:nth-child(1)),
+  .cordonPage :global(.stat:nth-child(2)) { border-bottom: 1px solid var(--c-border); }
+}
+
+/* Section header */
+.cordonPage :global(.section-eyebrow) {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--c-accent);
+  margin-bottom: 22px;
+}
+.cordonPage :global(h2.section-title) {
+  font-size: clamp(34px, 4.5vw, 54px);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  margin-bottom: 20px;
+  max-width: 780px;
+}
+.cordonPage :global(h2.section-title .serif) { color: var(--c-text-2); }
+.cordonPage :global(.section-sub) {
+  font-size: 18px; color: var(--c-text-2);
+  max-width: 660px; line-height: 1.55;
+  margin-bottom: 56px;
+}
+
+/* Problem */
+.cordonPage :global(.problem-grid) { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+@media (max-width: 768px) { .cordonPage :global(.problem-grid) { grid-template-columns: 1fr; } }
+.cordonPage :global(.problem-card) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 32px;
+  transition: border-color .3s, transform .3s;
+  position: relative; overflow: hidden;
+}
+.cordonPage :global(.problem-card:hover) { border-color: var(--c-border-strong); transform: translateY(-2px); }
+.cordonPage :global(.problem-card::before) {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-accent), transparent);
+  opacity: 0; transition: opacity .3s;
+}
+.cordonPage :global(.problem-card:hover::before) { opacity: 0.7; }
+.cordonPage :global(.problem-num) {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px; color: var(--c-text-3);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.cordonPage :global(.problem-card h3) { font-size: 22px; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 12px; }
+.cordonPage :global(.problem-card p) { color: var(--c-text-2); font-size: 15px; }
+.cordonPage :global(.problem-bottom) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 32px;
+  display: flex; align-items: center; gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.cordonPage :global(.problem-bottom .big) {
+  font-family: var(--font-mono), monospace;
+  font-size: 38px; letter-spacing: -0.03em;
+  color: var(--c-accent); font-weight: 600;
+}
+.cordonPage :global(.problem-bottom .label) { color: var(--c-text-2); font-size: 15px; max-width: 540px; }
+.cordonPage :global(.problem-bottom .label strong) { color: var(--c-text); }
+
+/* Solution */
+.cordonPage :global(.solution-grid) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 900px) { .cordonPage :global(.solution-grid) { grid-template-columns: 1fr; } }
+.cordonPage :global(.solution-card) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 32px;
+  transition: border-color .3s, transform .3s;
+}
+.cordonPage :global(.solution-card:hover) { border-color: var(--c-accent); transform: translateY(-2px); }
+.cordonPage :global(.solution-step) {
+  font-family: var(--font-mono), monospace;
+  color: var(--c-accent);
+  font-size: 11px; letter-spacing: 0.12em;
+  text-transform: uppercase; margin-bottom: 16px;
+}
+.cordonPage :global(.solution-card h3) { font-size: 24px; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 12px; }
+.cordonPage :global(.solution-card p) { color: var(--c-text-2); font-size: 15px; }
+
+/* Pipeline */
+.cordonPage :global(.pipeline) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 36px;
+  position: relative; overflow: hidden;
+}
+.cordonPage :global(.pipeline::after) {
+  content: '';
+  position: absolute; top: 50%; left: 36px; right: 36px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-accent), transparent);
+  opacity: 0.25;
+  transform: translateY(-50%);
+  z-index: 0;
+}
+@media (max-width: 1000px) { .cordonPage :global(.pipeline::after) { display: none; } }
+.cordonPage :global(.pipeline-steps) {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 8px; position: relative; z-index: 1;
+}
+@media (max-width: 1000px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 500px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: 1fr; } }
+.cordonPage :global(.step) {
+  padding: 24px 16px;
+  border-radius: 12px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  transition: all .3s;
+}
+.cordonPage :global(.step:hover) { border-color: var(--c-accent); background: var(--c-surface-3); transform: translateY(-2px); }
+.cordonPage :global(.step-num) { font-family: var(--font-mono), monospace; font-size: 11px; color: var(--c-accent); margin-bottom: 12px; letter-spacing: 0.05em; }
+.cordonPage :global(.step-name) { font-weight: 600; font-size: 14px; margin-bottom: 8px; letter-spacing: -0.01em; }
+.cordonPage :global(.step-desc) { color: var(--c-text-3); font-size: 12.5px; line-height: 1.5; }
+
+/* Network */
+.cordonPage :global(.network-card) {
+  background: linear-gradient(180deg, var(--c-surface), var(--c-surface-2));
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 56px;
+  position: relative; overflow: hidden;
+}
+@media (max-width: 700px) { .cordonPage :global(.network-card) { padding: 32px; } }
+.cordonPage :global(.network-card::before) {
+  content: '';
+  position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
+  width: 50%; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-accent), transparent);
+}
+.cordonPage :global(.network-grid) { display: grid; grid-template-columns: 1.2fr 1fr; gap: 64px; align-items: center; }
+@media (max-width: 900px) { .cordonPage :global(.network-grid) { grid-template-columns: 1fr; gap: 40px; } }
+.cordonPage :global(.network-grid h3) { font-size: 32px; letter-spacing: -0.03em; font-weight: 600; margin-bottom: 18px; line-height: 1.15; }
+.cordonPage :global(.network-grid p) { color: var(--c-text-2); font-size: 16px; margin-bottom: 14px; }
+.cordonPage :global(.network-features) { display: grid; gap: 12px; margin-top: 28px; }
+.cordonPage :global(.network-feature) { display: flex; gap: 12px; align-items: flex-start; font-size: 14px; color: var(--c-text-2); }
+.cordonPage :global(.network-feature::before) {
+  content: ''; flex: 0 0 6px; height: 6px; margin-top: 9px;
+  border-radius: 50%; background: var(--c-accent);
+  box-shadow: 0 0 8px var(--c-accent-glow);
+}
+.cordonPage :global(.viz) { position: relative; aspect-ratio: 1; max-width: 380px; margin: 0 auto; }
+.cordonPage :global(.viz-svg) { width: 100%; height: 100%; overflow: visible; }
+.cordonPage :global(.viz-node) { fill: var(--c-surface-3); stroke: var(--c-border); stroke-width: 1; }
+.cordonPage :global(.viz-node.center) { fill: var(--c-accent); stroke: var(--c-accent); }
+.cordonPage :global(.viz-line) { stroke: var(--c-border-strong); stroke-width: 1; fill: none; }
+.cordonPage :global(.viz-pulse) {
+  stroke: var(--c-accent); stroke-width: 1.5; fill: none;
+  stroke-dasharray: 6 8;
+  animation: cordonDash 4s linear infinite;
+  opacity: 0.7;
+}
+@keyframes cordonDash { to { stroke-dashoffset: -100; } }
+.cordonPage :global(.viz-label) { font-family: var(--font-mono), monospace; font-size: 9px; fill: var(--c-text-3); }
+
+/* Modes */
+.cordonPage :global(.modes-grid) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 900px) { .cordonPage :global(.modes-grid) { grid-template-columns: 1fr; } }
+.cordonPage :global(.mode) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 32px;
+  position: relative; transition: all .3s;
+}
+.cordonPage :global(.mode.featured) { border-color: var(--c-accent); }
+.cordonPage :global(.mode.featured::before) {
+  content: 'Most popular';
+  position: absolute; top: -10px; left: 32px;
+  font-family: var(--font-mono), monospace; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  background: var(--c-accent); color: #0A0A0B;
+  padding: 4px 8px; border-radius: 4px; font-weight: 600;
+}
+.cordonPage :global(.mode:hover) { border-color: var(--c-border-strong); transform: translateY(-2px); }
+.cordonPage :global(.mode.featured:hover) { border-color: var(--c-accent); }
+.cordonPage :global(.mode-name) {
+  font-family: var(--font-mono), monospace;
+  color: var(--c-accent); font-size: 11px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.cordonPage :global(.mode h3) { font-size: 22px; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 14px; }
+.cordonPage :global(.mode p) { color: var(--c-text-2); font-size: 14px; margin-bottom: 18px; line-height: 1.55; }
+.cordonPage :global(.mode-list) { list-style: none; padding: 0; margin: 0; }
+.cordonPage :global(.mode-list li) {
+  padding: 10px 0;
+  border-top: 1px solid var(--c-border);
+  font-size: 13px; color: var(--c-text-2);
+  display: flex; gap: 8px; align-items: flex-start;
+  line-height: 1.5;
+}
+.cordonPage :global(.mode-list li::before) { content: '→'; color: var(--c-accent); font-size: 11px; margin-top: 3px; }
+
+/* Integrations */
+.cordonPage :global(.integrations-grid) { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 700px) { .cordonPage :global(.integrations-grid) { grid-template-columns: repeat(2, 1fr); } }
+.cordonPage :global(.integration) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 28px 20px;
+  text-align: center;
+  transition: all .3s;
+}
+.cordonPage :global(.integration:hover) { border-color: var(--c-accent); transform: translateY(-2px); background: var(--c-surface-2); }
+.cordonPage :global(.integration .name) { font-weight: 600; letter-spacing: -0.01em; font-size: 16px; margin-bottom: 4px; }
+.cordonPage :global(.integration .role) {
+  font-size: 11px; color: var(--c-text-3);
+  font-family: var(--font-mono), monospace; letter-spacing: 0.05em;
+}
+
+/* Trust */
+.cordonPage :global(.trust-grid) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 900px) { .cordonPage :global(.trust-grid) { grid-template-columns: 1fr; } }
+.cordonPage :global(.trust-item) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 24px;
+  transition: border-color .25s;
+}
+.cordonPage :global(.trust-item:hover) { border-color: var(--c-border-strong); }
+.cordonPage :global(.trust-icon) {
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--c-accent); margin-bottom: 16px;
+  font-family: var(--font-mono), monospace; font-size: 13px; font-weight: 600;
+}
+.cordonPage :global(.trust-item h4) { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+.cordonPage :global(.trust-item p) { color: var(--c-text-2); font-size: 13.5px; line-height: 1.55; }
+
+/* Pricing */
+.cordonPage :global(.pricing-grid) { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+@media (max-width: 1000px) { .cordonPage :global(.pricing-grid) { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .cordonPage :global(.pricing-grid) { grid-template-columns: 1fr; } }
+.cordonPage :global(.price-card) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 28px;
+  display: flex; flex-direction: column;
+  transition: border-color .25s, transform .25s;
+}
+.cordonPage :global(.price-card:hover) { border-color: var(--c-border-strong); transform: translateY(-2px); }
+.cordonPage :global(.price-card.featured) {
+  border-color: var(--c-accent);
+  background: linear-gradient(180deg, rgba(198,248,79,0.04), var(--c-surface));
+}
+.cordonPage :global(.price-card.featured:hover) { border-color: var(--c-accent); }
+.cordonPage :global(.tier) { font-family: var(--font-mono), monospace; font-size: 11px; color: var(--c-accent); margin-bottom: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.cordonPage :global(.price) { font-size: 38px; font-weight: 600; letter-spacing: -0.03em; margin-bottom: 4px; }
+.cordonPage :global(.price .unit) { font-size: 14px; color: var(--c-text-3); font-weight: 400; margin-left: 2px; }
+.cordonPage :global(.price-desc) { color: var(--c-text-2); font-size: 13.5px; margin-bottom: 24px; min-height: 60px; line-height: 1.5; }
+.cordonPage :global(.price-features) { list-style: none; padding: 0; margin-bottom: 24px; flex: 1; }
+.cordonPage :global(.price-features li) { font-size: 13.5px; color: var(--c-text-2); padding: 6px 0; display: flex; gap: 10px; }
+.cordonPage :global(.price-features li::before) { content: '✓'; color: var(--c-accent); font-size: 12px; flex: 0 0 auto; }
+
+/* Final CTA */
+.cordonPage :global(.final-cta) {
+  background: linear-gradient(180deg, var(--c-surface), var(--c-surface-2));
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 96px 48px;
+  text-align: center;
+  position: relative; overflow: hidden;
+}
+.cordonPage :global(.final-cta::before) {
+  content: '';
+  position: absolute; top: -50%; left: 50%; transform: translateX(-50%);
+  width: 80%; aspect-ratio: 1;
+  background: radial-gradient(circle, var(--c-accent-glow), transparent 60%);
+  pointer-events: none;
+}
+.cordonPage :global(.final-cta h2) {
+  position: relative;
+  font-size: clamp(36px, 5vw, 60px);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+.cordonPage :global(.final-cta p) {
+  position: relative;
+  color: var(--c-text-2); font-size: 17px;
+  max-width: 580px; margin: 0 auto 36px;
+}
+.cordonPage :global(.final-cta .ctas) { position: relative; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+/* Footer */
+.cordonPage :global(footer.cordon-footer) {
+  border-top: 1px solid var(--c-border);
+  padding: 56px 0 40px;
+  color: var(--c-text-3); font-size: 13px;
+}
+.cordonPage :global(.footer-inner) { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.cordonPage :global(.footer-inner .logo) { font-size: 15px; }
+.cordonPage :global(.footer-links) { display: flex; gap: 24px; flex-wrap: wrap; }
+.cordonPage :global(.footer-links a) { color: var(--c-text-3); text-decoration: none; transition: color .2s; }
+.cordonPage :global(.footer-links a:hover) { color: var(--c-text); }
+
+@media (max-width: 800px) {
+  .cordonPage :global(.nav-links) { display: none; }
+  .cordonPage :global(.nav-cta .btn-ghost) { display: none; }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Motion safety — reduced-motion users get no looping animations,
+   and decorative pulses pause when their container scrolls off-screen
+   (the IntersectionObserver in the page script toggles `.paused` on
+   .viz / .eyebrow / .urgency).
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.paused .viz-pulse),
+.cordonPage :global(.paused .pulse),
+.cordonPage :global(.paused .urgency-dot) {
+  animation-play-state: paused;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Hero microquote — single operator quote below the social-proof band.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.hero-microquote) {
+  margin: 28px 0 0;
+  padding: 18px 22px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-left: 2px solid var(--c-accent);
+  border-radius: 12px;
+  max-width: 620px;
+}
+.cordonPage :global(.hero-microquote blockquote) {
+  margin: 0;
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--c-text);
+}
+.cordonPage :global(.hero-microquote figcaption) {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+.cordonPage :global(.hero-microquote-name) {
+  color: var(--c-text-2);
+  font-weight: 600;
+  font-family: var(--font-inter), sans-serif;
+  font-style: normal;
+}
+.cordonPage :global(.hero-microquote-role) {
+  font-family: var(--font-inter), sans-serif;
+  font-style: normal;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   ROI multiple badge — shows N× return inside the calc panel.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.roi-multiple) {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--c-border);
+  display: flex; align-items: baseline; gap: 14px;
+}
+.cordonPage :global(.roi-multiple-num) {
+  font-family: var(--font-mono), monospace;
+  font-size: 38px; font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--c-accent);
+  line-height: 1;
+}
+.cordonPage :global(.roi-multiple-label) {
+  font-size: 14px; color: var(--c-text-2);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   ROI email capture — lead-gen form below the CTA.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.roi-email) {
+  margin-top: 4px;
+  padding: 20px;
+  background: var(--c-surface-2);
+  border: 1px dashed var(--c-border);
+  border-radius: 12px;
+  display: grid; gap: 12px;
+}
+.cordonPage :global(.roi-email-head) {
+  font-size: 13.5px; color: var(--c-text-2);
+  line-height: 1.5;
+}
+.cordonPage :global(.roi-email-head strong) { color: var(--c-text); font-weight: 600; }
+.cordonPage :global(.roi-email-row) {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.cordonPage :global(.roi-email-row input[type="email"]) {
+  flex: 1 1 240px;
+  min-width: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--c-text);
+  font-family: var(--font-inter), sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .2s;
+}
+.cordonPage :global(.roi-email-row input[type="email"]:focus) {
+  border-color: var(--c-accent);
+}
+.cordonPage :global(.roi-email-err) {
+  font-size: 12px; color: var(--c-danger);
+}
+.cordonPage :global(.roi-email-sent) {
+  display: flex; align-items: flex-start; gap: 12px;
+  background: rgba(198, 248, 79, 0.06);
+  border-color: rgba(198, 248, 79, 0.3);
+}
+.cordonPage :global(.roi-email-sent strong) { color: var(--c-text); font-weight: 600; }
+.cordonPage :global(.roi-email-sent span) { color: var(--c-text-2); }
+.cordonPage :global(.roi-email-check) {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  color: #0A0A0B;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700;
+  margin-top: 1px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   FAQ — native <details> styled to match Cordon's surface system.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.faq-list) {
+  display: grid; gap: 12px;
+  max-width: 880px;
+}
+.cordonPage :global(.faq-item) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 0 24px;
+  transition: border-color .25s;
+}
+.cordonPage :global(.faq-item:hover) { border-color: var(--c-border-strong); }
+.cordonPage :global(.faq-item[open]) { border-color: var(--c-border-strong); }
+.cordonPage :global(.faq-item summary) {
+  list-style: none;
+  cursor: pointer;
+  padding: 22px 0;
+  font-size: 16px; font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--c-text);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+}
+.cordonPage :global(.faq-item summary::-webkit-details-marker) { display: none; }
+.cordonPage :global(.faq-item summary::after) {
+  content: '+';
+  flex-shrink: 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 22px; font-weight: 400;
+  color: var(--c-accent);
+  transition: transform .25s;
+  line-height: 1;
+}
+.cordonPage :global(.faq-item[open] summary::after) {
+  transform: rotate(45deg);
+}
+.cordonPage :global(.faq-item p) {
+  padding: 0 0 24px;
+  margin: 0;
+  font-size: 15px;
+  color: var(--c-text-2);
+  line-height: 1.6;
+  max-width: 70ch;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Mobile sticky CTA — fixed bottom bar, hidden on desktop.
+   Adds bottom padding to body so footer isn't covered.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.mobile-cta) {
+  display: none;
+}
+@media (max-width: 800px) {
+  .cordonPage :global(.mobile-cta) {
+    display: flex;
+    gap: 8px;
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(10, 10, 11, 0.96);
+    border-top: 1px solid var(--c-border);
+    z-index: 90;
+  }
+  .cordonPage :global(.mobile-cta-secondary) {
+    flex: 0 0 auto;
+    padding: 12px 16px;
+  }
+  .cordonPage :global(.mobile-cta-primary) {
+    flex: 1 1 auto;
+    padding: 12px 18px;
+    justify-content: center;
+  }
+  /* Pad the page so the final CTA + footer aren't covered. */
+  .cordonPage :global(footer.cordon-footer) {
+    padding-bottom: calc(40px + 64px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Hard trust signal — small lime dot prefix on the proof band pill,
+   matches the existing eyebrow pulse aesthetic.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.proof-band-dot) {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 8px var(--c-accent);
+  margin-right: 8px;
+  vertical-align: middle;
+  animation: cordonPulse 1.8s ease-in-out infinite;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Without/With comparison table — visual contrast through tone, not
+   icons. Bad column gets a danger tint, good column gets the accent.
+   Mobile: collapses to stacked rows.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.compare-table) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+.cordonPage :global(.compare-head),
+.cordonPage :global(.compare-row) {
+  display: grid;
+  grid-template-columns: 200px 1fr 1fr;
+  border-top: 1px solid var(--c-border);
+}
+.cordonPage :global(.compare-head) {
+  border-top: none;
+  background: var(--c-surface-2);
+}
+.cordonPage :global(.compare-head > div) {
+  padding: 18px 24px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--c-text-3);
+}
+.cordonPage :global(.compare-tag) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+.cordonPage :global(.compare-tag-bad) {
+  background: rgba(255, 84, 112, 0.1);
+  color: var(--c-danger);
+  border: 1px solid rgba(255, 84, 112, 0.25);
+}
+.cordonPage :global(.compare-tag-good) {
+  background: rgba(198, 248, 79, 0.1);
+  color: var(--c-accent);
+  border: 1px solid rgba(198, 248, 79, 0.3);
+}
+.cordonPage :global(.compare-row > div) {
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cordonPage :global(.compare-axis) {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+  align-self: center;
+  border-right: 1px solid var(--c-border);
+}
+.cordonPage :global(.compare-bad) {
+  background: rgba(255, 84, 112, 0.025);
+  border-right: 1px solid var(--c-border);
+}
+.cordonPage :global(.compare-good) {
+  background: rgba(198, 248, 79, 0.025);
+}
+.cordonPage :global(.compare-num) {
+  font-family: var(--font-mono), monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.cordonPage :global(.compare-num-bad) { color: var(--c-danger); }
+.cordonPage :global(.compare-num-good) { color: var(--c-accent); }
+.cordonPage :global(.compare-note) {
+  font-size: 13px;
+  color: var(--c-text-3);
+  line-height: 1.5;
+}
+
+@media (max-width: 800px) {
+  .cordonPage :global(.compare-head) { display: none; }
+  .cordonPage :global(.compare-row) {
+    grid-template-columns: 1fr;
+  }
+  .cordonPage :global(.compare-axis) {
+    border-right: none;
+    border-bottom: 1px solid var(--c-border);
+    padding-bottom: 8px;
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--c-text-3);
+  }
+  .cordonPage :global(.compare-bad),
+  .cordonPage :global(.compare-good) {
+    border-right: none;
+  }
+  .cordonPage :global(.compare-bad) {
+    border-bottom: 1px solid var(--c-border);
+  }
+  .cordonPage :global(.compare-bad::before) {
+    content: 'Without Cordon';
+    font-family: var(--font-mono), monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-danger);
+    margin-bottom: 4px;
+  }
+  .cordonPage :global(.compare-good::before) {
+    content: 'With Cordon';
+    font-family: var(--font-mono), monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-accent);
+    margin-bottom: 4px;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Floating loss indicator — sticky chip at bottom-right.
+   Hidden below 900px (the mobile sticky CTA covers that ground there).
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.floating-loss) {
+  display: none;
+}
+@media (min-width: 900px) {
+  .cordonPage :global(.floating-loss) {
+    display: block;
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 280px;
+    padding: 18px 20px;
+    background: rgba(17, 17, 19, 0.96);
+    border: 1px solid rgba(198, 248, 79, 0.35);
+    border-radius: 14px;
+    box-shadow:
+      0 16px 40px -12px rgba(0, 0, 0, 0.6),
+      0 0 0 1px rgba(198, 248, 79, 0.08),
+      0 0 32px -8px var(--c-accent-glow);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    z-index: 80;
+    animation: cordonSlideUp .4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+}
+@keyframes cordonSlideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.cordonPage :global(.floating-loss-close) {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--c-text-3);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background .15s, color .15s;
+}
+.cordonPage :global(.floating-loss-close:hover) {
+  background: var(--c-surface-3);
+  color: var(--c-text);
+}
+.cordonPage :global(.floating-loss-label) {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  margin-bottom: 6px;
+}
+.cordonPage :global(.floating-loss-value) {
+  font-family: var(--font-mono), monospace;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--c-danger);
+  line-height: 1;
+  margin-bottom: 6px;
+}
+.cordonPage :global(.floating-loss-sub) {
+  font-size: 12px;
+  color: var(--c-text-2);
+  line-height: 1.45;
+  margin-bottom: 14px;
+}
+.cordonPage :global(.floating-loss-sub strong) {
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.cordonPage :global(.floating-loss-cta) {
+  width: 100%;
+  padding: 9px 14px !important;
+  font-size: 13px !important;
+  justify-content: center;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Trust strip — categories + logo wall above the metric row in Proof.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.trust-strip) {
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.cordonPage :global(.trust-strip-label) {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+  flex-shrink: 0;
+}
+.cordonPage :global(.trust-categories) {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cordonPage :global(.trust-cat) {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  color: var(--c-text-2);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  white-space: nowrap;
+  transition: border-color .25s, color .25s;
+}
+.cordonPage :global(.trust-cat:hover) {
+  border-color: var(--c-border-strong);
+  color: var(--c-text);
+}
+
+.cordonPage :global(.trust-logos) {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 40px;
+}
+@media (max-width: 900px) {
+  .cordonPage :global(.trust-logos) { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 500px) {
+  .cordonPage :global(.trust-logos) { grid-template-columns: repeat(2, 1fr); }
+}
+.cordonPage :global(.trust-logo) {
+  font-family: var(--font-mono), monospace;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--c-text-3);
+  text-align: center;
+  padding: 22px 12px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  transition: color .25s, border-color .25s, transform .25s;
+}
+.cordonPage :global(.trust-logo:hover) {
+  color: var(--c-text);
+  border-color: var(--c-border-strong);
+  transform: translateY(-2px);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Recommended pricing card — toggled by PricingHighlighter. Coexists
+   with .featured (Growth's default highlight): when both are present,
+   .recommended wins because it's stronger.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.price-card.recommended) {
+  border-color: var(--c-accent);
+  box-shadow:
+    0 0 0 1px var(--c-accent),
+    0 24px 48px -16px var(--c-accent-glow);
+  background: linear-gradient(180deg, rgba(198,248,79,0.06), var(--c-surface));
+  position: relative;
+}
+.cordonPage :global(.price-card.recommended::after) {
+  content: 'Picked from your numbers';
+  position: absolute;
+  top: -10px;
+  right: 20px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  background: var(--c-accent);
+  color: #0A0A0B;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+/* If recommended ALSO has .featured, hide the "Most popular" pseudo so
+   we don't show two badges. */
+.cordonPage :global(.price-card.featured.recommended::before) {
+  display: none;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Exit-intent modal — backdrop + card. Honors prefers-reduced-motion
+   in the global scoped block at the bottom of this file.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.exit-modal-backdrop) {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: cordonFadeIn .2s ease;
+}
+@keyframes cordonFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.cordonPage :global(.exit-modal) {
+  position: relative;
+  width: 100%;
+  max-width: 540px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-top: 1px solid rgba(198, 248, 79, 0.4);
+  border-radius: var(--c-radius-lg);
+  padding: 40px 36px 32px;
+  box-shadow:
+    0 32px 80px -24px rgba(0, 0, 0, 0.8),
+    0 0 64px -16px var(--c-accent-glow);
+  animation: cordonModalIn .35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes cordonModalIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.cordonPage :global(.exit-modal-close) {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--c-text-3);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: background .15s, color .15s;
+}
+.cordonPage :global(.exit-modal-close:hover) {
+  background: var(--c-surface-3);
+  color: var(--c-text);
+}
+.cordonPage :global(.exit-modal-eyebrow) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--c-accent);
+  margin-bottom: 20px;
+}
+.cordonPage :global(.exit-modal-pulse) {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 8px var(--c-accent);
+  animation: cordonPulse 1.8s ease-in-out infinite;
+}
+.cordonPage :global(.exit-modal h3) {
+  font-size: 28px;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--c-text);
+  margin: 0 0 12px;
+}
+.cordonPage :global(.exit-modal-num) {
+  color: var(--c-danger);
+  font-family: var(--font-mono), monospace;
+  font-weight: 600;
+}
+.cordonPage :global(.exit-modal p) {
+  font-size: 15px;
+  color: var(--c-text-2);
+  line-height: 1.55;
+  margin: 0 0 28px;
+}
+.cordonPage :global(.exit-modal p strong) {
+  color: var(--c-accent);
+  font-weight: 600;
+}
+.cordonPage :global(.exit-modal-ctas) {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cordonPage :global(*),
+  .cordonPage :global(*::before),
+  .cordonPage :global(*::after) {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Social proof band — sits directly under hero CTAs.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.proof-band) {
+  margin-top: 48px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
+  padding-top: 24px;
+  border-top: 1px solid var(--c-border);
+}
+.cordonPage :global(.proof-band-pill) {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--c-text-2);
+}
+.cordonPage :global(.proof-band-pill strong) {
+  color: var(--c-text); font-weight: 600;
+}
+.cordonPage :global(.proof-band-stats) {
+  display: flex; gap: 24px; flex-wrap: wrap;
+  margin-left: auto;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px; color: var(--c-text-3);
+}
+.cordonPage :global(.proof-band-stats strong) {
+  color: var(--c-accent); font-weight: 600;
+  margin-right: 4px;
+}
+@media (max-width: 700px) {
+  .cordonPage :global(.proof-band-stats) { margin-left: 0; gap: 16px; }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   ROI calculator — interactive section after the Problem block.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.roi-calc) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 40px;
+  display: grid; gap: 32px;
+}
+@media (max-width: 700px) { .cordonPage :global(.roi-calc) { padding: 28px; } }
+
+.cordonPage :global(.roi-inputs) {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;
+}
+@media (max-width: 800px) {
+  .cordonPage :global(.roi-inputs) { grid-template-columns: 1fr; gap: 20px; }
+}
+
+.cordonPage :global(.roi-field-head) {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 10px;
+}
+.cordonPage :global(.roi-field-label) {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--c-text-3);
+}
+.cordonPage :global(.roi-field-value) {
+  font-family: var(--font-mono), monospace;
+  font-size: 16px; font-weight: 600;
+  color: var(--c-accent);
+  letter-spacing: -0.01em;
+}
+
+.cordonPage :global(.roi-slider input[type="range"]) {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 6px;
+  background: var(--c-surface-3);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+.cordonPage :global(.roi-slider input[type="range"]::-webkit-slider-thumb) {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  border: 3px solid var(--c-bg);
+  cursor: grab;
+  box-shadow: 0 0 12px var(--c-accent-glow);
+  transition: transform .15s;
+}
+.cordonPage :global(.roi-slider input[type="range"]::-webkit-slider-thumb:active) {
+  cursor: grabbing; transform: scale(1.1);
+}
+.cordonPage :global(.roi-slider input[type="range"]::-moz-range-thumb) {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--c-accent);
+  border: 3px solid var(--c-bg);
+  cursor: grab;
+  box-shadow: 0 0 12px var(--c-accent-glow);
+}
+
+.cordonPage :global(.roi-numfield input[type="number"]) {
+  width: 100%;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--c-text);
+  font-family: var(--font-mono), monospace;
+  font-size: 14px;
+  outline: none;
+  transition: border-color .2s;
+}
+.cordonPage :global(.roi-numfield input[type="number"]:focus) {
+  border-color: var(--c-accent);
+}
+.cordonPage :global(.roi-numfield input[type="number"]::-webkit-outer-spin-button),
+.cordonPage :global(.roi-numfield input[type="number"]::-webkit-inner-spin-button) {
+  -webkit-appearance: none; margin: 0;
+}
+
+.cordonPage :global(.roi-outputs) {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+}
+@media (max-width: 900px) {
+  .cordonPage :global(.roi-outputs) { grid-template-columns: repeat(2, 1fr); }
+}
+
+.cordonPage :global(.roi-output) {
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: 20px;
+  transition: border-color .25s;
+}
+.cordonPage :global(.roi-output-label) {
+  font-size: 12px; color: var(--c-text-3);
+  margin-bottom: 8px;
+  letter-spacing: -0.005em;
+}
+.cordonPage :global(.roi-output-value) {
+  font-family: var(--font-mono), monospace;
+  font-size: 22px; font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--c-text);
+}
+.cordonPage :global(.roi-output-big .roi-output-value) {
+  font-size: 26px;
+}
+.cordonPage :global(.roi-output-hint) {
+  font-size: 11px; color: var(--c-text-3);
+  margin-top: 6px;
+}
+.cordonPage :global(.roi-output-danger .roi-output-value) {
+  color: var(--c-danger);
+}
+.cordonPage :global(.roi-output-accent) {
+  border-color: rgba(198, 248, 79, 0.35);
+  background: linear-gradient(180deg, rgba(198,248,79,0.06), var(--c-surface-2));
+}
+.cordonPage :global(.roi-output-accent .roi-output-value) {
+  color: var(--c-accent);
+}
+
+.cordonPage :global(.roi-rec) {
+  display: grid; gap: 8px;
+  padding: 20px 24px;
+  background: var(--c-surface-2);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+}
+.cordonPage :global(.roi-rec-row) {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 8px;
+  font-size: 14px;
+}
+.cordonPage :global(.roi-rec-label) { color: var(--c-text-3); }
+.cordonPage :global(.roi-rec-value) {
+  font-family: var(--font-mono), monospace;
+  color: var(--c-text);
+}
+.cordonPage :global(.roi-rec-tag) { color: var(--c-text-3); font-weight: 400; }
+.cordonPage :global(.roi-rec-price) { color: var(--c-text-2); }
+.cordonPage :global(.roi-rec-net strong) { color: var(--c-accent); }
+
+.cordonPage :global(.roi-cta) {
+  display: flex; align-items: center; gap: 18px;
+  flex-wrap: wrap;
+}
+.cordonPage :global(.roi-cta-note) {
+  font-size: 12px; color: var(--c-text-3);
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Customer proof — metric row + testimonial cards.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.metric-row) {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+  margin-bottom: 32px;
+}
+@media (max-width: 900px) {
+  .cordonPage :global(.metric-row) { grid-template-columns: repeat(2, 1fr); }
+}
+.cordonPage :global(.metric) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 14px;
+  padding: 28px 24px;
+  transition: border-color .25s, transform .25s;
+}
+.cordonPage :global(.metric:hover) {
+  border-color: var(--c-border-strong);
+  transform: translateY(-2px);
+}
+.cordonPage :global(.metric-num) {
+  font-family: var(--font-mono), monospace;
+  font-size: 40px; font-weight: 600;
+  letter-spacing: -0.04em;
+  color: var(--c-accent);
+  line-height: 1;
+  margin-bottom: 10px;
+}
+.cordonPage :global(.metric-label) {
+  font-size: 13px; color: var(--c-text-2);
+  line-height: 1.5;
+}
+
+.cordonPage :global(.testimonial-grid) {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+@media (max-width: 900px) {
+  .cordonPage :global(.testimonial-grid) { grid-template-columns: 1fr; }
+}
+.cordonPage :global(.testimonial) {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius-lg);
+  padding: 32px;
+  margin: 0;
+  position: relative;
+  transition: border-color .3s;
+  display: flex; flex-direction: column;
+  gap: 24px;
+}
+.cordonPage :global(.testimonial:hover) { border-color: var(--c-border-strong); }
+.cordonPage :global(.testimonial::before) {
+  content: '"';
+  position: absolute; top: 18px; right: 28px;
+  font-family: var(--font-serif), serif;
+  font-style: italic;
+  font-size: 56px;
+  color: var(--c-accent);
+  opacity: 0.4;
+  line-height: 1;
+}
+.cordonPage :global(.testimonial blockquote) {
+  margin: 0;
+  font-size: 15px;
+  color: var(--c-text);
+  line-height: 1.6;
+}
+.cordonPage :global(.testimonial figcaption) {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid var(--c-border);
+}
+.cordonPage :global(.testimonial-name) {
+  font-size: 13px; font-weight: 600;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
+}
+.cordonPage :global(.testimonial-role) {
+  font-size: 12px; color: var(--c-text-3);
+  margin-top: 2px;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Urgency line under final CTA.
+   ──────────────────────────────────────────────────────────────────── */
+.cordonPage :global(.urgency) {
+  position: relative;
+  margin-top: 32px;
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 18px;
+  background: rgba(198, 248, 79, 0.08);
+  border: 1px solid rgba(198, 248, 79, 0.25);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--c-text-2);
+}
+.cordonPage :global(.urgency strong) { color: var(--c-text); font-weight: 600; }
+.cordonPage :global(.urgency-dot) {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--c-accent);
+  box-shadow: 0 0 8px var(--c-accent);
+  animation: cordonPulse 1.8s ease-in-out infinite;
+  flex-shrink: 0;
+}

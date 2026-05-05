@@ -11,6 +11,7 @@ import { TokenRefreshKeeper } from "@/components/auth/token-refresh-keeper";
 import { MobileBottomNav } from "@/components/dashboard/mobile-bottom-nav";
 import { I18nProvider } from "@/lib/i18n";
 import { Toaster } from "@/components/ui/toast";
+import { Providers } from "@/app/providers";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -19,6 +20,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   const userLabel = session.user?.name ?? session.user?.email ?? "Merchant";
 
   return (
+    <Providers>
     <I18nProvider>
       <CommandPaletteProvider>
       <BrandingProvider>
@@ -38,5 +40,6 @@ export default async function DashboardLayout({ children }: { children: ReactNod
       </BrandingProvider>
     </CommandPaletteProvider>
     </I18nProvider>
+    </Providers>
   );
 }

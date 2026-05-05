@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Cordon — Stop losing money to fake COD orders</title>
+<meta name="description" content="The order operations OS for Shopify and WooCommerce stores in Bangladesh. Real-time fraud scoring, automated courier booking on Pathao / Steadfast / RedX, and webhooks you can actually trust." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #0A0A0B;
+  --surface: #111113;
+  --surface-2: #18181B;
+  --surface-3: #1F1F23;
+  --border: #27272A;
+  --border-strong: #3F3F46;
+  --text: #FAFAFA;
+  --text-2: #A1A1AA;
+  --text-3: #71717A;
+  --accent: #C6F84F;
+  --accent-2: #8AE619;
+  --accent-glow: rgba(198, 248, 79, 0.18);
+  --danger: #FF5470;
+  --warning: #FFB454;
+  --radius: 14px;
+  --radius-lg: 22px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+  letter-spacing: -0.005em;
+}
+.serif { font-family: 'Instrument Serif', serif; font-style: italic; font-weight: 400; letter-spacing: 0; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* layout */
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+section { padding: 120px 0; position: relative; }
+@media (max-width: 768px) { section { padding: 72px 0; } }
+
+/* nav */
+.nav {
+  position: fixed; top: 0; left: 0; right: 0;
+  background: rgba(10, 10, 11, 0.7);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  border-bottom: 1px solid transparent;
+  z-index: 100;
+  transition: border-color .3s, background .3s;
+}
+.nav.scrolled { border-color: var(--border); background: rgba(10,10,11,0.85); }
+.nav-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 64px;
+}
+.logo {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; letter-spacing: -0.02em; font-size: 17px;
+  color: var(--text); text-decoration: none;
+}
+.logo-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 14px var(--accent);
+}
+.nav-links { display: flex; gap: 32px; align-items: center; }
+.nav-links a {
+  color: var(--text-2); text-decoration: none; font-size: 14px;
+  transition: color .2s;
+}
+.nav-links a:hover { color: var(--text); }
+.nav-cta { display: flex; gap: 12px; align-items: center; }
+
+/* buttons */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-size: 14px; font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none; cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform .15s, background .2s, border-color .2s, color .2s, box-shadow .25s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.btn-primary {
+  background: var(--accent); color: #0A0A0B;
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 32px -10px var(--accent-glow), 0 0 0 1px var(--accent-2);
+  background: var(--accent-2);
+}
+.btn-secondary {
+  background: transparent; color: var(--text);
+  border-color: var(--border);
+}
+.btn-secondary:hover { border-color: var(--border-strong); background: var(--surface); }
+.btn-ghost { color: var(--text-2); padding: 8px 12px; }
+.btn-ghost:hover { color: var(--text); }
+.btn-lg { padding: 16px 28px; font-size: 15px; }
+.btn .arrow { transition: transform .25s; display: inline-block; }
+.btn:hover .arrow { transform: translateX(4px); }
+
+/* hero */
+.hero { padding-top: 180px; padding-bottom: 80px; position: relative; overflow: hidden; }
+.hero-bg {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, var(--accent-glow), transparent 60%),
+    linear-gradient(to bottom, transparent 70%, var(--bg));
+  pointer-events: none;
+}
+.hero-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 30%, #000 30%, transparent 80%);
+  pointer-events: none;
+}
+.hero-content { position: relative; max-width: 920px; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px; color: var(--text-2);
+  margin-bottom: 28px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+}
+.eyebrow .pulse {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.85); }
+}
+h1.hero-title {
+  font-size: clamp(40px, 6vw, 76px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+h1.hero-title .accent { color: var(--accent); }
+.hero-sub {
+  font-size: 19px; color: var(--text-2);
+  max-width: 660px;
+  line-height: 1.55;
+  margin-bottom: 36px;
+}
+.hero-ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 36px; }
+.hero-meta { display: flex; gap: 24px; flex-wrap: wrap; color: var(--text-3); font-size: 13px; }
+.hero-meta span { display: flex; align-items: center; gap: 8px; }
+.hero-meta .check { color: var(--accent); }
+
+/* hero stat strip */
+.stat-strip {
+  margin-top: 80px;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+  position: relative;
+}
+.stat {
+  padding: 28px 32px;
+  border-right: 1px solid var(--border);
+  position: relative;
+}
+.stat:last-child { border-right: none; }
+.stat-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.stat-num .unit, .stat-num .prefix { color: var(--accent); font-size: 22px; }
+.stat-num .prefix { margin-right: 2px; }
+.stat-label { color: var(--text-3); font-size: 13px; }
+@media (max-width: 768px) {
+  .stat-strip { grid-template-columns: repeat(2, 1fr); }
+  .stat:nth-child(2) { border-right: none; }
+  .stat:nth-child(1), .stat:nth-child(2) { border-bottom: 1px solid var(--border); }
+}
+
+/* section header */
+.section-eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  margin-bottom: 22px;
+}
+h2.section-title {
+  font-size: clamp(34px, 4.5vw, 54px);
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  margin-bottom: 20px;
+  max-width: 780px;
+}
+h2.section-title .serif { color: var(--text-2); }
+.section-sub {
+  font-size: 18px; color: var(--text-2);
+  max-width: 660px; line-height: 1.55;
+  margin-bottom: 56px;
+}
+
+/* problem */
+.problem-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 768px) { .problem-grid { grid-template-columns: 1fr; } }
+.problem-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  transition: border-color .3s, transform .3s;
+  position: relative; overflow: hidden;
+}
+.problem-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+}
+.problem-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0; transition: opacity .3s;
+}
+.problem-card:hover::before { opacity: 0.7; }
+.problem-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--text-3);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.problem-card h3 {
+  font-size: 22px; letter-spacing: -0.02em; font-weight: 600;
+  margin-bottom: 12px;
+}
+.problem-card p {
+  color: var(--text-2); font-size: 15px;
+}
+.problem-bottom {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  display: flex; align-items: center; gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.problem-bottom .big {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 38px;
+  letter-spacing: -0.03em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.problem-bottom .label { color: var(--text-2); font-size: 15px; max-width: 540px; }
+
+/* solution */
+.solution-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+}
+@media (max-width: 900px) { .solution-grid { grid-template-columns: 1fr; } }
+.solution-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  position: relative;
+  transition: border-color .3s, transform .3s;
+}
+.solution-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.solution-step {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.solution-card h3 {
+  font-size: 24px; letter-spacing: -0.02em; font-weight: 600;
+  margin-bottom: 12px;
+}
+.solution-card p { color: var(--text-2); font-size: 15px; }
+
+/* pipeline */
+.pipeline {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 36px;
+  position: relative; overflow: hidden;
+}
+.pipeline::after {
+  content: '';
+  position: absolute; top: 50%; left: 36px; right: 36px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.25;
+  transform: translateY(-50%);
+  z-index: 0;
+}
+@media (max-width: 1000px) { .pipeline::after { display: none; } }
+.pipeline-steps {
+  display: grid; grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  position: relative; z-index: 1;
+}
+@media (max-width: 1000px) {
+  .pipeline-steps { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 500px) {
+  .pipeline-steps { grid-template-columns: 1fr; }
+}
+.step {
+  position: relative; padding: 24px 16px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: all .3s;
+}
+.step:hover { border-color: var(--accent); background: var(--surface-3); transform: translateY(-2px); }
+.step-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--accent);
+  margin-bottom: 12px;
+  letter-spacing: 0.05em;
+}
+.step-name {
+  font-weight: 600; font-size: 14px; margin-bottom: 8px;
+  letter-spacing: -0.01em;
+}
+.step-desc { color: var(--text-3); font-size: 12.5px; line-height: 1.5; }
+
+/* fraud network */
+.network-card {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 56px;
+  position: relative;
+  overflow: hidden;
+}
+.network-card::before {
+  content: '';
+  position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
+  width: 50%; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+@media (max-width: 700px) { .network-card { padding: 32px; } }
+.network-grid {
+  display: grid; grid-template-columns: 1.2fr 1fr; gap: 64px;
+  align-items: center;
+}
+@media (max-width: 900px) { .network-grid { grid-template-columns: 1fr; gap: 40px; } }
+.network-grid h3 {
+  font-size: 32px; letter-spacing: -0.03em; font-weight: 600;
+  margin-bottom: 18px; line-height: 1.15;
+}
+.network-grid p { color: var(--text-2); font-size: 16px; margin-bottom: 14px; }
+.network-features { display: grid; gap: 12px; margin-top: 28px; }
+.network-feature {
+  display: flex; gap: 12px; align-items: flex-start;
+  font-size: 14px; color: var(--text-2);
+}
+.network-feature::before {
+  content: ''; flex: 0 0 6px; height: 6px; margin-top: 9px;
+  border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* network viz */
+.viz {
+  position: relative;
+  aspect-ratio: 1;
+  max-width: 380px;
+  margin: 0 auto;
+}
+.viz-svg { width: 100%; height: 100%; overflow: visible; }
+.viz-node {
+  fill: var(--surface-3);
+  stroke: var(--border);
+  stroke-width: 1;
+  transition: all .3s;
+}
+.viz-node.center {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.viz-line { stroke: var(--border-strong); stroke-width: 1; fill: none; }
+.viz-pulse {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  fill: none;
+  stroke-dasharray: 6 8;
+  animation: dash 4s linear infinite;
+  opacity: 0.7;
+}
+@keyframes dash {
+  to { stroke-dashoffset: -100; }
+}
+.viz-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  fill: var(--text-3);
+}
+
+/* automation modes */
+.modes-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+}
+@media (max-width: 900px) { .modes-grid { grid-template-columns: 1fr; } }
+.mode {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  position: relative;
+  transition: all .3s;
+}
+.mode.featured { border-color: var(--accent); }
+.mode.featured::before {
+  content: 'Most popular';
+  position: absolute; top: -10px; left: 32px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  background: var(--accent); color: #0A0A0B;
+  padding: 4px 8px; border-radius: 4px;
+  font-weight: 600;
+}
+.mode:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.mode.featured:hover { border-color: var(--accent); }
+.mode-name {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--accent); font-size: 11px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.mode h3 {
+  font-size: 22px; letter-spacing: -0.02em; font-weight: 600;
+  margin-bottom: 14px;
+}
+.mode p { color: var(--text-2); font-size: 14px; margin-bottom: 18px; line-height: 1.55; }
+.mode-list { list-style: none; padding: 0; }
+.mode-list li {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--text-2);
+  display: flex; gap: 8px; align-items: flex-start;
+  line-height: 1.5;
+}
+.mode-list li::before {
+  content: '→'; color: var(--accent); font-size: 11px; margin-top: 3px;
+}
+
+/* integrations */
+.integrations-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+}
+@media (max-width: 700px) { .integrations-grid { grid-template-columns: repeat(2, 1fr); } }
+.integration {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 20px;
+  text-align: center;
+  transition: all .3s;
+}
+.integration:hover { border-color: var(--accent); transform: translateY(-2px); background: var(--surface-2); }
+.integration .name {
+  font-weight: 600; letter-spacing: -0.01em; font-size: 16px;
+  margin-bottom: 4px;
+}
+.integration .role {
+  font-size: 11px; color: var(--text-3);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.05em;
+}
+
+/* trust */
+.trust-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+@media (max-width: 900px) { .trust-grid { grid-template-columns: 1fr; } }
+.trust-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  transition: border-color .25s;
+}
+.trust-item:hover { border-color: var(--border-strong); }
+.trust-item .icon {
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  margin-bottom: 16px;
+  font-family: 'JetBrains Mono', monospace; font-size: 13px;
+  font-weight: 600;
+}
+.trust-item h4 {
+  font-size: 15px; font-weight: 600; letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+.trust-item p {
+  color: var(--text-2); font-size: 13.5px; line-height: 1.55;
+}
+
+/* pricing */
+.pricing-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+}
+@media (max-width: 1000px) { .pricing-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 600px) { .pricing-grid { grid-template-columns: 1fr; } }
+.price-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  display: flex; flex-direction: column;
+  transition: border-color .25s, transform .25s;
+}
+.price-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+.price-card.featured {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, rgba(198,248,79,0.04), var(--surface));
+}
+.price-card.featured:hover { border-color: var(--accent); }
+.tier { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--accent); margin-bottom: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.price {
+  font-size: 38px; font-weight: 600; letter-spacing: -0.03em;
+  margin-bottom: 4px;
+}
+.price .unit { font-size: 14px; color: var(--text-3); font-weight: 400; margin-left: 2px; }
+.price-desc { color: var(--text-2); font-size: 13.5px; margin-bottom: 24px; min-height: 60px; line-height: 1.5; }
+.price-features { list-style: none; padding: 0; margin-bottom: 24px; flex: 1; }
+.price-features li {
+  font-size: 13.5px; color: var(--text-2);
+  padding: 6px 0; display: flex; gap: 10px;
+}
+.price-features li::before {
+  content: '✓'; color: var(--accent); font-size: 12px; flex: 0 0 auto;
+}
+
+/* final cta */
+.final-cta {
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 96px 48px;
+  text-align: center;
+  position: relative; overflow: hidden;
+}
+.final-cta::before {
+  content: '';
+  position: absolute; top: -50%; left: 50%; transform: translateX(-50%);
+  width: 80%; aspect-ratio: 1;
+  background: radial-gradient(circle, var(--accent-glow), transparent 60%);
+  pointer-events: none;
+}
+.final-cta h2 {
+  position: relative;
+  font-size: clamp(36px, 5vw, 60px);
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  font-weight: 600;
+  margin-bottom: 20px;
+}
+.final-cta p {
+  position: relative;
+  color: var(--text-2); font-size: 17px;
+  max-width: 580px; margin: 0 auto 36px;
+}
+.final-cta .ctas { position: relative; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+/* footer */
+footer {
+  border-top: 1px solid var(--border);
+  padding: 56px 0 40px;
+  color: var(--text-3); font-size: 13px;
+}
+.footer-inner {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 16px;
+}
+.footer-inner .logo { font-size: 15px; }
+.footer-links { display: flex; gap: 24px; flex-wrap: wrap; }
+.footer-links a { color: var(--text-3); text-decoration: none; transition: color .2s; }
+.footer-links a:hover { color: var(--text); }
+
+/* fade-in animation */
+.fade-in {
+  opacity: 0; transform: translateY(20px);
+  transition: opacity .8s ease, transform .8s ease;
+}
+.fade-in.visible { opacity: 1; transform: translateY(0); }
+
+/* responsive nav */
+@media (max-width: 800px) {
+  .nav-links { display: none; }
+  .nav-cta .btn-ghost { display: none; }
+}
+
+/* selection */
+::selection { background: var(--accent); color: #0A0A0B; }
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="container nav-inner">
+    <a href="#" class="logo">
+      <span class="logo-dot"></span>
+      <span>Cordon</span>
+    </a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#fraud">Fraud network</a>
+      <a href="#automation">Automation</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+    <div class="nav-cta">
+      <a href="#" class="btn btn-ghost">Sign in</a>
+      <a href="#cta" class="btn btn-primary">Start free trial</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="hero-grid"></div>
+  <div class="container">
+    <div class="hero-content">
+      <div class="eyebrow">
+        <span class="pulse"></span>
+        Built for Bangladesh's COD economy
+      </div>
+      <h1 class="hero-title">
+        Bangladesh's D2C brands lose <span class="accent">18%</span> of revenue to fake COD orders.
+        <br />
+        <span class="serif">We end that</span> — before the courier picks up the parcel.
+      </h1>
+      <p class="hero-sub">
+        Cordon is the order operations OS for Shopify and WooCommerce stores. Real-time fraud scoring across a cross-merchant signal network, automated booking on Pathao, Steadfast & RedX, and webhook delivery you can actually trust.
+      </p>
+      <div class="hero-ctas">
+        <a href="#cta" class="btn btn-primary btn-lg">Calculate what you'd save <span class="arrow">→</span></a>
+        <a href="#how" class="btn btn-secondary btn-lg">See how it works</a>
+      </div>
+      <div class="hero-meta">
+        <span><span class="check">✓</span> 14-day trial</span>
+        <span><span class="check">✓</span> No card required</span>
+        <span><span class="check">✓</span> Pay via bKash, Nagad, or card</span>
+      </div>
+    </div>
+
+    <div class="stat-strip fade-in">
+      <div class="stat">
+        <div class="stat-num"><span class="counter" data-target="18" data-suffix="%">0%</span></div>
+        <div class="stat-label">Average COD RTO rate, BD market</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num"><span class="prefix">৳</span><span class="counter" data-target="540" data-suffix="K">0K</span></div>
+        <div class="stat-label">Bled monthly on 1,000 orders</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num"><span class="counter" data-target="3" data-suffix="">0</span><span class="unit"> couriers</span></div>
+        <div class="stat-label">Pathao · Steadfast · RedX, one API</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num"><span class="counter" data-target="0" data-suffix="">0</span><span class="unit"> silent drops</span></div>
+        <div class="stat-label">Idempotent. Retried. Replayable.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section id="problem">
+  <div class="container">
+    <div class="section-eyebrow">01 / The bleed</div>
+    <h2 class="section-title">The math <span class="serif">no one wants to do.</span></h2>
+    <p class="section-sub">A fake COD order doesn't just fail. It costs you four times — and most teams stop counting after the first.</p>
+
+    <div class="problem-grid">
+      <div class="problem-card fade-in">
+        <div class="problem-num">01 — Courier fee</div>
+        <h3>Paid both ways, every time.</h3>
+        <p>Pickup, delivery attempt, and return — all bill against your account. Every refused parcel is two courier charges for zero revenue.</p>
+      </div>
+      <div class="problem-card fade-in">
+        <div class="problem-num">02 — Locked inventory</div>
+        <h3>Three to seven days, gone.</h3>
+        <p>Stock travels nowhere while a fake parcel orbits the courier network. You can't sell what you don't have, and you don't have it because someone wasn't real.</p>
+      </div>
+      <div class="problem-card fade-in">
+        <div class="problem-num">03 — Team time</div>
+        <h3>12+ minutes per fake order.</h3>
+        <p>Confirmation calls, reconciliation, dispute logging, courier follow-up. Your ops team is on the phone instead of growing the brand.</p>
+      </div>
+      <div class="problem-card fade-in">
+        <div class="problem-num">04 — Merchant rating</div>
+        <h3>The slow-pickup penalty.</h3>
+        <p>Couriers down-rank merchants with high RTO. Slower pickups, tighter SLAs, harder negotiation on the next contract.</p>
+      </div>
+    </div>
+
+    <div class="problem-bottom fade-in">
+      <div class="big">৳540,000+</div>
+      <div class="label">
+        <strong style="color: var(--text);">The monthly bleed.</strong> 1,000 orders a month, ৳1,200 average value, 18% RTO. Before you've paid yourself, before tax, before anything else. That's what's quietly leaving your business.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SOLUTION -->
+<section id="solution">
+  <div class="container">
+    <div class="section-eyebrow">02 / The system</div>
+    <h2 class="section-title">Stop paying the <span class="serif">RTO tax.</span></h2>
+    <p class="section-sub">Cordon scores every order before it ships. The bad ones get held. The good ones auto-book to the right courier. Your team only sees the exceptions.</p>
+
+    <div class="solution-grid">
+      <div class="solution-card fade-in">
+        <div class="solution-step">Layer 01 — Score</div>
+        <h3>Every order, risk-rated in milliseconds.</h3>
+        <p>Per-merchant fraud rules — COD thresholds, suspicious districts, velocity limits — combined with a cross-merchant signal network. Score, level, and signals attached to the order before it moves.</p>
+      </div>
+      <div class="solution-card fade-in">
+        <div class="solution-step">Layer 02 — Confirm</div>
+        <h3>Calls only when calls matter.</h3>
+        <p>Low-risk orders auto-confirm. Medium-risk orders trigger a Twilio confirmation call with status tracking. High-risk orders sit in a review queue waiting for your approval.</p>
+      </div>
+      <div class="solution-card fade-in">
+        <div class="solution-step">Layer 03 — Ship</div>
+        <h3>The right courier, automatically.</h3>
+        <p>Auto-book to Pathao, Steadfast, or RedX based on success rate, zone, and your overrides. Idempotent booking — no duplicate AWBs. Tracking polled and surfaced without you opening a courier dashboard.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="container">
+    <div class="section-eyebrow">03 / Pipeline</div>
+    <h2 class="section-title">Order in. Parcel out. <span class="serif">Nothing in between touches a human.</span></h2>
+    <p class="section-sub">A six-step pipeline that runs on every order, every time. The same primitives Stripe uses for payments — applied to the order itself.</p>
+
+    <div class="pipeline fade-in">
+      <div class="pipeline-steps">
+        <div class="step">
+          <div class="step-num">/01</div>
+          <div class="step-name">Ingest</div>
+          <div class="step-desc">Shopify or Woo webhook lands in an idempotent inbox. No double-counts. No silent drops.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">/02</div>
+          <div class="step-name">Normalize</div>
+          <div class="step-desc">Phone coerced to BD format. Address parsed. Buyer history pulled into context.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">/03</div>
+          <div class="step-name">Score</div>
+          <div class="step-desc">Risk model runs against your rules + the cross-merchant network. Score, level, signals.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">/04</div>
+          <div class="step-name">Route</div>
+          <div class="step-desc">Low → auto-confirm. Medium → confirmation call. High → human review queue.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">/05</div>
+          <div class="step-name">Book</div>
+          <div class="step-desc">Best-fit courier picked. Idempotent AWB. Circuit breakers fall through to backups.</div>
+        </div>
+        <div class="step">
+          <div class="step-num">/06</div>
+          <div class="step-name">Track</div>
+          <div class="step-desc">Status polled every 5 min. Events deduped. Delivery, RTO, failed — all surfaced live.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FRAUD NETWORK -->
+<section id="fraud">
+  <div class="container">
+    <div class="section-eyebrow">04 / Cross-merchant network</div>
+    <h2 class="section-title">The fraudster who burned another store today is calling yours <span class="serif">tomorrow.</span></h2>
+    <p class="section-sub">Cordon connects the dots they hoped you wouldn't see — without ever touching their PII or yours.</p>
+
+    <div class="network-card fade-in">
+      <div class="network-grid">
+        <div>
+          <h3>Privacy by architecture, not by promise.</h3>
+          <p>Phone numbers and addresses are hashed (SHA-256) before they ever leave your store. We don't share buyer data — we share signal.</p>
+          <p>When a buyer who refused two parcels at two other Cordon stores tries to place a COD order with you, you'll know <em>before</em> the courier is booked.</p>
+
+          <div class="network-features">
+            <div class="network-feature">Hashed signals only — your buyer data never leaves your boundary.</div>
+            <div class="network-feature">Capped contribution to score — no single signal can dominate.</div>
+            <div class="network-feature">Per-merchant RTO baseline tuning — the model learns your store.</div>
+            <div class="network-feature">Monthly weight retraining — the system gets sharper while you sleep.</div>
+          </div>
+        </div>
+        <div>
+          <div class="viz">
+            <svg class="viz-svg" viewBox="0 0 380 380">
+              <!-- network lines -->
+              <line class="viz-line" x1="190" y1="190" x2="60" y2="80" />
+              <line class="viz-line" x1="190" y1="190" x2="320" y2="80" />
+              <line class="viz-line" x1="190" y1="190" x2="60" y2="300" />
+              <line class="viz-line" x1="190" y1="190" x2="320" y2="300" />
+              <line class="viz-line" x1="190" y1="190" x2="190" y2="40" />
+              <line class="viz-line" x1="190" y1="190" x2="190" y2="340" />
+
+              <!-- pulse lines -->
+              <line class="viz-pulse" x1="190" y1="190" x2="320" y2="80" />
+              <line class="viz-pulse" x1="190" y1="190" x2="60" y2="300" />
+
+              <!-- outer nodes -->
+              <circle class="viz-node" cx="60" cy="80" r="16" />
+              <circle class="viz-node" cx="320" cy="80" r="16" />
+              <circle class="viz-node" cx="60" cy="300" r="16" />
+              <circle class="viz-node" cx="320" cy="300" r="16" />
+              <circle class="viz-node" cx="190" cy="40" r="16" />
+              <circle class="viz-node" cx="190" cy="340" r="16" />
+
+              <!-- center node -->
+              <circle class="viz-node center" cx="190" cy="190" r="22" />
+
+              <!-- labels -->
+              <text class="viz-label" x="60" y="60" text-anchor="middle">store_a</text>
+              <text class="viz-label" x="320" y="60" text-anchor="middle">store_b</text>
+              <text class="viz-label" x="60" y="328" text-anchor="middle">store_c</text>
+              <text class="viz-label" x="320" y="328" text-anchor="middle">store_d</text>
+              <text class="viz-label" x="190" y="22" text-anchor="middle">store_e</text>
+              <text class="viz-label" x="190" y="362" text-anchor="middle">store_f</text>
+              <text class="viz-label" x="190" y="232" text-anchor="middle" style="fill: #0A0A0B; font-weight: 600;">cordon</text>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AUTOMATION -->
+<section id="automation">
+  <div class="container">
+    <div class="section-eyebrow">05 / Automation</div>
+    <h2 class="section-title">Three modes. <span class="serif">You decide how much to let go.</span></h2>
+    <p class="section-sub">From cautious to fully autonomous. Cordon respects how you want to run your store — and lets you change your mind whenever.</p>
+
+    <div class="modes-grid">
+      <div class="mode fade-in">
+        <div class="mode-name">Mode 01</div>
+        <h3>Manual</h3>
+        <p>Cordon scores every order. You decide every action. Best for new stores or fraud-sensitive categories.</p>
+        <ul class="mode-list">
+          <li>Risk score on every order</li>
+          <li>Manual confirm + manual book</li>
+          <li>Full audit trail of decisions</li>
+        </ul>
+      </div>
+      <div class="mode featured fade-in">
+        <div class="mode-name">Mode 02</div>
+        <h3>Semi-Auto</h3>
+        <p>Low-risk orders auto-confirm and route. Medium and high go to your review queue. The default for stores at scale.</p>
+        <ul class="mode-list">
+          <li>Auto-confirm under your risk ceiling</li>
+          <li>Smart routing across 3 couriers</li>
+          <li>Only exceptions hit your inbox</li>
+        </ul>
+      </div>
+      <div class="mode fade-in">
+        <div class="mode-name">Mode 03</div>
+        <h3>Full-Auto</h3>
+        <p>Low-risk auto-confirms and auto-books. Medium gets a confirmation call. Only high-risk orders land on your desk.</p>
+        <ul class="mode-list">
+          <li>End-to-end pipeline, no human touch</li>
+          <li>Twilio confirmation for medium-risk</li>
+          <li>SLA-grade recovery on failures</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- INTEGRATIONS -->
+<section id="integrations">
+  <div class="container">
+    <div class="section-eyebrow">06 / Integrations</div>
+    <h2 class="section-title">Plugs into the stack <span class="serif">you already run.</span></h2>
+    <p class="section-sub">No replatforming. No code. Connect your store, point your couriers, you're live in under ten minutes.</p>
+
+    <div class="integrations-grid">
+      <div class="integration fade-in"><div class="name">Shopify</div><div class="role">HMAC webhooks</div></div>
+      <div class="integration fade-in"><div class="name">WooCommerce</div><div class="role">REST + signed events</div></div>
+      <div class="integration fade-in"><div class="name">Pathao</div><div class="role">courier · primary</div></div>
+      <div class="integration fade-in"><div class="name">Steadfast</div><div class="role">courier · primary</div></div>
+      <div class="integration fade-in"><div class="name">RedX</div><div class="role">courier · primary</div></div>
+      <div class="integration fade-in"><div class="name">Twilio</div><div class="role">voice · confirm</div></div>
+      <div class="integration fade-in"><div class="name">bKash + Nagad</div><div class="role">manual billing</div></div>
+      <div class="integration fade-in"><div class="name">Stripe</div><div class="role">card billing</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST -->
+<section id="trust">
+  <div class="container">
+    <div class="section-eyebrow">07 / Reliability</div>
+    <h2 class="section-title">Built like <span class="serif">infrastructure.</span> Priced like SaaS.</h2>
+    <p class="section-sub">Six primitives that run quietly underneath every order — so you never have to debug why a parcel didn't ship.</p>
+
+    <div class="trust-grid">
+      <div class="trust-item fade-in">
+        <div class="icon">{ }</div>
+        <h4>Idempotent ingestion</h4>
+        <p>Every order has a unique externalId and clientRequestId. The same webhook sent twice produces one order — never two.</p>
+      </div>
+      <div class="trust-item fade-in">
+        <div class="icon">↻</div>
+        <h4>Exponential-backoff retries</h4>
+        <p>A failed webhook doesn't disappear. It re-enters the queue with backoff, attempts capped, and dead-letter alerts when something's wrong.</p>
+      </div>
+      <div class="trust-item fade-in">
+        <div class="icon">⊘</div>
+        <h4>Courier circuit breakers</h4>
+        <p>When Pathao is down, we route around it. When it's healthy, we route to it. Booking attempts are tracked, fall-through is automatic.</p>
+      </div>
+      <div class="trust-item fade-in">
+        <div class="icon">∝</div>
+        <h4>Optimistic concurrency</h4>
+        <p>Every order has an explicit version field. Two concurrent updates can't silently overwrite each other — the second one re-reads.</p>
+      </div>
+      <div class="trust-item fade-in">
+        <div class="icon">⊞</div>
+        <h4>Encrypted credentials</h4>
+        <p>Courier API keys are wrapped at rest with envelope encryption (v1:iv:tag:ct). Even our database admins can't read them in plaintext.</p>
+      </div>
+      <div class="trust-item fade-in">
+        <div class="icon">⌛</div>
+        <h4>30-day payload reaping</h4>
+        <p>Raw webhook payloads don't sit in your account forever. Succeeded payloads are cleared after 30 days — kept just long enough for audit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="container">
+    <div class="section-eyebrow">08 / Pricing</div>
+    <h2 class="section-title">Pricing that <span class="serif">earns itself back</span> in week one.</h2>
+    <p class="section-sub">Four tiers. 14-day trial on every plan. Pay by card via Stripe — or by bKash and Nagad receipt if you'd rather not card.</p>
+
+    <div class="pricing-grid">
+      <div class="price-card fade-in">
+        <div class="tier">Starter</div>
+        <div class="price">৳1,990<span class="unit">/mo</span></div>
+        <div class="price-desc">For new stores still finding their footing — up to 500 orders a month.</div>
+        <ul class="price-features">
+          <li>Shopify or Woo connection</li>
+          <li>Manual + Semi-auto modes</li>
+          <li>1 courier integration</li>
+          <li>Email support</li>
+        </ul>
+        <a href="#cta" class="btn btn-secondary">Start trial</a>
+      </div>
+
+      <div class="price-card featured fade-in">
+        <div class="tier">Growth · most popular</div>
+        <div class="price">৳4,990<span class="unit">/mo</span></div>
+        <div class="price-desc">The default for stores doing 500–5,000 orders a month with a real ops bleed.</div>
+        <ul class="price-features">
+          <li>All Starter features</li>
+          <li>Full-auto mode + Twilio calls</li>
+          <li>3 couriers (Pathao + Steadfast + RedX)</li>
+          <li>Cross-merchant fraud network</li>
+          <li>Cart recovery worker</li>
+        </ul>
+        <a href="#cta" class="btn btn-primary">Start trial</a>
+      </div>
+
+      <div class="price-card fade-in">
+        <div class="tier">Scale</div>
+        <div class="price">৳12,990<span class="unit">/mo</span></div>
+        <div class="price-desc">For 5,000–25,000 orders, multi-store ops, and finer-grained automation control.</div>
+        <ul class="price-features">
+          <li>All Growth features</li>
+          <li>Multi-store / multi-merchant</li>
+          <li>Custom fraud rules + tuning</li>
+          <li>Priority queue + Slack support</li>
+        </ul>
+        <a href="#cta" class="btn btn-secondary">Start trial</a>
+      </div>
+
+      <div class="price-card fade-in">
+        <div class="tier">Enterprise</div>
+        <div class="price">Custom</div>
+        <div class="price-desc">For 25,000+ orders, dedicated infrastructure, custom courier integrations.</div>
+        <ul class="price-features">
+          <li>Everything in Scale</li>
+          <li>SLA + dedicated support</li>
+          <li>Custom courier adapters</li>
+          <li>Volume pricing</li>
+        </ul>
+        <a href="#cta" class="btn btn-secondary">Contact sales</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section id="cta">
+  <div class="container">
+    <div class="final-cta fade-in">
+      <h2>Stop shipping to <span class="serif">fraudsters.</span></h2>
+      <p>Connect your Shopify or WooCommerce store in under ten minutes. No card. No replatform. Cancel anytime in the trial — keep the time you got back.</p>
+      <div class="ctas">
+        <a href="#" class="btn btn-primary btn-lg">Start free for 14 days <span class="arrow">→</span></a>
+        <a href="#" class="btn btn-secondary btn-lg">Talk to a human</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container footer-inner">
+    <a href="#" class="logo">
+      <span class="logo-dot"></span>
+      <span>Cordon</span>
+    </a>
+    <div class="footer-links">
+      <a href="#how">How it works</a>
+      <a href="#fraud">Fraud network</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#">Docs</a>
+      <a href="#">Status</a>
+      <a href="#">Privacy</a>
+    </div>
+    <div>© 2026 Cordon. Built in Dhaka.</div>
+  </div>
+</footer>
+
+<script>
+// nav scroll
+const nav = document.getElementById('nav');
+window.addEventListener('scroll', () => {
+  if (window.scrollY > 8) nav.classList.add('scrolled');
+  else nav.classList.remove('scrolled');
+});
+
+// fade-in observer
+const fadeObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      entry.target.classList.add('visible');
+      fadeObserver.unobserve(entry.target);
+    }
+  });
+}, { threshold: 0.12, rootMargin: '0px 0px -50px 0px' });
+document.querySelectorAll('.fade-in').forEach(el => fadeObserver.observe(el));
+
+// counters
+const counterObserver = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    const el = entry.target;
+    const target = parseInt(el.dataset.target, 10);
+    const suffix = el.dataset.suffix || '';
+    const duration = 1400;
+    const start = performance.now();
+    const animate = (t) => {
+      const p = Math.min((t - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const value = Math.floor(target * eased);
+      el.textContent = value + suffix;
+      if (p < 1) requestAnimationFrame(animate);
+      else el.textContent = target + suffix;
+    };
+    requestAnimationFrame(animate);
+    counterObserver.unobserve(el);
+  });
+}, { threshold: 0.5 });
+document.querySelectorAll('.counter').forEach(el => counterObserver.observe(el));
+</script>
+
+</body>
+</html>

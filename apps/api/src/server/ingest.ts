@@ -930,3 +930,69 @@ export async function resolveIdentityForOrder(args: {
   if (!args.phone && !args.email) return { stitchedSessions: 0, stitchedEvents: 0 };
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
+  // Build the OR-match across every plausible phone variant + email so we
+  // catch sessions/events recorded with a non-canonical form ("01711…")
+  // even when the order arrives canonical ("+8801711…"). See
+  // `phoneLookupVariants` for the variant table.
+  const orClauses: Record<string, unknown>[] = [];
+  const canonicalPhone = args.phone ? normalizePhoneOrRaw(args.phone) : null;
+  const normalizedEmail = args.email
+    ? args.email.trim().toLowerCase() || null
+    : null;
+
+  if (args.phone) {
+    const variants = phoneLookupVariants(args.phone);
+    if (variants.length > 0) {
+      orClauses.push({
+        phone: variants.length > 1 ? { $in: variants } : variants[0],
+      });
+    }
+  }
+  if (normalizedEmail) {
+    orClauses.push({ email: normalizedEmail });
+  }
+  if (orClauses.length === 0) return { stitchedSessions: 0, stitchedEvents: 0 };
+
+  // 1) Stitch sessions: any matching session inside the 30-day window that
+  //    isn't already linked to an order. We also rewrite the stored phone
+  //    to the canonical form so downstream funnels join cleanly.
+  const sessionUpdate: Record<string, unknown> = {
+    resolvedOrderId: args.orderId,
+    resolvedAt: new Date(),
+  };
+  if (canonicalPhone) sessionUpdate.phone = canonicalPhone;
+  if (normalizedEmail) sessionUpdate.email = normalizedEmail;
+
+  const sessionsRes = await TrackingSession.updateMany(
+    {
+      merchantId: args.merchantId,
+      lastSeenAt: { $gte: since },
+      resolvedOrderId: { $exists: false },
+      $or: orClauses,
+    },
+    { $set: sessionUpdate },
+  );
+
+  // 2) Stitch events: events have no resolvedOrderId field — the session
+  //    edge is the source of truth for that linkage — but we still rewrite
+  //    the phone field to canonical so risk + funnel queries find them.
+  let stitchedEvents = 0;
+  if (canonicalPhone) {
+    const eventsRes = await TrackingEvent.updateMany(
+      {
+        merchantId: args.merchantId,
+        occurredAt: { $gte: since },
+        $or: orClauses,
+        phone: { $exists: true, $ne: canonicalPhone },
+      },
+      { $set: { phone: canonicalPhone } },
+    );
+    stitchedEvents = eventsRes.modifiedCount ?? 0;
+  }
+
+  return {
+    stitchedSessions: sessionsRes.modifiedCount ?? 0,
+    stitchedEvents,
+  };
+}
+

@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import type { ReactNode } from "react";
 import { authOptions } from "@/lib/auth";
 import { Toaster } from "@/components/ui/toast";
+import { Providers } from "@/app/providers";
 
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -11,6 +12,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   if (session.user?.role !== "admin") redirect("/dashboard");
 
   return (
+    <Providers>
     <div className="flex min-h-screen bg-[#0B0E1A]">
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 border-r border-[rgba(209,213,219,0.08)] bg-[#111318] md:flex md:flex-col">
         <div className="flex items-center gap-2 border-b border-[rgba(209,213,219,0.08)] px-5 py-4">
@@ -80,5 +82,6 @@ export default async function AdminLayout({ children }: { children: ReactNode })
       </main>
       <Toaster />
     </div>
+    </Providers>
   );
 }

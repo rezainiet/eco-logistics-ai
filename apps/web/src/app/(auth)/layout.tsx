@@ -9,6 +9,7 @@ import {
   Truck,
 } from "lucide-react";
 import { authOptions } from "@/lib/auth";
+import { Providers } from "@/app/providers";
 
 /**
  * Auth shell. On md+ a two-pane split: a value-prop column on the left
@@ -25,6 +26,7 @@ export default async function AuthLayout({ children }: { children: ReactNode }) 
   if (session) redirect("/dashboard");
 
   return (
+    <Providers>
     <main className="relative min-h-screen overflow-hidden">
       <div
         aria-hidden
@@ -42,6 +44,7 @@ export default async function AuthLayout({ children }: { children: ReactNode }) 
         </div>
       </div>
     </main>
+    </Providers>
   );
 }
 
