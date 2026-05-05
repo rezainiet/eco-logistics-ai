@@ -1,0 +1,48 @@
+feat(web) conversion-grade Cordon landing + perf hardening
+
+Builds on the previous landing baseline with the conversion mechanics,
+trust signals, and performance fixes from this round.
+
+Performance
+- Self-host fonts via nextfontgoogle (Inter, Instrument Serif,
+  JetBrains Mono - latin only, declared weights only). Removes the
+  render-blocking Google Fonts request and shrinks 94 font-face
+  declarations to ~18.
+- Gate the sticky nav backdrop-filter to =900px so mobile scroll
+  holds 60fps.
+- prefers-reduced-motion guard + IntersectionObserver pause for
+  decorative animations when their containers are off-screen.
+- Push providers below root so the (marketing) route group ships
+  zero authtRPC weight and no apiauthsession pings.
+
+Conversion
+- Interactive ROI calculator with sliders, live savings, plan
+  recommendation, ROI-multiple badge, lead-capture form.
+- Comparison section (Without Cordon vs With Cordon), six axes.
+- Trust strip + category pills + logo wall in Proof section.
+- Hero microquote, mobile sticky CTA, FAQ, urgency pill.
+- Floating loss indicator persisting after calculator interaction.
+- Exit-intent modal (desktop, once per session, reduced-motion
+  aware) with the user's personal calculated bleed.
+- Pricing card recommendation highlight wired to calculator output.
+
+All conversion components share one wire the calculator publishes
+cordoncalc-update CustomEvents and stashes the latest snapshot on
+window.__cordonCalc. FloatingLossIndicator, PricingHighlighter, and
+ExitIntentModal each subscribe independently. No state container,
+no provider wrapping.
+
+Files added
+  appswebsrcapp(marketing)_components{floating-loss-indicator,
+    pricing-highlighter,exit-intent-modal}.tsx
+
+Files changed
+  appswebsrcapp(marketing)page.tsx           (hero, sections, mounts)
+  appswebsrcapp(marketing)landing.module.css (font vars, mobile
+    backdrop, motion safety, comparison, floating, modal styles)
+  appswebsrcapp(marketing)_componentsroi-calculator.tsx
+    (event dispatch, ROI multiple, email capture, dynamic CTA)
+  appswebsrcapp{layout,globals.css}           (nextfont, no @import)
+  appswebtailwind.config.ts                     (font CSS vars)
+
+Removed appswebsrcapppage.tsx (re-export stub from prior round).
