@@ -145,7 +145,11 @@
       "Bash(npm --workspace apps/api run test -- --run tests/courier.circuit-breaker.test.ts)",
       "Bash(npm --workspace apps/api run test -- --run tests/queue-reliability.test.ts)",
       "Bash(npm --workspace apps/api run test -- --run tests/pending-job-replay.test.ts)",
-      "Bash(npm --workspace apps/api run test -- --run tests/admin-alerts.test.ts)"
+      "Bash(npm --workspace apps/api run test -- --run tests/admin-alerts.test.ts)",
+      "Bash(git rm *)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(npm --workspace packages/types run build)",
+      "Bash(NEXT_TELEMETRY_DISABLED=1 npm --workspace apps/web run build)"
     ]
   }
 }

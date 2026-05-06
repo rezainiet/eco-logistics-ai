@@ -13,6 +13,9 @@ readme.txt
 notes.local.*
 *.secrets
 
+# Claude scratch / local agent state
+.claude-staging/
+
 *.log
 .DS_Store
 .turbo

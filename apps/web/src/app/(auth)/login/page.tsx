@@ -7,14 +7,14 @@ import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
+  email: z.string().email("That doesn't look like an email."),
+  password: z.string().min(8, "At least 8 characters."),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -28,6 +28,7 @@ export default function LoginPage() {
   // every fresh signup straight onto an empty orders table.
   const callbackUrl = params.get("callbackUrl") ?? "/dashboard";
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -39,7 +40,12 @@ export default function LoginPage() {
     setError(null);
     const res = await signIn("credentials", { ...values, redirect: false });
     if (!res || res.error) {
-      setError("Invalid email or password");
+      // Friendly error keeps the security posture (no email-existence leak)
+      // but tells the user what to actually do next, instead of just
+      // stopping at "Invalid email or password".
+      setError(
+        "That email and password don't match. Try again, or reset your password.",
+      );
       return;
     }
     router.push(callbackUrl);
@@ -47,10 +53,15 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="rounded-2xl border border-stroke/10 bg-surface p-7 shadow-elevated animate-slide-up">
+    <div className="cordon-card animate-slide-up border border-stroke/30 bg-surface p-7 shadow-elevated">
       <div className="mb-6 space-y-1.5 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">Welcome back</h1>
-        <p className="text-sm text-fg-subtle">Sign in to your merchant workspace.</p>
+        <h1 className="text-2xl font-semibold leading-[1.15] tracking-tight text-fg">
+          Pick up where you stopped{" "}
+          <span className="cordon-serif">saving.</span>
+        </h1>
+        <p className="text-sm text-fg-subtle">
+          Sign in to your Cordon merchant workspace.
+        </p>
       </div>
       {/*
         SECURITY: explicit method="post" + action="" + capturing onSubmit
@@ -102,18 +113,35 @@ export default function LoginPage() {
             <Label htmlFor="password">Password</Label>
             <Link
               href="/forgot-password"
-              className="text-xs font-medium text-fg-muted hover:text-brand"
+              className="text-sm font-medium text-fg-muted hover:text-brand"
             >
-              Forgot?
+              Forgot password?
             </Link>
           </div>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="current-password"
-            placeholder="At least 8 characters"
-            {...register("password")}
-          />
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              placeholder="At least 8 characters"
+              className="pr-11"
+              {...register("password")}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-fg-faint hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+              tabIndex={-1}
+            >
+              {showPassword ? (
+                <EyeOff className="h-4 w-4" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+            </button>
+          </div>
           {errors.password && (
             <p className="text-xs text-danger">{errors.password.message}</p>
           )}
@@ -126,7 +154,7 @@ export default function LoginPage() {
         ) : null}
         <Button
           type="submit"
-          className="w-full bg-brand text-white hover:bg-brand-hover"
+          className="h-11 w-full bg-brand font-semibold text-brand-fg hover:bg-brand-hover"
           disabled={isSubmitting}
         >
           {isSubmitting ? (
@@ -140,12 +168,12 @@ export default function LoginPage() {
         </Button>
       </form>
       <p className="mt-6 text-center text-sm text-fg-subtle">
-        No account?{" "}
+        New to Cordon?{" "}
         <Link
           href="/signup"
           className="font-medium text-brand underline-offset-4 hover:underline"
         >
-          Create one
+          Start your free trial <span className="cordon-arrow">→</span>
         </Link>
       </p>
     </div>

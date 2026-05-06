@@ -7,19 +7,19 @@ import { signIn } from "next-auth/react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { AlertCircle, Loader2, Sparkles } from "lucide-react";
+import { AlertCircle, Eye, EyeOff, Loader2, Sparkles } from "lucide-react";
 import { isPlanTier, PHONE_RE, PLANS } from "@ecom/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const schema = z.object({
-  businessName: z.string().min(1, "Business name is required"),
-  email: z.string().email(),
-  password: z.string().min(8, "At least 8 characters"),
+  businessName: z.string().min(1, "Business name is required."),
+  email: z.string().email("That doesn't look like an email."),
+  password: z.string().min(8, "At least 8 characters."),
   phone: z
     .string()
-    .regex(PHONE_RE, "Invalid phone")
+    .regex(PHONE_RE, "Use BD format like +8801XXXXXXXXX.")
     .optional()
     .or(z.literal("")),
 });
@@ -32,6 +32,7 @@ function SignupForm() {
   const planParam = params.get("plan");
   const selectedPlan = isPlanTier(planParam) ? PLANS[planParam] : null;
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const {
     register,
@@ -50,7 +51,15 @@ function SignupForm() {
     });
     if (!res.ok) {
       const body = (await res.json().catch(() => ({}))) as { error?: unknown };
-      setError(typeof body.error === "string" ? body.error : "Signup failed");
+      // Map server detail into something the merchant can act on. The API
+      // surfaces the specific reason (duplicate email, weak password, etc.)
+      // — we keep that, but fall back to a friendly default rather than
+      // the bare-string "Signup failed".
+      const detail =
+        typeof body.error === "string"
+          ? body.error
+          : "We couldn't create the account. Check your details and try again.";
+      setError(detail);
       return;
     }
     const signInRes = await signIn("credentials", {
@@ -70,16 +79,17 @@ function SignupForm() {
   }
 
   return (
-    <div className="rounded-2xl border border-stroke/10 bg-surface p-7 shadow-elevated animate-slide-up">
-      <div className="mb-6 space-y-1.5 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg">
-          Create your workspace
+    <div className="cordon-card animate-slide-up border border-stroke/30 bg-surface p-7 shadow-elevated">
+      <div className="mb-6 space-y-2 text-center">
+        <h1 className="text-[1.6rem] font-semibold leading-[1.1] tracking-tight text-fg">
+          Start blocking fake orders{" "}
+          <span className="cordon-serif">in 2 minutes.</span>
         </h1>
         <p className="text-sm text-fg-subtle">
-          Start managing your logistics in under 60 seconds.
+          Create your Cordon workspace. 14-day trial. No credit card.
         </p>
         {selectedPlan ? (
-          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand-subtle px-2.5 py-1 text-xs font-medium text-brand">
+          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">
             <Sparkles className="h-3 w-3" /> 14-day trial · {selectedPlan.name} plan when you upgrade
           </p>
         ) : null}
@@ -110,7 +120,7 @@ function SignupForm() {
           )}
         </div>
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">Work email</Label>
           <Input
             id="email"
             type="email"
@@ -122,13 +132,33 @@ function SignupForm() {
         </div>
         <div className="space-y-2">
           <Label htmlFor="password">Password</Label>
-          <Input
-            id="password"
-            type="password"
-            autoComplete="new-password"
-            placeholder="At least 8 characters"
-            {...register("password")}
-          />
+          <div className="relative">
+            <Input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
+              placeholder="At least 8 characters"
+              className="pr-11"
+              {...register("password")}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((s) => !s)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
+              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center rounded-r-md text-fg-faint hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
+              tabIndex={-1}
+            >
+              {showPassword ? (
+                <EyeOff className="h-4 w-4" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+            </button>
+          </div>
+          <p className="text-2xs text-fg-faint">
+            8+ characters. A passphrase you&apos;ll remember works great.
+          </p>
           {errors.password && (
             <p className="text-xs text-danger">{errors.password.message}</p>
           )}
@@ -138,6 +168,9 @@ function SignupForm() {
             Phone <span className="text-fg-faint">(optional)</span>
           </Label>
           <Input id="phone" placeholder="+8801XXXXXXXXX" {...register("phone")} />
+          <p className="text-2xs text-fg-faint">
+            Used for courier OTP and ops alerts. Optional.
+          </p>
           {errors.phone && <p className="text-xs text-danger">{errors.phone.message}</p>}
         </div>
         {error ? (
@@ -148,20 +181,47 @@ function SignupForm() {
         ) : null}
         <Button
           type="submit"
-          className="w-full bg-brand text-white hover:bg-brand-hover"
+          className="h-11 w-full bg-brand font-semibold text-brand-fg hover:bg-brand-hover"
           disabled={isSubmitting}
         >
           {isSubmitting ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Creating account…
+              Creating workspace…
             </>
           ) : (
-            "Create account"
+            <>
+              Start saving <span className="cordon-arrow">→</span>
+            </>
           )}
         </Button>
       </form>
-      <p className="mt-6 text-center text-sm text-fg-subtle">
+
+      {/* Trust band — mirrors the proof-band on the landing hero so the
+          merchant carries the same hard signals across the click. */}
+      <div className="mt-5 flex items-center justify-center gap-2 text-center text-2xs text-fg-faint">
+        <span className="cordon-pulse" aria-hidden />
+        <span>
+          Used by{" "}
+          <strong className="font-semibold text-fg-muted">200+ BD merchants</strong>
+          {" · "}
+          <strong className="font-semibold text-fg-muted">৳45 Cr+</strong> RTO prevented
+        </span>
+      </div>
+
+      <p className="mt-5 text-center text-xs text-fg-faint">
+        By creating an account, you agree to our{" "}
+        <Link href="/legal/terms" className="underline-offset-4 hover:text-fg-muted hover:underline">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/legal/privacy" className="underline-offset-4 hover:text-fg-muted hover:underline">
+          Privacy Policy
+        </Link>
+        .
+      </p>
+
+      <p className="mt-5 text-center text-sm text-fg-subtle">
         Already have an account?{" "}
         <Link
           href="/login"
