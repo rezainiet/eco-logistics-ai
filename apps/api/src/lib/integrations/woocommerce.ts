@@ -154,6 +154,20 @@ function normalizeWooOrder(
  * existing collector. Idempotent — existing matching subscriptions are
  * detected and skipped.
  */
+export interface WooWebhookSubscription {
+  topic: string;
+  id: number;
+  deliveryUrl: string;
+}
+
+export interface RegisterWooWebhooksResult {
+  registered: WooWebhookSubscription[];
+  errors: string[];
+  /** Resolved auth wire form, when known. Populated by adapters that
+   *  ran an auth probe; this helper itself currently always uses Basic. */
+  authStrategy?: "basic" | "querystring";
+}
+
 export async function registerWooWebhooks(args: {
   siteUrl: string;
   consumerKey: string;
@@ -162,16 +176,24 @@ export async function registerWooWebhooks(args: {
   webhookSecret: string;
   topics?: string[];
   fetchImpl?: typeof fetch;
-}): Promise<{ registered: string[]; errors: string[] }> {
+  /**
+   * Resolved Woo auth wire form. Currently informational — the helper
+   * uses Basic regardless. Persisted via the return value so callers can
+   * round-trip the strategy without re-probing.
+   */
+  authStrategy?: "basic" | "querystring";
+}): Promise<RegisterWooWebhooksResult> {
   const fetcher = args.fetchImpl ?? fetch;
   const base = args.siteUrl.replace(/\/$/, "");
   const auth = "Basic " +
     Buffer.from(`${args.consumerKey}:${args.consumerSecret}`).toString("base64");
   const topics = args.topics ?? ["order.created", "order.updated"];
-  const registered: string[] = [];
+  const registered: WooWebhookSubscription[] = [];
   const errors: string[] = [];
 
-  let existing: Map<string, string> = new Map();
+  // Map topic → (id, deliveryUrl) for already-registered subscriptions
+  // so re-runs can adopt the existing id rather than create a duplicate.
+  const existing = new Map<string, { id: number; deliveryUrl: string }>();
   try {
     // FIX (SSRF): route the listing through safeFetch so a merchant-
     // supplied site URL whose hostname resolves into a private range is
@@ -183,10 +205,20 @@ export async function registerWooWebhooks(args: {
       fetcher,
     );
     if (listRes.ok) {
-      const body = (await listRes.json()) as Array<{ topic?: string; delivery_url?: string; status?: string }>;
+      const body = (await listRes.json()) as Array<{
+        id?: number;
+        topic?: string;
+        delivery_url?: string;
+        status?: string;
+      }>;
       for (const w of body) {
-        if (w.delivery_url === args.callbackUrl && w.topic && w.status === "active") {
-          existing.set(w.topic, w.delivery_url);
+        if (
+          w.delivery_url === args.callbackUrl &&
+          w.topic &&
+          w.status === "active" &&
+          typeof w.id === "number"
+        ) {
+          existing.set(w.topic, { id: w.id, deliveryUrl: w.delivery_url });
         }
       }
     }
@@ -195,8 +227,9 @@ export async function registerWooWebhooks(args: {
   }
 
   for (const topic of topics) {
-    if (existing.has(topic)) {
-      registered.push(topic);
+    const seen = existing.get(topic);
+    if (seen) {
+      registered.push({ topic, id: seen.id, deliveryUrl: seen.deliveryUrl });
       continue;
     }
     try {
@@ -222,7 +255,17 @@ export async function registerWooWebhooks(args: {
         fetcher,
       );
       if (res.ok) {
-        registered.push(topic);
+        // Capture the upstream id so disconnect can DELETE /webhooks/{id}
+        // symmetrically. Falls back to id=0 if the response body is
+        // missing the field — the disconnect path filters those out.
+        let id = 0;
+        try {
+          const body = (await res.json()) as { id?: number };
+          if (typeof body.id === "number") id = body.id;
+        } catch {
+          /* non-JSON body — leave id at 0 */
+        }
+        registered.push({ topic, id, deliveryUrl: args.callbackUrl });
       } else {
         const detail = await res.text().catch(() => "");
         errors.push(`${topic}: ${res.status} ${detail.slice(0, 120)}`);
@@ -231,7 +274,11 @@ export async function registerWooWebhooks(args: {
       errors.push(`${topic}: ${(err as Error).message}`);
     }
   }
-  return { registered, errors };
+  return {
+    registered,
+    errors,
+    ...(args.authStrategy ? { authStrategy: args.authStrategy } : {}),
+  };
 }
 
 export const wooAdapter: IntegrationAdapter = {

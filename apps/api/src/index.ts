@@ -65,6 +65,10 @@ import {
   registerAwbReconcileWorker,
   scheduleAwbReconcile,
 } from "./workers/awbReconcile.js";
+import {
+  startPendingJobReplayWorker,
+  ensureRepeatableSweep,
+} from "./workers/pendingJobReplay.js";
 
 /**
  * Parse the `TRUSTED_PROXIES` env into the value Express's `trust proxy`
@@ -146,6 +150,10 @@ async function main() {
     registerTrialReminderWorker();
     registerSubscriptionGraceWorker();
     registerAwbReconcileWorker();
+    // Dead-letter replay sweeper. The worker is idempotent — registerWorker
+    // returns the existing instance if one is already bound to this queue,
+    // so a hot-reload or duplicate boot path can't double-register.
+    startPendingJobReplayWorker();
     await scheduleTrackingSync();
     await scheduleWebhookRetry();
     await scheduleCartRecovery();
@@ -155,6 +163,13 @@ async function main() {
     await scheduleAutomationWatchdog();
     await scheduleAwbReconcile();
     await scheduleFraudWeightTuning();
+    // Repeatable sweep tick. BullMQ keys repeat jobs by hash of (name, repeat
+    // opts), so calling this on every boot does NOT create duplicate cron
+    // entries — the second call is a no-op against the same key.
+    await ensureRepeatableSweep();
+    console.log(
+      "[boot] pending-job-replay armed (worker concurrency=1, sweep every 30s)",
+    );
   }
 
   const app = express();

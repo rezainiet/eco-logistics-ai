@@ -28,7 +28,18 @@ interface WebhookProcessJobData {
 }
 
 export interface WebhookProcessJobResult {
-  status: "succeeded" | "failed" | "dead_lettered" | "skipped";
+  /**
+   * Mirrors the inbox row's terminal `status` after `replayWebhookInbox`
+   * runs. `needs_attention` covers normalization-skip envelopes
+   * (missing phone, etc.) that aren't retryable — the merchant has to
+   * fix the storefront before subsequent deliveries succeed.
+   */
+  status:
+    | "succeeded"
+    | "failed"
+    | "dead_lettered"
+    | "skipped"
+    | "needs_attention";
   attempts: number;
   duplicate?: boolean;
   orderId?: string;

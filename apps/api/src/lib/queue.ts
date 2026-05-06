@@ -25,6 +25,8 @@ export const QUEUE_NAMES = {
   automationSms: "automation-sms",
   automationStale: "automation-stale",
   awbReconcile: "awb-reconcile",
+  /** Polling fallback for upstream order sync — runs alongside webhooks. */
+  orderSync: "order-sync",
   /** DLQ replay sweeper — drains PendingJob rows back onto BullMQ. */
   pendingJobReplay: "pending-job-replay",
 } as const;

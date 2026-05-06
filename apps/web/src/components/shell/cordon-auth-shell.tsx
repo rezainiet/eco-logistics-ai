@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ShieldCheck,
   Truck,
+  type LucideIcon,
 } from "lucide-react";
 
 /**
@@ -216,7 +217,11 @@ function Highlight({
   icon: Icon,
   children,
 }: {
-  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
+  // Use LucideIcon directly so the prop type matches what the lucide
+  // imports actually expose (ForwardRefExoticComponent w/ Booleanish
+  // aria-hidden). A hand-rolled React.ComponentType<{ "aria-hidden"?:
+  // boolean }> drifts away from lucide's Validator and tsc bails.
+  icon: LucideIcon;
   children: ReactNode;
 }) {
   return (

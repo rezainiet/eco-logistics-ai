@@ -71,6 +71,22 @@ const integrationSchema = new Schema(
       lastEventAt: { type: Date },
       failures: { type: Number, default: 0 },
       lastError: { type: String, trim: true, maxlength: 500 },
+      // Per-topic subscription metadata captured from the upstream
+      // platform's webhook-create response. Populated on connect /
+      // retryWooWebhooks; consumed by disconnect to issue DELETE
+      // /webhooks/{id} symmetric uninstalls instead of re-listing the
+      // remote subscriptions on every teardown.
+      subscriptions: {
+        type: [
+          {
+            topic: { type: String, trim: true, maxlength: 120 },
+            id: { type: Number },
+            deliveryUrl: { type: String, trim: true, maxlength: 500 },
+            _id: false,
+          },
+        ],
+        default: undefined,
+      },
     },
     permissions: { type: [String], default: [] },
     health: {
@@ -85,6 +101,29 @@ const integrationSchema = new Schema(
     connectedAt: { type: Date },
     disconnectedAt: { type: Date },
     lastSyncAt: { type: Date },
+    // Observability snapshot — surfaced on the dashboard's Connections
+    // panel + Health card. Maintained by the test/sync paths so a
+    // merchant sees "Healthy / Sync issue / Idle" without round-tripping
+    // through webhookStatus + health every render. `lastError` here is
+    // the top-level "most recent failure of any kind"; `health.lastError`
+    // tracks credential-test history specifically and survives a
+    // successful sync.
+    lastSyncStatus: {
+      type: String,
+      enum: ["ok", "error", "idle"],
+      default: "idle",
+    },
+    lastError: { type: String, trim: true, maxlength: 500 },
+    errorCount: { type: Number, default: 0, min: 0 },
+    lastWebhookAt: { type: Date },
+    lastImportAt: { type: Date },
+    /**
+     * System-set "stop trying recovery" flag. The alert worker flips this
+     * on after MAX_REPLAY_ATTEMPTS have been exhausted; the dashboard
+     * disables retry/sync buttons on degraded rows so the merchant doesn't
+     * spend clicks on a connector that needs a full reconnect.
+     */
+    degraded: { type: Boolean, default: false },
     /**
      * Soft pause — when set, the webhook ingestion route short-circuits
      * with `202 paused` and the polling worker skips this row. The

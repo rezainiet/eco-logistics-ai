@@ -67,11 +67,37 @@ export function isNormalizationSkip(
   return !!v && typeof v === "object" && (v as NormalizationSkip).__skip === true;
 }
 
+/**
+ * Discriminated failure category for `testConnection`. The connect /
+ * test handlers branch on this:
+ *   - `auth_rejected` → credentials are invalid; flip the row to
+ *     `disconnected` so the merchant must reconnect.
+ *   - `transient` / `timeout` → network blip; keep status as-is.
+ *   - `unknown` → adapter couldn't classify; treat as a soft failure.
+ *
+ * Adapters MAY emit a `kind` on success too (currently unused) so future
+ * code can distinguish e.g. degraded-but-functional results.
+ */
+export type ConnectionTestKind =
+  | "auth_rejected"
+  | "transient"
+  | "timeout"
+  | "unknown";
+
 export interface ConnectionTestResult {
   ok: boolean;
+  /** Failure category for routing decisions. Optional on success. */
+  kind?: ConnectionTestKind;
   detail?: string;
   /** Optional permission/scope strings to surface in the UI. */
   scopes?: string[];
+  /**
+   * Resolved Woo wire form ("basic" header vs "querystring" params) the
+   * adapter found working during the test. Persisted on the credentials
+   * blob so subsequent calls skip the Basic→querystring escalation
+   * probe. Shopify ignores this — it's WooCommerce-only.
+   */
+  authStrategy?: "basic" | "querystring";
 }
 
 export interface FetchSampleResult {
@@ -88,6 +114,13 @@ export interface IntegrationCredentials {
   consumerKey?: string;
   consumerSecret?: string;
   siteUrl?: string;
+  /**
+   * Plaintext Woo auth strategy — NOT a secret. Stored alongside the
+   * encrypted creds so the worker / disconnect / retry calls can pass
+   * the resolved wire form to `wooFetch` and skip the Basic → querystring
+   * escalation probe on Cloudflare-fronted hosts.
+   */
+  authStrategy?: "basic" | "querystring";
 }
 
 export interface IntegrationAdapter {

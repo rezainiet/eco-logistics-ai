@@ -345,10 +345,17 @@ describe("Sprint C — Shopify auto-webhook registration", () => {
       }
       return new Response("{}", { status: 201 });
     });
+    // Pin the topic set so this spec stays focused on the
+    // list-then-skip-already-registered behavior rather than tracking
+    // every default topic the helper currently subscribes to. The
+    // production default also includes `app/uninstalled`, but adding
+    // that here would only widen the assertion without changing the
+    // behavior under test.
     const result = await registerShopifyWebhooks({
       shopDomain: "demo.myshopify.com",
       accessToken: "tok",
       callbackUrl: "https://api.example.com/api/integrations/webhook/shopify/x",
+      topics: ["orders/create", "orders/updated"],
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
     expect(result.registered).toContain("orders/create");
@@ -365,10 +372,13 @@ describe("Sprint C — Shopify auto-webhook registration", () => {
       if (!init?.method || init.method === "GET") return new Response(JSON.stringify({ webhooks: [] }), { status: 200 });
       return new Response("forbidden", { status: 403 });
     });
+    // Same scoping as above — we want to verify error capture per
+    // topic, not the size of the default topic list.
     const result = await registerShopifyWebhooks({
       shopDomain: "demo.myshopify.com",
       accessToken: "tok",
       callbackUrl: "https://example.com/x",
+      topics: ["orders/create", "orders/updated"],
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
     expect(result.registered).toEqual([]);
@@ -395,7 +405,12 @@ describe("Sprint C — Woo auto-webhook registration", () => {
       webhookSecret: "secret",
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
-    expect(result.registered).toEqual(
+    // `registered` carries per-topic { topic, id, deliveryUrl } objects
+    // so the disconnect path can DELETE /webhooks/{id} symmetrically.
+    // We assert on the topic projection — the id is whatever the WC
+    // POST response carries (here 0, since the mock returns "{}").
+    const topics = result.registered.map((s) => s.topic);
+    expect(topics).toEqual(
       expect.arrayContaining(["order.created", "order.updated"]),
     );
     expect(result.errors).toEqual([]);

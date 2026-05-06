@@ -107,8 +107,14 @@ describe("integrations router + connectors", () => {
   it("connect(shopify) without env or merchant credentials surfaces a friendly error", async () => {
     const prevKey = process.env.SHOPIFY_APP_API_KEY;
     const prevSecret = process.env.SHOPIFY_APP_API_SECRET;
-    delete process.env.SHOPIFY_APP_API_KEY;
-    delete process.env.SHOPIFY_APP_API_SECRET;
+    // Set to empty string rather than `delete` — env.ts re-runs
+    // `dotenv.config()` on every module load, and dotenv re-populates any
+    // *unset* var from the on-disk `.env` (which carries a real local
+    // value on dev machines). Empty strings survive because dotenv only
+    // fills missing keys, and the production code's `if (!appKey)` guard
+    // treats "" the same as undefined.
+    process.env.SHOPIFY_APP_API_KEY = "";
+    process.env.SHOPIFY_APP_API_SECRET = "";
     vi.resetModules();
     const { appRouter } = await import("../src/server/routers/index.js");
     try {
@@ -620,18 +626,22 @@ describe("integrations router + connectors", () => {
 
   // ─── Sprint B — Plan gate enforcement ────────────────────────────────
 
-  it("starter tier cannot connect Shopify (provider locked)", async () => {
+  it("starter tier cannot connect WooCommerce (Growth+ provider)", async () => {
+    // Starter ships with `["csv", "shopify"]` — Shopify is intentionally
+    // included so the trial onboarding promise ("Connect Shopify or
+    // WooCommerce in 2 minutes") is deliverable. WooCommerce stays a
+    // Growth-tier upsell, so a Starter merchant attempting to connect
+    // it must hit the provider gate.
     const m = await createMerchant({ tier: "starter" });
     const caller = callerFor(authUserFor(m));
     await expect(
       caller.integrations.connect({
-        provider: "shopify",
-        shopDomain: "demo.myshopify.com",
-        apiKey: "k",
-        apiSecret: "s",
-        scopes: ["read_orders"],
+        provider: "woocommerce",
+        siteUrl: "https://store.example.com",
+        consumerKey: "ck",
+        consumerSecret: "cs",
       }),
-    ).rejects.toThrow(/entitlement_blocked:integration_provider_locked:shopify/);
+    ).rejects.toThrow(/entitlement_blocked:integration_provider_locked:woocommerce/);
   });
 
   it("starter tier can still connect CSV (universally allowed)", async () => {

@@ -236,21 +236,28 @@ export async function redactShop(args: {
   const results: RedactionResult[] = [];
   const filter = { merchantId };
 
-  for (const [name, model] of [
-    ["AuditLog", AuditLog],
-    ["CallLog", CallLog],
-    ["Notification", Notification],
-    ["Payment", Payment],
-    ["RecoveryTask", RecoveryTask],
-    ["TrackingEvent", TrackingEvent],
-    ["TrackingSession", TrackingSession],
-    ["WebhookInbox", WebhookInbox],
-    ["FraudSignal", FraudSignal],
-    ["FraudPrediction", FraudPrediction],
-    ["MerchantStats", MerchantStats],
-    ["Order", Order],
-    ["Integration", Integration],
-  ] as const) {
+  // Each Model has a slightly different InferSchema-derived generic, so
+  // the array literal narrows `model` into a giant Model<T1>|Model<T2>|…
+  // union whose `deleteMany` overloads no longer share a callable
+  // signature. Widen to `Model<unknown>` for the loop — every Mongoose
+  // model exposes the same `deleteMany(filter)` shape we rely on here.
+  type AnyModel = { deleteMany: (filter: unknown) => Promise<{ deletedCount?: number }> };
+  const targets: ReadonlyArray<readonly [string, AnyModel]> = [
+    ["AuditLog", AuditLog as unknown as AnyModel],
+    ["CallLog", CallLog as unknown as AnyModel],
+    ["Notification", Notification as unknown as AnyModel],
+    ["Payment", Payment as unknown as AnyModel],
+    ["RecoveryTask", RecoveryTask as unknown as AnyModel],
+    ["TrackingEvent", TrackingEvent as unknown as AnyModel],
+    ["TrackingSession", TrackingSession as unknown as AnyModel],
+    ["WebhookInbox", WebhookInbox as unknown as AnyModel],
+    ["FraudSignal", FraudSignal as unknown as AnyModel],
+    ["FraudPrediction", FraudPrediction as unknown as AnyModel],
+    ["MerchantStats", MerchantStats as unknown as AnyModel],
+    ["Order", Order as unknown as AnyModel],
+    ["Integration", Integration as unknown as AnyModel],
+  ];
+  for (const [name, model] of targets) {
     const r = await model.deleteMany(filter);
     results.push({ collection: name, deleted: r.deletedCount });
   }

@@ -260,7 +260,9 @@ describe("safeEnqueue contract", () => {
     );
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
+    // The `ok: true` branch has two shapes (queued vs dead-lettered);
+    // narrow on the absence of `deadLettered` before reading `jobId`.
+    if (result.ok && !("deadLettered" in result)) {
       expect(result.jobId).toBe("job-123");
     }
     expect(mod.getEnqueueFailureCount(mod.QUEUE_NAMES.automationSms)).toBe(0);

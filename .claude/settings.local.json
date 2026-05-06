@@ -149,7 +149,20 @@
       "Bash(git rm *)",
       "Bash(awk -F: '{print $1}')",
       "Bash(npm --workspace packages/types run build)",
-      "Bash(NEXT_TELEMETRY_DISABLED=1 npm --workspace apps/web run build)"
+      "Bash(NEXT_TELEMETRY_DISABLED=1 npm --workspace apps/web run build)",
+      "Bash(rm -f /tmp/replay-boot-probe.mjs)",
+      "Bash(git --no-pager diff apps/api/src/index.ts)",
+      "Bash(npm --workspace apps/api run test -- --run tests/downgrade.enforcement.test.ts)",
+      "Bash(grep -E \"\\\\.js$|\\\\.d\\\\.ts$|\\\\.map$\")",
+      "Bash(npm --workspace apps/api run test -- --run tests/downgrade.enforcement.test.ts tests/integrations.test.ts tests/sprintC.test.ts)",
+      "Bash(npm --workspace apps/api run test -- --run tests/integrations.test.ts -t \"connect\\(shopify\\) without env\")",
+      "Bash(npm --workspace apps/api run test -- --run tests/integrations.test.ts)",
+      "Bash(npm --workspace apps/api run test -- --run tests/integrations.test.ts -t \"without env or merchant credentials\")",
+      "Bash(npm --workspace apps/api run test -- --run tests/sprintC.test.ts)",
+      "Bash(npm --workspace packages/types run typecheck)",
+      "Bash(npm --workspaces run typecheck --if-present)",
+      "Bash(npm --workspace apps/api run build:strict)",
+      "Bash(npm --workspace apps/api run test -- --run tests/downgrade.enforcement.test.ts tests/integrations.test.ts tests/sprintC.test.ts tests/pending-job-replay.test.ts tests/queue-reliability.test.ts tests/billing.test.ts tests/manual-payments.test.ts)"
     ]
   }
 }
