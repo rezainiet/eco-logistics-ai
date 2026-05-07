@@ -9,10 +9,8 @@ import {
 } from "./merchantRateLimit.js";
 
 export const QUEUE_NAMES = {
-  verifyOrder: "verify-order",
   tracking: "tracking-sync",
   risk: "risk-recompute",
-  subscription: "subscription-sweep",
   fraudWeightTuning: "fraud-weight-tuning",
   webhookProcess: "webhook-process",
   webhookRetry: "webhook-retry",

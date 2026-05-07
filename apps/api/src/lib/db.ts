@@ -102,3 +102,18 @@ async function dropLegacyWebhookInboxTtl(): Promise<void> {
     throw err;
   }
 }
+
+/**
+ * Symmetric counterpart to `connectDb`. Closes the mongoose connection
+ * cleanly so an in-flight redeploy doesn't leave queued queries to be
+ * torn by `process.exit`. Idempotent — calling on an already-closed
+ * connection is a no-op.
+ */
+export async function disconnectDb(): Promise<void> {
+  if (!connected) return;
+  try {
+    await mongoose.disconnect();
+  } finally {
+    connected = false;
+  }
+}

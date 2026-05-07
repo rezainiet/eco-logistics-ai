@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { env } from "./env.js";
-import { connectDb } from "./lib/db.js";
+import { connectDb, disconnectDb } from "./lib/db.js";
 import {
   captureException,
   installProcessHooks,
@@ -65,6 +65,10 @@ import {
   registerAwbReconcileWorker,
   scheduleAwbReconcile,
 } from "./workers/awbReconcile.js";
+import {
+  registerOrderSyncWorker,
+  scheduleOrderSync,
+} from "./workers/orderSync.worker.js";
 import {
   startPendingJobReplayWorker,
   ensureRepeatableSweep,
@@ -150,6 +154,12 @@ async function main() {
     registerTrialReminderWorker();
     registerSubscriptionGraceWorker();
     registerAwbReconcileWorker();
+    // Polling fallback for upstream order sync — runs alongside webhooks
+    // so a merchant whose webhook delivery silently breaks (uninstall +
+    // reinstall, scope drop, platform outage) still gets their orders
+    // pulled in. Absence of this worker is the canonical "silent revenue
+    // hole" failure mode; it was previously declared but not wired.
+    registerOrderSyncWorker();
     // Dead-letter replay sweeper. The worker is idempotent — registerWorker
     // returns the existing instance if one is already bound to this queue,
     // so a hot-reload or duplicate boot path can't double-register.
@@ -163,12 +173,21 @@ async function main() {
     await scheduleAutomationWatchdog();
     await scheduleAwbReconcile();
     await scheduleFraudWeightTuning();
+    // Order-sync repeatable. Like ensureRepeatableSweep below, idempotent
+    // on re-boot — the function clears prior repeatables matching the
+    // job name before re-adding, so multi-instance deploys don't double
+    // schedule. Default cadence is 5 min (DEFAULT_INTERVAL_MS in the
+    // worker file).
+    await scheduleOrderSync();
     // Repeatable sweep tick. BullMQ keys repeat jobs by hash of (name, repeat
     // opts), so calling this on every boot does NOT create duplicate cron
     // entries — the second call is a no-op against the same key.
     await ensureRepeatableSweep();
     console.log(
       "[boot] pending-job-replay armed (worker concurrency=1, sweep every 30s)",
+    );
+    console.log(
+      "[boot] order-sync polling fallback armed (worker concurrency=1, sweep every 5m)",
     );
   }
 
@@ -267,11 +286,70 @@ async function main() {
     console.log(`[api] listening on http://localhost:${env.API_PORT}`);
   });
 
+  /**
+   * Graceful shutdown sequence. Order matters:
+   *
+   *   1. Stop accepting NEW connections, but let in-flight ones finish.
+   *      `server.close(cb)` resolves only when the last live socket
+   *      closes — without the await, `process.exit` in step 4 would
+   *      race the response.
+   *   2. Drain BullMQ workers and queues. `shutdownQueues` calls
+   *      `worker.close()` on each worker, which lets the current job
+   *      finish before disposing — so a webhook mid-process is not
+   *      torn. The shared Redis connection is `quit`'d at the end.
+   *   3. Close the Mongo connection. Out-of-band script paths already
+   *      do this; the api server skipped it before, so a SIGTERM left
+   *      in-flight queries to be force-closed by `process.exit`.
+   *   4. `process.exit(0)` only after 1–3 have resolved.
+   *
+   * Idempotent: a second SIGTERM during the shutdown does not restart
+   * the chain. A 25 s watchdog force-exits if any step deadlocks; this
+   * sits comfortably inside Railway's default 30 s drain window.
+   */
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    console.log(`[api] ${signal} received, shutting down`);
-    server.close();
-    await shutdownQueues().catch((err) => console.error("[api] queue shutdown", err));
-    process.exit(0);
+    if (shuttingDown) {
+      console.log(`[shutdown] ${signal} ignored — shutdown already in progress`);
+      return;
+    }
+    shuttingDown = true;
+    console.log(`[shutdown] ${signal} received — draining`);
+
+    // Watchdog: if any step deadlocks (a stuck Mongo socket, a runaway
+    // worker job that never yields), force-exit before the platform
+    // SIGKILLs us. `unref()` so this timer never on-its-own keeps the
+    // process alive after a clean shutdown.
+    const watchdog = setTimeout(() => {
+      console.error("[shutdown] watchdog tripped at 25s — forcing exit(1)");
+      process.exit(1);
+    }, 25_000);
+    watchdog.unref();
+
+    try {
+      await new Promise<void>((resolve) => {
+        server.close((err?: Error) => {
+          if (err) console.error("[shutdown] http close error", err.message);
+          else console.log("[shutdown] http server closed");
+          resolve();
+        });
+      });
+
+      await shutdownQueues().catch((err) =>
+        console.error("[shutdown] queue shutdown error", (err as Error).message),
+      );
+      console.log("[shutdown] queues drained");
+
+      await disconnectDb().catch((err) =>
+        console.error("[shutdown] db disconnect error", (err as Error).message),
+      );
+      console.log("[shutdown] mongo disconnected");
+
+      console.log("[shutdown] complete");
+      process.exit(0);
+    } catch (err) {
+      console.error("[shutdown] unexpected error", (err as Error).message);
+      process.exit(1);
+    }
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

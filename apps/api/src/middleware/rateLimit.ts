@@ -52,14 +52,6 @@ export const passwordResetLimiter = rateLimit({
   message: { error: "too many reset attempts — try again later" },
 });
 
-export const globalLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 300,
-  standardHeaders: true,
-  legacyHeaders: false,
-  store: redisStore(),
-});
-
 /**
  * Per-IP limiter for inbound webhooks. Couriers can legitimately burst
  * (status updates fan out per-package) so the budget is generous, but the

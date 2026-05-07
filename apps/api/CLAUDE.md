@@ -12,11 +12,59 @@ Every BullMQ worker file in `src/workers/` must:
 
 If a worker exists in `src/workers/` but has no `register*` call in `src/index.ts`, it is dead in production no matter how many tests cover it. Treat that as a bug, not a feature flag.
 
-### Known gap (do not ship as-is)
-- `pendingJobReplay.ts` exports `startPendingJobReplayWorker()` and `ensureRepeatableSweep()` but `src/index.ts` does not call either. The dead-letter sweeper is therefore not running in production. Wire it before relying on `PendingJob` retries.
+### Currently wired (runtime truth — last verified 2026-05-07)
+Every worker file in `src/workers/` is wired. Verified by grep of every
+`register*Worker` and `schedule*` export against `src/index.ts`. The set
+boots in this order under `if (env.REDIS_URL)`:
+
+1. `registerTrackingSyncWorker` + `scheduleTrackingSync`
+2. `registerRiskRecomputeWorker` (consumer-only)
+3. `registerWebhookRetryWorker` + `scheduleWebhookRetry`
+4. `registerWebhookProcessWorker` (consumer-only)
+5. `registerFraudWeightTuningWorker` + `scheduleFraudWeightTuning`
+6. `registerCommerceImportWorker` (consumer-only)
+7. `registerAutomationBookWorker` (consumer-only)
+8. `registerAutomationSmsWorker` (consumer-only)
+9. `registerAutomationStaleWorker` + `scheduleAutomationStaleSweep`
+10. `registerAutomationWatchdogWorker` + `scheduleAutomationWatchdog`
+11. `registerCartRecoveryWorker` + `scheduleCartRecovery`
+12. `registerTrialReminderWorker` + `scheduleTrialReminder`
+13. `registerSubscriptionGraceWorker` + `scheduleSubscriptionGrace`
+14. `registerAwbReconcileWorker` + `scheduleAwbReconcile`
+15. **`registerOrderSyncWorker` + `scheduleOrderSync`** — polling
+    fallback for upstream order ingest. Wired 2026-05-07; the comment
+    in `lib/queue.ts` saying "runs alongside webhooks" is now true.
+16. `startPendingJobReplayWorker` + `ensureRepeatableSweep` — DLQ
+    replay sweeper. The dead-letter floor for `safeEnqueue`.
+
+If you're auditing this list against `src/index.ts`, both `register*`
+calls and `schedule*` calls must be present for every worker that has
+both exported. Adding a worker file without wiring it ships dead code.
 
 ### Library functions vs worker wrappers
 A worker file is a thin BullMQ wrapper around library logic in `src/lib/`. The library is what tests should import — the wrapper exists only so the library runs as a job. Removing an unwired wrapper is safe; removing the library underneath it usually isn't.
+
+## Graceful shutdown contract
+
+`src/index.ts` registers a single `shutdown(signal)` handler for SIGINT
+and SIGTERM. The order is intentional and any new code that touches
+shutdown must preserve it:
+
+1. **Stop accepting new connections**: `await new Promise(r =>
+   server.close(() => r()))`. Without the await, in-flight requests
+   race `process.exit` and respond with TCP RST.
+2. **Drain workers + queues**: `await shutdownQueues()`. BullMQ
+   `worker.close()` lets the current job finish, then disposes; the
+   shared Redis connection is `quit`'d at the end.
+3. **Close Mongo**: `await disconnectDb()`. The api server used to
+   skip this; SIGTERM left in-flight queries to be force-closed by
+   `process.exit`.
+4. **`process.exit(0)`** only after 1–3 resolve.
+
+A 25 s watchdog `setTimeout` (`unref`'d) force-exits if any step
+deadlocks; this sits inside Railway's default 30 s drain window with
+margin. The handler is idempotent — a second SIGTERM during shutdown
+is logged and ignored.
 
 ## Routers
 - tRPC routers live in `src/server/routers/`, composed into `src/server/routers/index.ts` as `appRouter`.
