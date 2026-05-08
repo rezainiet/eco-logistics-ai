@@ -169,16 +169,12 @@
 }
 
 @layer utilities {
-  .glass {
-    background-color: hsl(var(--surface) / 0.55);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-  }
-  .glass-strong {
-    background-color: hsl(var(--surface) / 0.78);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-  }
+  /* `.glass` / `.glass-strong` utilities removed in the
+   * glassmorphism cleanup. ConfirmX is COD operational
+   * infrastructure, not a frosted SaaS surface — backdrop-blur on
+   * dashboard chrome contradicts the command-center direction.
+   * Audit § "Glassmorphism" (2026-05-09). Dialog overlays keep their
+   * blur since that's a modal-context affordance, not chrome. */
   .font-mono {
     font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
   }

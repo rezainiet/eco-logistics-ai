@@ -133,7 +133,7 @@ export function Topbar({ userLabel }: { userLabel: string }) {
   const notificationCount = useNotificationCount();
 
   return (
-    <div className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-stroke/8 bg-surface-base/75 px-4 backdrop-blur-md md:px-6">
+    <div className="sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-stroke/8 bg-surface-overlay px-4 md:px-6">
       <nav
         aria-label="Breadcrumb"
         className="flex min-w-0 flex-1 items-center gap-1.5 pl-10 md:pl-0"

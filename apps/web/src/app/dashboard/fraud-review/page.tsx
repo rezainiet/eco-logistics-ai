@@ -231,7 +231,7 @@ export default function FraudReviewPage() {
         <div
           role="status"
           aria-live="polite"
-          className="sticky top-2 z-10 flex items-start gap-3 rounded-lg border border-warning-border bg-warning-subtle/95 p-3 text-xs shadow-md backdrop-blur"
+          className="sticky top-2 z-10 flex items-start gap-3 rounded-lg border border-warning-border bg-warning-subtle p-3 text-xs shadow-md"
         >
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
           <div className="min-w-0 flex-1 space-y-0.5">
@@ -559,7 +559,7 @@ export default function FraudReviewPage() {
                   row, in-flow layout. No regression on operator
                   desktop workflows.
                 */}
-                <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface/95 px-6 py-3 backdrop-blur-sm md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4 md:backdrop-blur-none">
+                <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
                   <Button
                     className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
                     disabled={
