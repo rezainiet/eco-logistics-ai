@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
 
 /**
  * Interactive ROI calculator for the marketing landing.
@@ -57,10 +56,9 @@ export function RoiCalculator() {
   }, [orders, aov, rto]);
 
   // Broadcast the snapshot so FloatingLossIndicator + PricingHighlighter
-  // + ExitIntentModal (mounted elsewhere on the page) can react. We also
-  // stash the latest snapshot on `window` so late-mounting listeners
-  // (notably the exit-intent modal) can read state-of-the-world rather
-  // than waiting for the next slider event.
+  // (mounted elsewhere on the page) can react. We also stash the latest
+  // snapshot on `window` so late-mounting listeners can read state-of-
+  // the-world rather than waiting for the next slider event.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const detail = {
@@ -171,112 +169,7 @@ export function RoiCalculator() {
           14-day trial · cancel anytime · no card required
         </span>
       </div>
-
-      <RoiEmailCapture
-        snapshot={{
-          orders,
-          aov,
-          rto,
-          monthlySavings: Math.round(calc.monthlySavings),
-          annualSavings: Math.round(calc.annualSavings),
-          plan: calc.plan.name,
-        }}
-      />
     </div>
-  );
-}
-
-/**
- * Lead-capture form. Lives inside the calculator so non-clickers (people
- * who saw a big number but aren't ready to start a trial) can still convert
- * into an emailable lead. Replace the no-op onSubmit with your real lead
- * endpoint (HubSpot/Mailchimp/internal API) when ready.
- */
-function RoiEmailCapture({
-  snapshot,
-}: {
-  snapshot: {
-    orders: number;
-    aov: number;
-    rto: number;
-    monthlySavings: number;
-    annualSavings: number;
-    plan: string;
-  };
-}) {
-  const [email, setEmail] = useState("");
-  const [state, setState] = useState<"idle" | "sending" | "sent" | "error">(
-    "idle",
-  );
-
-  async function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      setState("error");
-      return;
-    }
-    setState("sending");
-    try {
-      // TODO: wire to a real lead endpoint. For now we capture in
-      // localStorage so the value isn't dropped during early launch.
-      const payload = { email, ...snapshot, at: new Date().toISOString() };
-      if (typeof window !== "undefined") {
-        const prior = JSON.parse(
-          window.localStorage.getItem("cordon:leads") || "[]",
-        );
-        prior.push(payload);
-        window.localStorage.setItem("cordon:leads", JSON.stringify(prior));
-      }
-      setState("sent");
-    } catch {
-      setState("error");
-    }
-  }
-
-  if (state === "sent") {
-    return (
-      <div className="roi-email roi-email-sent">
-        <span className="roi-email-check">✓</span>
-        <div>
-          <strong>Report on its way to {email}.</strong>
-          <span> We&apos;ll send a quarterly check-in with how your numbers compare.</span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <form className="roi-email" onSubmit={onSubmit} noValidate>
-      <div className="roi-email-head">
-        <strong>Not ready to start a trial?</strong>
-        <span> Email yourself this calculation — we&apos;ll keep the snapshot.</span>
-      </div>
-      <div className="roi-email-row">
-        <input
-          type="email"
-          inputMode="email"
-          autoComplete="email"
-          placeholder="you@yourstore.com"
-          value={email}
-          onChange={(e) => {
-            setEmail(e.target.value);
-            if (state === "error") setState("idle");
-          }}
-          aria-label="Email address"
-          required
-        />
-        <button
-          type="submit"
-          className="btn btn-secondary"
-          disabled={state === "sending"}
-        >
-          {state === "sending" ? "Sending…" : "Email me the report"}
-        </button>
-      </div>
-      {state === "error" && (
-        <div className="roi-email-err">Please enter a valid email.</div>
-      )}
-    </form>
   );
 }
 

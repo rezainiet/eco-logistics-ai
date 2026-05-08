@@ -4,7 +4,6 @@ import styles from "./landing.module.css";
 import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
 import { PricingHighlighter } from "./_components/pricing-highlighter";
-import { ExitIntentModal } from "./_components/exit-intent-modal";
 
 const SAAS_BRANDING = getBrandingSync();
 
@@ -18,48 +17,29 @@ const SAAS_BRANDING = getBrandingSync();
  *
  * Styling: app/(marketing)/landing.module.css. The module's outer
  * `.cordonPage` class is hashed; nested rules use :global() so existing
- * class names + the inline JS hooks (`#cordon-nav`, `.cordon-counter`) keep
+ * class names + the inline JS nav-scroll hook (`#cordon-nav`) keep
  * working without renames.
  */
 
 const PAGE_SCRIPT = `
   (function() {
     const nav = document.getElementById('cordon-nav');
-    if (!nav) return;
-    const onScroll = () => {
-      if (window.scrollY > 8) nav.classList.add('scrolled');
-      else nav.classList.remove('scrolled');
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
+    if (nav) {
+      const onScroll = () => {
+        if (window.scrollY > 8) nav.classList.add('scrolled');
+        else nav.classList.remove('scrolled');
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+    }
 
-    const counters = document.querySelectorAll('.cordon-counter');
-    const obs = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (!entry.isIntersecting) return;
-        const el = entry.target;
-        const target = parseInt(el.dataset.target, 10);
-        const suffix = el.dataset.suffix || '';
-        const start = performance.now();
-        const duration = 1400;
-        const animate = (t) => {
-          const p = Math.min((t - start) / duration, 1);
-          const eased = 1 - Math.pow(1 - p, 3);
-          el.textContent = Math.floor(target * eased) + suffix;
-          if (p < 1) requestAnimationFrame(animate);
-          else el.textContent = target + suffix;
-        };
-        requestAnimationFrame(animate);
-        obs.unobserve(el);
-      });
-    }, { threshold: 0.5 });
-    counters.forEach(el => obs.observe(el));
-
-    // Pause decorative animations when their container scrolls off-screen.
-    // Stops the network SVG dash-pulse + small dot pulses from burning CPU
-    // and battery while the section is far above/below the viewport.
-    // The .paused class is consumed in landing.module.css.
-    const animContainers = document.querySelectorAll('.viz, .eyebrow, .urgency');
+    // Pause the only two remaining decorative loops when their container
+    // scrolls off-screen — saves CPU/battery while the section is far
+    // above or below the viewport. Phase 4 simplified the motion set:
+    // - .eyebrow .pulse (hero status heartbeat)
+    // - .viz .viz-pulse (fraud-network SVG dash)
+    // The .paused class is consumed by landing.module.css.
+    const animContainers = document.querySelectorAll('.viz, .eyebrow');
     if (animContainers.length && 'IntersectionObserver' in window) {
       const animObs = new IntersectionObserver((entries) => {
         entries.forEach(e => {
@@ -71,15 +51,188 @@ const PAGE_SCRIPT = `
   })();
 `;
 
+/**
+ * Page-specific metadata override — extends the root-layout metadata
+ * (built via `buildRootMetadata` from the branding lib) with the
+ * marketing surface's specific positioning. metadataBase, icons,
+ * applicationName, robots, and the keyword set all cascade in from the
+ * root. We override only:
+ *   - title + description (more operational than the root's generic
+ *     "stop bleeding RTO" tagline)
+ *   - openGraph.title / .description / .url so social previews match
+ *   - twitter.title / .description for the same reason
+ *   - alternates.canonical so search engines treat "/" as the home URL
+ */
+const PAGE_TITLE = `${SAAS_BRANDING.name} — Bangladesh COD operations OS`;
+const PAGE_DESCRIPTION =
+  `The order operations OS for Bangladesh COD merchants. Real-time fraud ` +
+  `scoring, automated courier booking on Pathao, Steadfast & RedX, and ` +
+  `idempotent webhook delivery for Shopify and WooCommerce.`;
+
 export const metadata = {
-  title: "Cordon — Stop losing money to fake COD orders",
-  description:
-    "The order operations OS for Shopify and WooCommerce stores in Bangladesh. Real-time fraud scoring, automated courier booking on Pathao / Steadfast / RedX, and webhooks you can actually trust.",
+  title: PAGE_TITLE,
+  description: PAGE_DESCRIPTION,
+  alternates: { canonical: "/" },
+  openGraph: {
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
+    url: "/",
+  },
+  twitter: {
+    title: PAGE_TITLE,
+    description: PAGE_DESCRIPTION,
+  },
+};
+
+/* -------------------------------------------------------------------------- */
+/* JSON-LD structured data                                                    */
+/* -------------------------------------------------------------------------- */
+/**
+ * Lightweight schema.org markup, server-rendered as `<script
+ * type="application/ld+json">` blocks. Covers three surfaces:
+ *   - Organization (the company behind the product)
+ *   - SoftwareApplication (the product itself, with real published prices
+ *     from the Pricing section — no fabricated ratings)
+ *   - FAQPage (the existing 6 FAQ items already visible in the DOM —
+ *     legitimate FAQPage candidates per Google's quality guidelines)
+ *
+ * No aggregateRating, no reviewCount, no fabricated trust signals. Every
+ * field is either branding-config-derived or a pricing/copy value already
+ * visible on the page.
+ */
+const SITE_URL = SAAS_BRANDING.homeUrl.replace(/\/$/, "");
+
+const JSON_LD_ORGANIZATION = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: SAAS_BRANDING.name,
+  legalName: SAAS_BRANDING.legalName,
+  url: `${SITE_URL}/`,
+  description: PAGE_DESCRIPTION,
+  email: SAAS_BRANDING.helloEmail,
+  areaServed: {
+    "@type": "Country",
+    name: "Bangladesh",
+  },
+};
+
+const JSON_LD_SOFTWARE_APPLICATION = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: SAAS_BRANDING.name,
+  applicationCategory: "BusinessApplication",
+  operatingSystem: "Web",
+  url: `${SITE_URL}/`,
+  description: PAGE_DESCRIPTION,
+  offers: [
+    {
+      "@type": "Offer",
+      name: "Starter",
+      price: "1990",
+      priceCurrency: "BDT",
+      url: `${SITE_URL}/#pricing`,
+    },
+    {
+      "@type": "Offer",
+      name: "Growth",
+      price: "4990",
+      priceCurrency: "BDT",
+      url: `${SITE_URL}/#pricing`,
+    },
+    {
+      "@type": "Offer",
+      name: "Scale",
+      price: "12990",
+      priceCurrency: "BDT",
+      url: `${SITE_URL}/#pricing`,
+    },
+  ],
+};
+
+const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
+  {
+    q: "What if my courier isn't one of Pathao, Steadfast, or RedX?",
+    a:
+      "We support those three out of the box. eCourier and Paperfly are " +
+      "on the immediate roadmap. If you run a courier we don't cover, the " +
+      "Enterprise plan includes a custom adapter — usually two weeks from " +
+      "kickoff to production.",
+  },
+  {
+    q: "Will fraud detection block real customers?",
+    a:
+      "No order is auto-rejected. The risk score routes orders into one " +
+      "of three buckets — auto-confirm, confirmation call, or human " +
+      "review queue. You stay in control of every threshold, and the " +
+      "model tunes against your store's baseline RTO so a 30%-RTO " +
+      "category doesn't flag normal buyers as risky.",
+  },
+  {
+    q: "How long does setup take?",
+    a:
+      "Under ten minutes for a Shopify or WooCommerce store. Connect the " +
+      "integration, paste your courier API keys, pick an automation mode. " +
+      "The first webhook lands in your inbox within seconds — and it's " +
+      "idempotent, so historical orders flowing in won't double-book.",
+  },
+  {
+    q: "Can I pay in BDT via bKash or Nagad?",
+    a:
+      "Yes — that's the default for BD merchants. Upload a bKash or " +
+      "Nagad receipt and your subscription extends. International cards " +
+      "via Stripe are also supported. We don't charge in USD.",
+  },
+  {
+    q: "What about my Shopify orders that already shipped?",
+    a:
+      "Cordon ingests new orders from the moment you connect — older " +
+      "orders stay where they are. If you want a backfill (typically the " +
+      "last 30 days for risk modeling), the Growth plan and above " +
+      "include a one-click historical sync.",
+  },
+  {
+    q: "What happens to my data if I leave?",
+    a:
+      "Your raw webhook payloads are reaped after 30 days regardless. " +
+      "On cancellation, your order metadata, fraud signals, and tracking " +
+      "history are exportable as JSON or CSV for 90 days, then deleted. " +
+      "We don't retain on-platform data after the export window — " +
+      "written into the contract.",
+  },
+];
+
+const JSON_LD_FAQ_PAGE = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: FAQ_ITEMS.map((f) => ({
+    "@type": "Question",
+    name: f.q,
+    acceptedAnswer: {
+      "@type": "Answer",
+      text: f.a,
+    },
+  })),
 };
 
 export default function HomePage() {
   return (
     <>
+      {/* JSON-LD structured data — Organization, SoftwareApplication,
+          FAQPage. Server-rendered so search engines parse them at crawl
+          time without JS execution. No fabricated ratings or reviews. */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD_ORGANIZATION) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD_SOFTWARE_APPLICATION) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD_FAQ_PAGE) }}
+      />
+
       <div className={styles.cordonPage}>
         <nav className="nav" id="cordon-nav">
           <div className="container nav-inner">
@@ -115,87 +268,27 @@ export default function HomePage() {
                 Built for Bangladesh&apos;s COD economy
               </div>
               <h1 className="hero-title">
-                You&apos;re losing <span className="accent">৳540,000+</span> a month to fake COD orders.
-                <br />
-                <span className="serif">We give it back</span> — before the courier picks up.
+                Stop shipping COD orders to <span className="accent">fraudsters</span>.{" "}
+                <span className="serif">Catch them</span> before the courier picks up.
               </h1>
               <p className="hero-sub">
-                Cordon is the order operations OS for Shopify and WooCommerce stores in
-                Bangladesh. Real-time fraud scoring across a cross-merchant network, automated
-                booking on Pathao, Steadfast &amp; RedX, and webhook delivery you can actually
-                trust. Cordon merchants cut RTO by up to 60%.
+                The order operations OS for Bangladesh COD stores. Real-time
+                fraud scoring, automated courier booking, and idempotent
+                webhook delivery — RTO down up to 60% on the orders Cordon
+                scores.
               </p>
               <div className="hero-ctas">
                 <a href="#calculator" className="btn btn-primary btn-lg">
                   Calculate my ৳ loss <span className="arrow">→</span>
                 </a>
-                <a href="#comparison" className="btn btn-secondary btn-lg">
-                  See the day-to-day difference
-                </a>
+                <Link href="/signup" className="btn btn-secondary btn-lg">
+                  Start 14-day trial
+                </Link>
               </div>
               <div className="hero-meta">
                 <span><span className="check">✓</span> 14-day trial · no card</span>
                 <span><span className="check">✓</span> Setup in under 10 minutes</span>
                 <span><span className="check">✓</span> Pay via bKash, Nagad, or card</span>
-              </div>
-
-              {/* Hard trust band — three concrete numbers, hardest one
-                  (revenue saved) leading. Replace placeholder values with
-                  your real platform metrics before launch — TODO. */}
-              <div className="proof-band">
-                <div className="proof-band-pill">
-                  <span className="proof-band-dot" />
-                  Trusted by <strong>200+ BD merchants</strong>
-                </div>
-                <div className="proof-band-stats">
-                  <span><strong>৳45 Cr+</strong> RTO prevented</span>
-                  <span><strong>1.2M+</strong> orders processed</span>
-                  <span><strong>99.9%</strong> webhook delivery</span>
-                </div>
-              </div>
-
-              {/* Microquote — one operator's number, in the operator's voice.
-                  High-attention placement with low visual cost. */}
-              <figure className="hero-microquote">
-                <blockquote>
-                  &ldquo;RTO went from 22% to 8.5% in the first quarter.
-                  Same catalog. Same couriers. We just stopped shipping to
-                  fake orders.&rdquo;
-                </blockquote>
-                <figcaption>
-                  <span className="hero-microquote-name">Co-founder</span>
-                  <span className="hero-microquote-role"> · Electronics accessories, Dhaka</span>
-                </figcaption>
-              </figure>
-            </div>
-
-            <div className="stat-strip">
-              <div className="stat">
-                <div className="stat-num">
-                  <span className="cordon-counter" data-target="18" data-suffix="%">0%</span>
-                </div>
-                <div className="stat-label">Average COD RTO rate, BD market</div>
-              </div>
-              <div className="stat">
-                <div className="stat-num">
-                  <span className="prefix">৳</span>
-                  <span className="cordon-counter" data-target="540" data-suffix="K">0K</span>
-                </div>
-                <div className="stat-label">Bled monthly on 1,000 orders</div>
-              </div>
-              <div className="stat">
-                <div className="stat-num">
-                  <span className="cordon-counter" data-target="3" data-suffix="">0</span>
-                  <span className="unit"> couriers</span>
-                </div>
-                <div className="stat-label">Pathao · Steadfast · RedX, one API</div>
-              </div>
-              <div className="stat">
-                <div className="stat-num">
-                  <span className="cordon-counter" data-target="0" data-suffix="">0</span>
-                  <span className="unit"> silent drops</span>
-                </div>
-                <div className="stat-label">Idempotent. Retried. Replayable.</div>
               </div>
             </div>
           </div>
@@ -250,7 +343,7 @@ export default function HomePage() {
             </div>
 
             <div className="problem-bottom">
-              <div className="big">৳540,000+</div>
+              <div className="big">৳5,40,000+</div>
               <div className="label">
                 <strong>The monthly bleed.</strong> 1,000 orders a month, ৳1,200 average value,
                 18% RTO. Before you&apos;ve paid yourself, before tax, before anything else.
@@ -347,8 +440,8 @@ export default function HomePage() {
                   <div className="step-num">/02</div>
                   <div className="step-name">Normalize</div>
                   <div className="step-desc">
-                    Phone coerced to BD format. Address parsed. Buyer history pulled into
-                    context.
+                    Phone normalized to Bangladesh format. Address parsed.
+                    Buyer history pulled into context.
                   </div>
                 </div>
                 <div className="step">
@@ -370,16 +463,16 @@ export default function HomePage() {
                   <div className="step-num">/05</div>
                   <div className="step-name">Book</div>
                   <div className="step-desc">
-                    Best-fit courier picked. Idempotent AWB. Circuit breakers fall through to
-                    backups.
+                    Best-fit courier picked. Each AWB created exactly once.
+                    Circuit breakers fall through to backups.
                   </div>
                 </div>
                 <div className="step">
                   <div className="step-num">/06</div>
                   <div className="step-name">Track</div>
                   <div className="step-desc">
-                    Status polled every 5 min. Events deduped. Delivery, RTO, failed — all
-                    surfaced live.
+                    Status polled every 5 min. Duplicate events suppressed.
+                    Delivery, RTO, failed — all surfaced live.
                   </div>
                 </div>
               </div>
@@ -447,14 +540,14 @@ export default function HomePage() {
                       <circle className="viz-node" cx="190" cy="40" r="16" />
                       <circle className="viz-node" cx="190" cy="340" r="16" />
                       <circle className="viz-node center" cx="190" cy="190" r="22" />
-                      <text className="viz-label" x="60" y="60" textAnchor="middle">store_a</text>
-                      <text className="viz-label" x="320" y="60" textAnchor="middle">store_b</text>
-                      <text className="viz-label" x="60" y="328" textAnchor="middle">store_c</text>
-                      <text className="viz-label" x="320" y="328" textAnchor="middle">store_d</text>
-                      <text className="viz-label" x="190" y="22" textAnchor="middle">store_e</text>
-                      <text className="viz-label" x="190" y="362" textAnchor="middle">store_f</text>
+                      <text className="viz-label viz-label-store" x="60" y="60" textAnchor="middle">store_a</text>
+                      <text className="viz-label viz-label-store" x="320" y="60" textAnchor="middle">store_b</text>
+                      <text className="viz-label viz-label-store" x="60" y="328" textAnchor="middle">store_c</text>
+                      <text className="viz-label viz-label-store" x="320" y="328" textAnchor="middle">store_d</text>
+                      <text className="viz-label viz-label-store" x="190" y="22" textAnchor="middle">store_e</text>
+                      <text className="viz-label viz-label-store" x="190" y="362" textAnchor="middle">store_f</text>
                       <text
-                        className="viz-label"
+                        className="viz-label viz-label-center"
                         x="190"
                         y="194"
                         textAnchor="middle"
@@ -551,25 +644,25 @@ export default function HomePage() {
           </div>
         </section>
 
-        {/* CUSTOMER PROOF — testimonials + aggregate metrics */}
+        {/* CUSTOMER PROOF — operational architecture + observed patterns */}
         <section id="proof">
           <div className="container">
-            <div className="section-eyebrow">08 / Proof</div>
+            <div className="section-eyebrow">08 / What changes</div>
             <h2 className="section-title">
-              Stores already <span className="serif">paying themselves back.</span>
+              What changes the day you{" "}
+              <span className="serif">connect Cordon.</span>
             </h2>
             <p className="section-sub">
-              Operator wins from D2C brands that swapped manual ops for an autonomous
-              pipeline. Numbers and quotes refresh every quarter.
+              Operational patterns Cordon enables for Bangladesh COD stores.
+              The numbers below describe what the system does, not customer
+              counts — those land here once we have written permission to
+              cite them.
             </p>
 
-            {/* Trust strip — placeholder customer wordmarks + category
-                pills. Swap the wordmark slots for real customer logos
-                once you have permission. The category pills can stay —
-                they represent who Cordon serves regardless of who's
-                publicly named. */}
-            <div className="trust-strip" aria-label="Customers and categories">
-              <div className="trust-strip-label">Trusted by stores in</div>
+            {/* Category strip — represents who Cordon serves; not a customer
+                count claim. */}
+            <div className="trust-strip" aria-label="Categories Cordon supports">
+              <div className="trust-strip-label">Built for stores in</div>
               <div className="trust-categories">
                 <span className="trust-cat">D2C apparel</span>
                 <span className="trust-cat">Beauty &amp; skincare</span>
@@ -580,72 +673,69 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Logo wall — placeholder slots. Replace each .trust-logo's
-                content with a real customer wordmark (SVG or text) when
-                you have the merchant's permission to feature them. */}
-            <div className="trust-logos" aria-label="Featured merchants">
-              <div className="trust-logo">AURORA</div>
-              <div className="trust-logo">MEEM &amp; CO</div>
-              <div className="trust-logo">VANTA</div>
-              <div className="trust-logo">RUSHANE</div>
-              <div className="trust-logo">CASCADE</div>
-              <div className="trust-logo">+ 195 more</div>
-            </div>
-
-            {/* Hard numbers — hardest signal first.
-                TODO: replace with real platform metrics before launch. */}
+            {/* Operational claim row — replaces the previous metric grid
+                whose values were pre-launch placeholders. Each item is a
+                shipping architecture fact, not a count of merchants. */}
             <div className="metric-row">
               <div className="metric">
-                <div className="metric-num">৳45 Cr+</div>
-                <div className="metric-label">RTO costs prevented for our merchants in the last 12 months</div>
+                <div className="metric-num">Hashed</div>
+                <div className="metric-label">Cross-merchant fraud signals share SHA-256 hashes only — buyer PII never leaves your store boundary</div>
               </div>
               <div className="metric">
-                <div className="metric-num">200+</div>
-                <div className="metric-label">D2C brands across Bangladesh running on Cordon</div>
+                <div className="metric-num">3 of 3</div>
+                <div className="metric-label">Pathao · Steadfast · RedX, auto-routed by zone × success rate, with circuit-breaker fall-through</div>
               </div>
               <div className="metric">
-                <div className="metric-num">1.2M+</div>
-                <div className="metric-label">Orders ingested, scored, and routed through the pipeline</div>
+                <div className="metric-num">BDT</div>
+                <div className="metric-label">Billing in Taka via bKash, Nagad receipt upload, or Stripe card. No USD conversion</div>
               </div>
               <div className="metric">
-                <div className="metric-num">99.9%</div>
-                <div className="metric-label">Webhook delivery rate, with zero silent drops</div>
+                <div className="metric-num">Idempotent</div>
+                <div className="metric-label">Every webhook deduped at ingest with externalId + clientRequestId. Replays never double-count</div>
               </div>
             </div>
 
+            {/* Operational patterns — observed system behaviour, not
+                attributed customer quotes. Will be replaced with real,
+                attributed testimonials once written merchant permission
+                is in hand. */}
             <div className="testimonial-grid">
               <figure className="testimonial">
                 <blockquote>
-                  &ldquo;We were calling 80 customers a day to confirm orders. Now Cordon does
-                  it and we only see the ones that actually need a human. Our ops team got
-                  their evenings back in week two.&rdquo;
+                  Stores running 80+ confirmation calls a day move to
+                  exception-only review inside two weeks. Auto-confirm
+                  handles the low-risk majority; only the queue surfaces
+                  to a human.
                 </blockquote>
                 <figcaption>
-                  <div className="testimonial-name">Operations Lead</div>
-                  <div className="testimonial-role">D2C apparel brand · Dhaka</div>
+                  <div className="testimonial-name">Pattern · ops time</div>
+                  <div className="testimonial-role">Semi-Auto + Twilio confirmation</div>
                 </figcaption>
               </figure>
 
               <figure className="testimonial">
                 <blockquote>
-                  &ldquo;The cross-merchant fraud network caught a buyer who&apos;d burned three
-                  other stores in the same week. He never made it past our checkout. That one
-                  block paid for six months of Cordon.&rdquo;
+                  When the cross-merchant network flags a buyer who refused
+                  parcels at other Cordon stores in the same week, the
+                  signal is on the order before the courier is booked.
+                  One catch can pay for months of subscription.
                 </blockquote>
                 <figcaption>
-                  <div className="testimonial-name">Founder</div>
-                  <div className="testimonial-role">Beauty &amp; skincare · Chittagong</div>
+                  <div className="testimonial-name">Pattern · fraud catch</div>
+                  <div className="testimonial-role">Cross-merchant fraud network</div>
                 </figcaption>
               </figure>
 
               <figure className="testimonial">
                 <blockquote>
-                  &ldquo;RTO went from 22% to 8.5% in our first quarter. Same catalog, same
-                  couriers. We just stopped shipping to fake orders.&rdquo;
+                  An 18&ndash;22% RTO baseline can drop into the 6&ndash;8%
+                  band on the orders Cordon scores — same catalog, same
+                  couriers — once fake-order shipping is held back at the
+                  pickup stage.
                 </blockquote>
                 <figcaption>
-                  <div className="testimonial-name">Co-founder</div>
-                  <div className="testimonial-role">Electronics accessories · Dhaka</div>
+                  <div className="testimonial-name">Pattern · RTO reduction</div>
+                  <div className="testimonial-role">Risk scoring + held shipments</div>
                 </figcaption>
               </figure>
             </div>
@@ -665,52 +755,99 @@ export default function HomePage() {
             </p>
 
             <div className="trust-grid">
+              {/* Inline SVG icons — line-art at 20px, currentColor inherited
+                  from `.trust-icon` (lime accent). Zero icon-library cost
+                  and consistent with the page's restrained motion / no-emoji
+                  aesthetic. */}
               <div className="trust-item">
-                <div className="trust-icon">{`{ }`}</div>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="m8.5 12.5 2.5 2.5 4.5-5" />
+                  </svg>
+                </div>
                 <h4>Idempotent ingestion</h4>
                 <p>
-                  Every order has a unique externalId and clientRequestId. The same webhook sent
-                  twice produces one order — never two.
+                  Your orders never double-count, even when a webhook is
+                  delivered twice. Each order is keyed on a unique
+                  externalId + clientRequestId at the inbox layer.
                 </p>
               </div>
               <div className="trust-item">
-                <div className="trust-icon">↻</div>
-                <h4>Exponential-backoff retries</h4>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+                    <path d="M21 4v5h-5" />
+                  </svg>
+                </div>
+                <h4>Webhooks always replay</h4>
                 <p>
-                  A failed webhook doesn&apos;t disappear. It re-enters the queue with backoff,
-                  attempts capped, and dead-letter alerts when something&apos;s wrong.
+                  A failed webhook is never a silent drop. Failed
+                  deliveries re-enter the queue with exponential backoff,
+                  attempts are capped, and dead-letter alerts fire when
+                  something needs attention.
                 </p>
               </div>
               <div className="trust-item">
-                <div className="trust-icon">⊘</div>
-                <h4>Courier circuit breakers</h4>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 4 12 10 18 4" />
+                    <path d="M12 10v10" />
+                  </svg>
+                </div>
+                <h4>Courier outages auto-route</h4>
                 <p>
-                  When Pathao is down, we route around it. When it&apos;s healthy, we route to
-                  it. Booking attempts are tracked, fall-through is automatic.
+                  When a courier is degraded, Cordon routes around it;
+                  when it recovers, traffic returns. Circuit breakers
+                  track booking attempts and fall through to backups
+                  automatically.
                 </p>
               </div>
               <div className="trust-item">
-                <div className="trust-icon">∝</div>
-                <h4>Optimistic concurrency</h4>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6" cy="5" r="2" />
+                    <circle cx="18" cy="5" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                    <path d="M6 7c0 6 6 4 6 10" />
+                    <path d="M18 7c0 6-6 4-6 10" />
+                  </svg>
+                </div>
+                <h4>Concurrent updates don&apos;t clash</h4>
                 <p>
-                  Every order has an explicit version field. Two concurrent updates can&apos;t
-                  silently overwrite each other — the second one re-reads.
+                  Two writers updating the same order won&apos;t silently
+                  overwrite each other — every order carries an explicit
+                  version field, and the second write re-reads instead
+                  of clobbering.
                 </p>
               </div>
               <div className="trust-item">
-                <div className="trust-icon">⊞</div>
-                <h4>Encrypted credentials</h4>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="5" y="11" width="14" height="10" rx="1.5" />
+                    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                  </svg>
+                </div>
+                <h4>Credentials encrypted at rest</h4>
                 <p>
-                  Courier API keys are wrapped at rest with envelope encryption (v1:iv:tag:ct).
-                  Even our database admins can&apos;t read them in plaintext.
+                  Courier API keys are wrapped with envelope encryption
+                  (v1:iv:tag:ct) before they hit the database. Even
+                  Cordon database admins can&apos;t read them in
+                  plaintext.
                 </p>
               </div>
               <div className="trust-item">
-                <div className="trust-icon">⌛</div>
-                <h4>30-day payload reaping</h4>
+                <div className="trust-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v5l3 2" />
+                  </svg>
+                </div>
+                <h4>Raw payloads age out</h4>
                 <p>
-                  Raw webhook payloads don&apos;t sit in your account forever. Succeeded
-                  payloads are cleared after 30 days — kept just long enough for audit.
+                  Webhook payloads don&apos;t sit on your account
+                  indefinitely. Succeeded payloads are reaped after 30
+                  days — kept just long enough for audit, then deleted.
                 </p>
               </div>
             </div>
@@ -742,13 +879,20 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {/* Each cell carries a real `compare-cell-label` span for
+                  screen-reader context at every viewport. CSS hides it
+                  visually on desktop (sr-only) and shows it as a small
+                  uppercase label on mobile (replacing the previous
+                  ::before pseudo-element which was decorative-only). */}
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">RTO rate</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">18 — 22%</span>
                   <span className="compare-note">Industry baseline for BD COD</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">6 — 8%</span>
                   <span className="compare-note">After cross-merchant scoring</span>
                 </div>
@@ -757,10 +901,12 @@ export default function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Confirmation calls</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">80 / day</span>
                   <span className="compare-note">Your team on the phone, manually</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">8 / day</span>
                   <span className="compare-note">Twilio handles the rest, only exceptions reach a human</span>
                 </div>
@@ -769,10 +915,12 @@ export default function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Courier choice</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">Manual</span>
                   <span className="compare-note">Ops lead picks per order or per region</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">Auto-routed</span>
                   <span className="compare-note">Best-fit by zone × success rate × your overrides</span>
                 </div>
@@ -781,10 +929,12 @@ export default function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Webhook drops</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">Silent</span>
                   <span className="compare-note">You find out from a buyer&apos;s angry call</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">Replayed</span>
                   <span className="compare-note">Idempotent inbox, exponential backoff, dead-letter alerts</span>
                 </div>
@@ -793,10 +943,12 @@ export default function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Ops team time</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">3 — 4 hrs/day</span>
                   <span className="compare-note">Calls, courier dashboards, reconciliation</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">~30 min/day</span>
                   <span className="compare-note">Review queue + exception inbox, that&apos;s it</span>
                 </div>
@@ -805,10 +957,12 @@ export default function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Reporting surface</div>
                 <div className="compare-bad" role="cell">
+                  <span className="compare-cell-label">Without Cordon</span>
                   <span className="compare-num compare-num-bad">3 dashboards</span>
                   <span className="compare-note">Pathao + Steadfast + RedX, manually merged</span>
                 </div>
                 <div className="compare-good" role="cell">
+                  <span className="compare-cell-label">With Cordon</span>
                   <span className="compare-num compare-num-good">1 dashboard</span>
                   <span className="compare-note">Unified tracking, fraud, billing, recovery</span>
                 </div>
@@ -892,10 +1046,12 @@ export default function HomePage() {
                   <li>Volume pricing</li>
                 </ul>
                 <a
-                  href={`mailto:${SAAS_BRANDING.salesEmail}?subject=${encodeURIComponent(SAAS_BRANDING.name)}%20Enterprise`}
+                  href={`mailto:${SAAS_BRANDING.salesEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} Enterprise — sales conversation`)}&body=${encodeURIComponent(
+                    "Hi Cordon,\n\nI run a Bangladesh ecommerce store doing 25,000+ COD orders a month. I'd like to talk about Enterprise.\n\nMonthly order volume:\nCouriers we use:\nPlatform (Shopify / WooCommerce / custom):\nTimezone for the call:\n\nThanks,",
+                  )}`}
                   className="btn btn-secondary"
                 >
-                  Book a 30-min call
+                  Talk to Cordon — Enterprise
                 </a>
               </div>
             </div>
@@ -993,17 +1149,20 @@ export default function HomePage() {
                   Start saving in 10 minutes <span className="arrow">→</span>
                 </Link>
                 <a
-                  href={`mailto:${SAAS_BRANDING.helloEmail}?subject=${encodeURIComponent(SAAS_BRANDING.name)}%20walkthrough`}
+                  href={`mailto:${SAAS_BRANDING.helloEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} — request a walkthrough`)}&body=${encodeURIComponent(
+                    "Hi Cordon,\n\nI'd like a 15-minute walkthrough of how Cordon would work for my store.\n\nStore name:\nPlatform (Shopify / WooCommerce):\nMonthly order volume:\nCouriers we use:\nBest time + timezone for a call:\n\nThanks,",
+                  )}`}
                   className="btn btn-secondary btn-lg"
                 >
-                  Book a 15-min walkthrough
+                  Request a 15-min walkthrough
                 </a>
               </div>
               <div className="urgency">
                 <span className="urgency-dot" />
                 <span>
-                  <strong>Limited:</strong> first 50 stores joining this month get a free
-                  fraud audit of their last 30 days of orders.
+                  <strong>Launch quarter:</strong> every new merchant gets a
+                  free fraud audit of their last 30 days of orders during
+                  onboarding.
                 </span>
               </div>
             </div>
@@ -1029,10 +1188,6 @@ export default function HomePage() {
             card matching the calculator's plan recommendation. */}
         <PricingHighlighter />
 
-        {/* Exit-intent: fires once per session on desktop when the cursor
-            leaves toward the URL bar, anchored back to the calculator. */}
-        <ExitIntentModal />
-
         <footer className="cordon-footer">
           <div className="container footer-inner">
             <Link href="/" className="logo">
@@ -1043,10 +1198,14 @@ export default function HomePage() {
               <a href="#how">How it works</a>
               <a href="#fraud">Fraud network</a>
               <a href="#pricing">Pricing</a>
+              <a href={`mailto:${SAAS_BRANDING.helloEmail}`}>{SAAS_BRANDING.helloEmail}</a>
               <Link href="/login">Sign in</Link>
               <Link href="/signup">Sign up</Link>
             </div>
-            <div>© {new Date().getFullYear()} {SAAS_BRANDING.name}. Built in Dhaka.</div>
+            <div>
+              © {new Date().getFullYear()} {SAAS_BRANDING.name}. Built in
+              Dhaka for Bangladesh COD merchants.
+            </div>
           </div>
         </footer>
       </div>

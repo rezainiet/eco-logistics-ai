@@ -3,10 +3,11 @@
  *
  * Strategy: a single module-scoped wrapper class (.cordonPage) gives this
  * sheet its scoping boundary. Every nested rule uses :global() so the
- * existing class names in the JSX work unchanged AND the JS animation hooks
- * (`.cordon-counter`, `#cordon-nav`) can find their targets via plain DOM
- * selectors. Outside the .cordonPage subtree, none of these rules apply —
- * dashboards / auth / admin are untouched.
+ * existing class names in the JSX work unchanged AND the JS hooks
+ * (`#cordon-nav`, the `.viz` / `.eyebrow` IntersectionObserver targets)
+ * can find their elements via plain DOM selectors. Outside the .cordonPage
+ * subtree, none of these rules apply — dashboards / auth / admin are
+ * untouched.
  */
 
 .cordonPage {
@@ -49,9 +50,22 @@
 .cordonPage :global(.mono) { font-family: var(--font-mono), monospace; }
 
 .cordonPage :global(.container) { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
-.cordonPage :global(section) { padding: 120px 0; position: relative; }
+@media (min-width: 1600px) {
+  /* Ultra-wide anchoring — reduce side bleed slightly without making
+     1200–1599px feel cramped. */
+  .cordonPage :global(.container) { max-width: 1280px; }
+}
+@media (max-width: 480px) {
+  .cordonPage :global(.container) { padding: 0 18px; }
+}
+/* Section vertical rhythm — three breakpoint stages so desktop reads
+   intentional, tablet stays compact, and mobile doesn't burn fold space. */
+.cordonPage :global(section) { padding: 96px 0; position: relative; }
+@media (max-width: 1024px) {
+  .cordonPage :global(section) { padding: 80px 0; }
+}
 @media (max-width: 768px) {
-  .cordonPage :global(section) { padding: 72px 0; }
+  .cordonPage :global(section) { padding: 64px 0; }
 }
 
 /* Nav — backdrop-filter is the single most expensive paint property
@@ -119,8 +133,24 @@
 .cordonPage :global(.btn .arrow) { transition: transform .25s; display: inline-block; }
 .cordonPage :global(.btn:hover .arrow) { transform: translateX(4px); }
 
-/* Hero */
-.cordonPage :global(.hero) { padding-top: 180px; padding-bottom: 80px; position: relative; overflow: hidden; }
+/* Hero — top padding scales with viewport so phones don't waste 100+px
+   of fold space below the fixed 64px nav. Desktop keeps the original
+   180px breathing room. iOS landscape adds env(safe-area-inset-top)
+   so the hero doesn't slip behind the address-bar safe area. */
+.cordonPage :global(.hero) {
+  padding: calc(180px + env(safe-area-inset-top)) 0 80px;
+  position: relative;
+  overflow: hidden;
+}
+@media (max-width: 1024px) {
+  .cordonPage :global(.hero) { padding: calc(140px + env(safe-area-inset-top)) 0 64px; }
+}
+@media (max-width: 768px) {
+  .cordonPage :global(.hero) { padding: calc(120px + env(safe-area-inset-top)) 0 56px; }
+}
+@media (max-width: 480px) {
+  .cordonPage :global(.hero) { padding: calc(96px + env(safe-area-inset-top)) 0 48px; }
+}
 .cordonPage :global(.hero-bg) {
   position: absolute; inset: 0;
   background:
@@ -154,18 +184,23 @@
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--c-accent);
   box-shadow: 0 0 8px var(--c-accent);
-  animation: cordonPulse 1.8s ease-in-out infinite;
+  /* Calmer system-heartbeat tempo. Was 1.8s — too quick for an
+     enterprise-feeling status indicator. */
+  animation: cordonPulse 2.4s ease-in-out infinite;
 }
 @keyframes cordonPulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.85); }
+  50% { opacity: 0.55; transform: scale(0.88); }
 }
 .cordonPage :global(h1.hero-title) {
-  font-size: clamp(40px, 6vw, 76px);
-  line-height: 1.02;
+  font-size: clamp(36px, 6vw, 76px);
+  line-height: 1.05;
   letter-spacing: -0.04em;
   font-weight: 600;
   margin-bottom: 24px;
+}
+@media (max-width: 480px) {
+  .cordonPage :global(h1.hero-title) { line-height: 1.1; margin-bottom: 20px; }
 }
 .cordonPage :global(h1.hero-title .accent) { color: var(--c-accent); }
 .cordonPage :global(.hero-sub) {
@@ -174,38 +209,23 @@
   line-height: 1.55;
   margin-bottom: 36px;
 }
+@media (max-width: 480px) {
+  .cordonPage :global(.hero-sub) { font-size: 16px; margin-bottom: 28px; }
+}
 .cordonPage :global(.hero-ctas) { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 36px; }
+@media (max-width: 480px) {
+  /* Below 480px the two CTAs stack as full-width buttons so they don't
+     wrap to two visually-disconnected rows of single-button width. */
+  .cordonPage :global(.hero-ctas) { gap: 10px; margin-bottom: 28px; }
+  .cordonPage :global(.hero-ctas .btn) { width: 100%; }
+}
 .cordonPage :global(.hero-meta) { display: flex; gap: 24px; flex-wrap: wrap; color: var(--c-text-3); font-size: 13px; }
 .cordonPage :global(.hero-meta span) { display: flex; align-items: center; gap: 8px; }
 .cordonPage :global(.hero-meta .check) { color: var(--c-accent); }
+@media (max-width: 480px) {
+  .cordonPage :global(.hero-meta) { gap: 12px; font-size: 12.5px; }
+}
 
-/* Stat strip */
-.cordonPage :global(.stat-strip) {
-  margin-top: 80px;
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  border: 1px solid var(--c-border);
-  border-radius: var(--c-radius-lg);
-  background: var(--c-surface);
-  overflow: hidden;
-  position: relative;
-}
-.cordonPage :global(.stat) { padding: 28px 32px; border-right: 1px solid var(--c-border); }
-.cordonPage :global(.stat:last-child) { border-right: none; }
-.cordonPage :global(.stat-num) {
-  font-family: var(--font-mono), monospace;
-  font-size: 32px; font-weight: 600;
-  letter-spacing: -0.03em;
-  color: var(--c-text); margin-bottom: 4px;
-}
-.cordonPage :global(.stat-num .unit), .cordonPage :global(.stat-num .prefix) { color: var(--c-accent); font-size: 22px; }
-.cordonPage :global(.stat-num .prefix) { margin-right: 2px; }
-.cordonPage :global(.stat-label) { color: var(--c-text-3); font-size: 13px; }
-@media (max-width: 768px) {
-  .cordonPage :global(.stat-strip) { grid-template-columns: repeat(2, 1fr); }
-  .cordonPage :global(.stat:nth-child(2)) { border-right: none; }
-  .cordonPage :global(.stat:nth-child(1)),
-  .cordonPage :global(.stat:nth-child(2)) { border-bottom: 1px solid var(--c-border); }
-}
 
 /* Section header */
 .cordonPage :global(.section-eyebrow) {
@@ -322,8 +342,9 @@
   display: grid; grid-template-columns: repeat(6, 1fr);
   gap: 8px; position: relative; z-index: 1;
 }
-@media (max-width: 1000px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 500px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: 1fr; } }
+@media (max-width: 1000px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: repeat(3, 1fr); gap: 10px; } }
+@media (max-width: 700px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .cordonPage :global(.pipeline-steps) { grid-template-columns: 1fr; } }
 .cordonPage :global(.step) {
   padding: 24px 16px;
   border-radius: 12px;
@@ -370,15 +391,26 @@
 .cordonPage :global(.viz-pulse) {
   stroke: var(--c-accent); stroke-width: 1.5; fill: none;
   stroke-dasharray: 6 8;
-  animation: cordonDash 4s linear infinite;
-  opacity: 0.7;
+  /* Slower dash motion — was 4s, which read as kinetic. 8s reads as
+     "data flowing" without competing with the headline. */
+  animation: cordonDash 8s linear infinite;
+  opacity: 0.55;
 }
 @keyframes cordonDash { to { stroke-dashoffset: -100; } }
 .cordonPage :global(.viz-label) { font-family: var(--font-mono), monospace; font-size: 9px; fill: var(--c-text-3); }
+/* On very narrow screens the 9px store labels around the network viz
+   become unreadable. Hide the six outer-store labels but keep the
+   center "cordon" label so the diagram still anchors. */
+@media (max-width: 480px) {
+  .cordonPage :global(.viz-label-store) { display: none; }
+}
 
-/* Modes */
+/* Modes — three modes form a Manual → Semi → Full progression. 2-col
+   would split the spectrum awkwardly, so we stay at 3-col longer (down
+   to 800px) and then collapse straight to 1-col which preserves the
+   left-to-right progression as a top-to-bottom one. */
 .cordonPage :global(.modes-grid) { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 900px) { .cordonPage :global(.modes-grid) { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .cordonPage :global(.modes-grid) { grid-template-columns: 1fr; } }
 .cordonPage :global(.mode) {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
@@ -453,13 +485,21 @@
   color: var(--c-accent); margin-bottom: 16px;
   font-family: var(--font-mono), monospace; font-size: 13px; font-weight: 600;
 }
+/* Inline SVG icons inside `.trust-icon` inherit color via currentColor.
+   `flex-shrink: 0` and `display: block` prevent the icon from collapsing
+   under unusual flex parent sizing. */
+.cordonPage :global(.trust-icon svg) { display: block; flex-shrink: 0; }
 .cordonPage :global(.trust-item h4) { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
 .cordonPage :global(.trust-item p) { color: var(--c-text-2); font-size: 13.5px; line-height: 1.55; }
 
-/* Pricing */
+/* Pricing — 4 → 1 directly. The previous 4 → 2 → 1 ladder produced an
+   asymmetric tablet stage where the featured Growth card no longer
+   visually dominated. Going straight to 1-col below 900px keeps the
+   "most popular" treatment legible at every width. */
 .cordonPage :global(.pricing-grid) { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-@media (max-width: 1000px) { .cordonPage :global(.pricing-grid) { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 600px) { .cordonPage :global(.pricing-grid) { grid-template-columns: 1fr; } }
+@media (max-width: 900px) {
+  .cordonPage :global(.pricing-grid) { grid-template-columns: 1fr; gap: 14px; }
+}
 .cordonPage :global(.price-card) {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
@@ -532,50 +572,13 @@
 
 /* ────────────────────────────────────────────────────────────────────
    Motion safety — reduced-motion users get no looping animations,
-   and decorative pulses pause when their container scrolls off-screen
-   (the IntersectionObserver in the page script toggles `.paused` on
-   .viz / .eyebrow / .urgency).
+   and the two remaining decorative loops pause when their container
+   scrolls off-screen. The IntersectionObserver in the page script
+   toggles `.paused` on .viz / .eyebrow only (Phase 4 simplification).
    ──────────────────────────────────────────────────────────────────── */
 .cordonPage :global(.paused .viz-pulse),
-.cordonPage :global(.paused .pulse),
-.cordonPage :global(.paused .urgency-dot) {
+.cordonPage :global(.paused .pulse) {
   animation-play-state: paused;
-}
-
-/* ────────────────────────────────────────────────────────────────────
-   Hero microquote — single operator quote below the social-proof band.
-   ──────────────────────────────────────────────────────────────────── */
-.cordonPage :global(.hero-microquote) {
-  margin: 28px 0 0;
-  padding: 18px 22px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-left: 2px solid var(--c-accent);
-  border-radius: 12px;
-  max-width: 620px;
-}
-.cordonPage :global(.hero-microquote blockquote) {
-  margin: 0;
-  font-family: var(--font-serif), serif;
-  font-style: italic;
-  font-size: 17px;
-  line-height: 1.5;
-  color: var(--c-text);
-}
-.cordonPage :global(.hero-microquote figcaption) {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--c-text-3);
-}
-.cordonPage :global(.hero-microquote-name) {
-  color: var(--c-text-2);
-  font-weight: 600;
-  font-family: var(--font-inter), sans-serif;
-  font-style: normal;
-}
-.cordonPage :global(.hero-microquote-role) {
-  font-family: var(--font-inter), sans-serif;
-  font-style: normal;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -596,62 +599,6 @@
 }
 .cordonPage :global(.roi-multiple-label) {
   font-size: 14px; color: var(--c-text-2);
-}
-
-/* ────────────────────────────────────────────────────────────────────
-   ROI email capture — lead-gen form below the CTA.
-   ──────────────────────────────────────────────────────────────────── */
-.cordonPage :global(.roi-email) {
-  margin-top: 4px;
-  padding: 20px;
-  background: var(--c-surface-2);
-  border: 1px dashed var(--c-border);
-  border-radius: 12px;
-  display: grid; gap: 12px;
-}
-.cordonPage :global(.roi-email-head) {
-  font-size: 13.5px; color: var(--c-text-2);
-  line-height: 1.5;
-}
-.cordonPage :global(.roi-email-head strong) { color: var(--c-text); font-weight: 600; }
-.cordonPage :global(.roi-email-row) {
-  display: flex; gap: 8px; flex-wrap: wrap;
-}
-.cordonPage :global(.roi-email-row input[type="email"]) {
-  flex: 1 1 240px;
-  min-width: 0;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  padding: 10px 14px;
-  color: var(--c-text);
-  font-family: var(--font-inter), sans-serif;
-  font-size: 14px;
-  outline: none;
-  transition: border-color .2s;
-}
-.cordonPage :global(.roi-email-row input[type="email"]:focus) {
-  border-color: var(--c-accent);
-}
-.cordonPage :global(.roi-email-err) {
-  font-size: 12px; color: var(--c-danger);
-}
-.cordonPage :global(.roi-email-sent) {
-  display: flex; align-items: flex-start; gap: 12px;
-  background: rgba(198, 248, 79, 0.06);
-  border-color: rgba(198, 248, 79, 0.3);
-}
-.cordonPage :global(.roi-email-sent strong) { color: var(--c-text); font-weight: 600; }
-.cordonPage :global(.roi-email-sent span) { color: var(--c-text-2); }
-.cordonPage :global(.roi-email-check) {
-  flex-shrink: 0;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  background: var(--c-accent);
-  color: #0A0A0B;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700;
-  margin-top: 1px;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -733,21 +680,6 @@
   .cordonPage :global(footer.cordon-footer) {
     padding-bottom: calc(40px + 64px + env(safe-area-inset-bottom));
   }
-}
-
-/* ────────────────────────────────────────────────────────────────────
-   Hard trust signal — small lime dot prefix on the proof band pill,
-   matches the existing eyebrow pulse aesthetic.
-   ──────────────────────────────────────────────────────────────────── */
-.cordonPage :global(.proof-band-dot) {
-  display: inline-block;
-  width: 6px; height: 6px;
-  border-radius: 50%;
-  background: var(--c-accent);
-  box-shadow: 0 0 8px var(--c-accent);
-  margin-right: 8px;
-  vertical-align: middle;
-  animation: cordonPulse 1.8s ease-in-out infinite;
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -838,6 +770,13 @@
   line-height: 1.5;
 }
 
+/* Cell-context labels — visible only on mobile (the desktop column
+   header carries the same context, so showing the label there would
+   double-announce for screen readers). Replaces the previous decorative
+   ::before pseudo-element approach which was inaccessible to assistive
+   tech at any viewport. */
+.cordonPage :global(.compare-cell-label) { display: none; }
+
 @media (max-width: 800px) {
   .cordonPage :global(.compare-head) { display: none; }
   .cordonPage :global(.compare-row) {
@@ -860,24 +799,18 @@
   .cordonPage :global(.compare-bad) {
     border-bottom: 1px solid var(--c-border);
   }
-  .cordonPage :global(.compare-bad::before) {
-    content: 'Without Cordon';
+  /* Reveal the per-cell label on mobile — replaces the old ::before
+     pseudo-element approach with real DOM text. */
+  .cordonPage :global(.compare-cell-label) {
+    display: block;
+    margin: 0 0 4px;
     font-family: var(--font-mono), monospace;
     font-size: 10px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--c-danger);
-    margin-bottom: 4px;
   }
-  .cordonPage :global(.compare-good::before) {
-    content: 'With Cordon';
-    font-family: var(--font-mono), monospace;
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--c-accent);
-    margin-bottom: 4px;
-  }
+  .cordonPage :global(.compare-bad .compare-cell-label) { color: var(--c-danger); }
+  .cordonPage :global(.compare-good .compare-cell-label) { color: var(--c-accent); }
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -888,22 +821,20 @@
   display: none;
 }
 @media (min-width: 900px) {
+  /* Quieter operational reminder — no backdrop-filter (GPU-cheap),
+     restrained accent border, and no glow ring. The card now reads as
+     a peripheral status line rather than an attention-grabbing alert. */
   .cordonPage :global(.floating-loss) {
     display: block;
     position: fixed;
     right: 24px;
     bottom: 24px;
-    width: 280px;
-    padding: 18px 20px;
-    background: rgba(17, 17, 19, 0.96);
-    border: 1px solid rgba(198, 248, 79, 0.35);
+    width: 264px;
+    padding: 16px 18px;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border-strong);
     border-radius: 14px;
-    box-shadow:
-      0 16px 40px -12px rgba(0, 0, 0, 0.6),
-      0 0 0 1px rgba(198, 248, 79, 0.08),
-      0 0 32px -8px var(--c-accent-glow);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.5);
     z-index: 80;
     animation: cordonSlideUp .4s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
@@ -944,7 +875,7 @@
 }
 .cordonPage :global(.floating-loss-value) {
   font-family: var(--font-mono), monospace;
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.03em;
   color: var(--c-danger);
@@ -1067,121 +998,6 @@
   padding: 4px 10px;
   border-radius: 4px;
 }
-/* If recommended ALSO has .featured, hide the "Most popular" pseudo so
-   we don't show two badges. */
-.cordonPage :global(.price-card.featured.recommended::before) {
-  display: none;
-}
-
-/* ────────────────────────────────────────────────────────────────────
-   Exit-intent modal — backdrop + card. Honors prefers-reduced-motion
-   in the global scoped block at the bottom of this file.
-   ──────────────────────────────────────────────────────────────────── */
-.cordonPage :global(.exit-modal-backdrop) {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.72);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  animation: cordonFadeIn .2s ease;
-}
-@keyframes cordonFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-.cordonPage :global(.exit-modal) {
-  position: relative;
-  width: 100%;
-  max-width: 540px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-top: 1px solid rgba(198, 248, 79, 0.4);
-  border-radius: var(--c-radius-lg);
-  padding: 40px 36px 32px;
-  box-shadow:
-    0 32px 80px -24px rgba(0, 0, 0, 0.8),
-    0 0 64px -16px var(--c-accent-glow);
-  animation: cordonModalIn .35s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-@keyframes cordonModalIn {
-  from { opacity: 0; transform: translateY(16px) scale(0.98); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
-}
-.cordonPage :global(.exit-modal-close) {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: var(--c-text-3);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 8px;
-  transition: background .15s, color .15s;
-}
-.cordonPage :global(.exit-modal-close:hover) {
-  background: var(--c-surface-3);
-  color: var(--c-text);
-}
-.cordonPage :global(.exit-modal-eyebrow) {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  color: var(--c-accent);
-  margin-bottom: 20px;
-}
-.cordonPage :global(.exit-modal-pulse) {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-accent);
-  box-shadow: 0 0 8px var(--c-accent);
-  animation: cordonPulse 1.8s ease-in-out infinite;
-}
-.cordonPage :global(.exit-modal h3) {
-  font-size: 28px;
-  letter-spacing: -0.025em;
-  font-weight: 600;
-  line-height: 1.15;
-  color: var(--c-text);
-  margin: 0 0 12px;
-}
-.cordonPage :global(.exit-modal-num) {
-  color: var(--c-danger);
-  font-family: var(--font-mono), monospace;
-  font-weight: 600;
-}
-.cordonPage :global(.exit-modal p) {
-  font-size: 15px;
-  color: var(--c-text-2);
-  line-height: 1.55;
-  margin: 0 0 28px;
-}
-.cordonPage :global(.exit-modal p strong) {
-  color: var(--c-accent);
-  font-weight: 600;
-}
-.cordonPage :global(.exit-modal-ctas) {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .cordonPage :global(*),
   .cordonPage :global(*::before),
@@ -1191,36 +1007,6 @@
     transition-duration: 0.001ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* ────────────────────────────────────────────────────────────────────
-   Social proof band — sits directly under hero CTAs.
-   ──────────────────────────────────────────────────────────────────── */
-.cordonPage :global(.proof-band) {
-  margin-top: 48px;
-  display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
-  padding-top: 24px;
-  border-top: 1px solid var(--c-border);
-}
-.cordonPage :global(.proof-band-pill) {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--c-text-2);
-}
-.cordonPage :global(.proof-band-pill strong) {
-  color: var(--c-text); font-weight: 600;
-}
-.cordonPage :global(.proof-band-stats) {
-  display: flex; gap: 24px; flex-wrap: wrap;
-  margin-left: auto;
-  font-family: var(--font-mono), monospace;
-  font-size: 12px; color: var(--c-text-3);
-}
-.cordonPage :global(.proof-band-stats strong) {
-  color: var(--c-accent); font-weight: 600;
-  margin-right: 4px;
-}
-@media (max-width: 700px) {
-  .cordonPage :global(.proof-band-stats) { margin-left: 0; gap: 16px; }
 }
 
 /* ────────────────────────────────────────────────────────────────────
@@ -1268,7 +1054,7 @@
 }
 .cordonPage :global(.roi-slider input[type="range"]::-webkit-slider-thumb) {
   -webkit-appearance: none; appearance: none;
-  width: 18px; height: 18px;
+  width: 22px; height: 22px;
   border-radius: 50%;
   background: var(--c-accent);
   border: 3px solid var(--c-bg);
@@ -1280,7 +1066,7 @@
   cursor: grabbing; transform: scale(1.1);
 }
 .cordonPage :global(.roi-slider input[type="range"]::-moz-range-thumb) {
-  width: 18px; height: 18px;
+  width: 22px; height: 22px;
   border-radius: 50%;
   background: var(--c-accent);
   border: 3px solid var(--c-bg);
@@ -1293,10 +1079,11 @@
   background: var(--c-surface-2);
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  padding: 10px 14px;
+  padding: 12px 14px;
+  min-height: 44px;
   color: var(--c-text);
   font-family: var(--font-mono), monospace;
-  font-size: 14px;
+  font-size: 15px;
   outline: none;
   transition: border-color .2s;
 }
@@ -1482,6 +1269,9 @@
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--c-accent);
   box-shadow: 0 0 8px var(--c-accent);
-  animation: cordonPulse 1.8s ease-in-out infinite;
+  /* Static — was a `cordonPulse` infinite. The hero already carries an
+     animated status pulse; a second pulsing dot in the same accent at
+     the bottom of the page double-counted attention without adding
+     information. */
   flex-shrink: 0;
 }
