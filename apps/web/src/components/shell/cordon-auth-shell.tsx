@@ -160,7 +160,7 @@ function WordmarkOnly() {
       className="flex items-center gap-2.5 self-start rounded-md outline-none focus-visible:ring-2 focus-visible:ring-brand"
     >
       <span className="cordon-logo-dot" aria-hidden />
-      <span className="text-base font-semibold tracking-tight text-fg">Cordon</span>
+      <span className="text-base font-semibold tracking-tight text-fg">ConfirmX</span>
     </Link>
   );
 }
@@ -180,7 +180,7 @@ function ValueColumn() {
         className="flex items-center gap-2.5 self-start rounded-md outline-none focus-visible:ring-2 focus-visible:ring-brand"
       >
         <span className="cordon-logo-dot" aria-hidden />
-        <span className="text-base font-semibold tracking-tight text-fg">Cordon</span>
+        <span className="text-base font-semibold tracking-tight text-fg">ConfirmX</span>
       </Link>
 
       {/* Mobile proof-band — preserves the brand voice + trust signals on

@@ -1,29 +1,47 @@
 import type { BrandingConfig } from "./types.js";
 
 /**
- * Baked-in default Cordon branding. The "no DB, no env" fallback that
- * every render path drops to when Mongo is unreachable. Keep this file
- * boring, valid, and deployable.
+ * Baked-in default ConfirmX branding. The "no DB, no env" fallback
+ * that every render path drops to when Mongo is unreachable. Keep
+ * this file boring, valid, and deployable.
+ *
+ * Positioning vocabulary (audited 2026-05-09 for Shopify-app review):
+ * ConfirmX is "COD operational intelligence and order confirmation
+ * infrastructure" — NOT "AI fraud detector / customer surveillance".
+ * Avoid hype-AI vocabulary in any future rewrite of these strings.
+ *
+ * Pre-submission TODOs (search for "TODO[brand]" before flipping the
+ * Shopify app from Custom to Public Distribution):
+ *   - legalName needs the registered legal entity
+ *   - emails should resolve to working inboxes
+ *   - twitterHandle should match the actual account
  */
 export const DEFAULT_BRANDING: BrandingConfig = {
   key: "saas",
-  name: "Cordon",
-  legalName: "Cordon Technologies Ltd.",
-  tagline: "Stop bleeding RTO",
+  name: "ConfirmX",
+  // TODO[brand]: replace with the registered legal entity before
+  // Public Distribution submission. Reviewers cross-check this
+  // against the privacy/terms pages and the Partner-Dashboard
+  // listing — placeholder will fail review.
+  legalName: "ConfirmX Technologies Ltd.",
+  tagline: "Confirm every COD order before it ships",
   shortTagline: "Built for Bangladesh's COD economy",
   productCategory:
-    "the order operations OS for Shopify and WooCommerce stores in Bangladesh",
+    "the COD operations infrastructure for Shopify and WooCommerce stores in Bangladesh",
   defaultLocale: "en_BD",
-  homeUrl: "https://cordon.app",
-  statusPageUrl: "https://status.cordon.app",
+  homeUrl: "https://confirmx.ai",
+  statusPageUrl: "https://status.confirmx.ai",
   termsUrl: "/legal/terms",
   privacyUrl: "/legal/privacy",
-  supportUrl: "https://cordon.app/support",
-  supportEmail: "support@cordon.app",
-  privacyEmail: "privacy@cordon.app",
-  salesEmail: "sales@cordon.app",
-  helloEmail: "hello@cordon.app",
-  noReplyEmail: "no-reply@cordon.app",
+  supportUrl: "https://confirmx.ai/support",
+  // TODO[brand]: confirm these inboxes route to a real human or
+  // ticketing system before submission. Review specifically tests
+  // the privacy + support emails for delivery.
+  supportEmail: "support@confirmx.ai",
+  privacyEmail: "privacy@confirmx.ai",
+  salesEmail: "sales@confirmx.ai",
+  helloEmail: "hello@confirmx.ai",
+  noReplyEmail: "no-reply@confirmx.ai",
   colors: {
     brand: "#C6F84F",
     brandHover: "#8AE619",
@@ -34,63 +52,63 @@ export const DEFAULT_BRANDING: BrandingConfig = {
     fg: "#FAFAFA",
   },
   assets: {
-    logo: { url: "/brand/logo.svg", alt: "Cordon" },
-    logoMono: { url: "/brand/logo-mono.svg", alt: "Cordon" },
+    logo: { url: "/brand/logo.svg", alt: "ConfirmX" },
+    logoMono: { url: "/brand/logo-mono.svg", alt: "ConfirmX" },
     favicon: { url: "/favicon.ico" },
     appleTouchIcon: { url: "/apple-touch-icon.png" },
     ogImage: {
       url: "/og.png",
       widthPx: 1200,
       heightPx: 630,
-      alt: "Cordon — stop bleeding RTO",
+      alt: "ConfirmX — confirm every COD order before it ships",
     },
     emailLogo: {
-      url: "https://cordon.app/brand/email-logo.png",
-      alt: "Cordon",
+      url: "https://confirmx.ai/brand/email-logo.png",
+      alt: "ConfirmX",
     },
   },
   email: {
-    senderName: "Cordon",
-    senderAddress: "no-reply@cordon.app",
-    replyTo: "support@cordon.app",
+    senderName: "ConfirmX",
+    senderAddress: "no-reply@confirmx.ai",
+    replyTo: "support@confirmx.ai",
     footer: "Built for Bangladesh's COD economy",
     accentColor: "#C6F84F",
-    ctaTextDefault: "Open Cordon",
+    ctaTextDefault: "Open ConfirmX",
     supportLine:
       "Need a hand? Reply to this email — a real person on the team will help.",
   },
   seo: {
-    metaTitleTemplate: "%s · Cordon",
-    metaTitleDefault: "Cordon — stop bleeding RTO",
+    metaTitleTemplate: "%s · ConfirmX",
+    metaTitleDefault: "ConfirmX — confirm every COD order before it ships",
     metaDescription:
-      "The order operations OS for Shopify and WooCommerce stores in Bangladesh. Real-time fraud scoring, automated courier booking, webhook delivery you can trust.",
+      "COD order confirmation infrastructure for Shopify and WooCommerce stores in Bangladesh. Real-time order verification, automated courier booking on Pathao, Steadfast & RedX, and idempotent webhook delivery for the operational workflows COD merchants run every day.",
     keywords: [
       "Bangladesh ecommerce",
-      "COD fraud prevention",
+      "COD order confirmation",
       "Shopify Bangladesh",
       "WooCommerce Bangladesh",
       "Pathao Steadfast RedX integration",
       "RTO reduction",
     ],
-    twitterHandle: "@cordonhq",
-    ogSiteName: "Cordon",
+    twitterHandle: "@confirmxhq",
+    ogSiteName: "ConfirmX",
   },
   operational: {
     onboardingWelcomeCopy:
-      "Welcome to Cordon. Connect Shopify or WooCommerce to start scoring orders.",
+      "Welcome to ConfirmX. Connect Shopify or WooCommerce to start confirming COD orders before they ship.",
     dashboardWelcomeCopy:
-      "Cordon scores every order before it ships. Connect your store to begin.",
-    sdkGlobalName: "CordonTracker",
-    sdkConsolePrefix: "[cordon]",
-    smsBrand: "Cordon Ops",
-    stripeProductPrefix: "Cordon",
-    woocommerceWebhookPrefix: "Cordon",
+      "ConfirmX confirms every COD order before it ships. Connect your store to begin.",
+    sdkGlobalName: "ConfirmXTracker",
+    sdkConsolePrefix: "[confirmx]",
+    smsBrand: "ConfirmX Ops",
+    stripeProductPrefix: "ConfirmX",
+    woocommerceWebhookPrefix: "ConfirmX",
   },
   version: 0,
   updatedAt: new Date(0).toISOString(),
 };
 
-/** "Cordon" -> "C", "Acme Logistics" -> "AL". */
+/** "ConfirmX" -> "C", "Acme Logistics" -> "AL". */
 export function defaultInitials(name: string): string {
   return (
     name

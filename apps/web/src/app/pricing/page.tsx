@@ -141,7 +141,7 @@ export default function PricingPage() {
             aria-hidden
             className="inline-block h-2.5 w-2.5 rounded-full bg-brand shadow-[0_0_14px_hsl(var(--brand))]"
           />
-          <span className="text-sm font-semibold tracking-tight text-fg">Cordon</span>
+          <span className="text-sm font-semibold tracking-tight text-fg">ConfirmX</span>
         </Link>
         <nav className="flex items-center gap-2">
           <Link
