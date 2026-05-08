@@ -1,5 +1,10 @@
+// Chart palette resolves to the live Cordon brand (lime). Previously the
+// `brand` and cursor-fill swatches were the dead Logistics blue
+// (hsl 202°), which painted KPI sparklines + bar charts blue while the
+// rest of the app rendered the rebranded lime. Audit § "Brand drift"
+// (2026-05-09) — fixed by aligning chart bars to --brand.
 export const CHART_COLORS = {
-  brand: "hsl(202 100% 41%)",
+  brand: "hsl(76 92% 64%)",
   success: "hsl(160 84% 39%)",
   warning: "hsl(38 92% 50%)",
   danger: "hsl(0 84% 60%)",
@@ -10,7 +15,7 @@ export const CHART_COLORS = {
 
 export const CHART_GRID_STROKE = "hsl(220 13% 85% / 0.08)";
 export const CHART_AXIS_STROKE = "hsl(220 11% 64%)";
-export const CHART_CURSOR_FILL = "hsl(202 100% 41% / 0.08)";
+export const CHART_CURSOR_FILL = "hsl(76 92% 64% / 0.10)";
 
 export const CHART_TOOLTIP_STYLE = {
   backgroundColor: "hsl(228 30% 11% / 0.96)",

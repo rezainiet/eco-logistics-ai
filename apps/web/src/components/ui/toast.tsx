@@ -60,9 +60,9 @@ const variantStyles: Record<ToastVariant, { border: string; icon: JSX.Element; t
     title: "text-[#F87171]",
   },
   info: {
-    border: "border-[rgba(0,132,212,0.35)]",
-    icon: <Info className="h-5 w-5 text-[#60A5FA]" />,
-    title: "text-[#60A5FA]",
+    border: "border-info-border",
+    icon: <Info className="h-5 w-5 text-info" />,
+    title: "text-info",
   },
 };
 

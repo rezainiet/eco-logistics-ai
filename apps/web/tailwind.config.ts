@@ -148,8 +148,12 @@ const config: Config = {
         popover:
           "0 18px 48px -12px rgba(0,0,0,0.65), 0 8px 20px -8px rgba(0,0,0,0.45), 0 0 0 1px hsl(var(--stroke-subtle))",
         focus: "0 0 0 3px hsl(var(--brand) / 0.3)",
-        glow: "0 0 12px rgba(0, 132, 212, 0.15)",
-        "glow-strong": "0 0 24px rgba(0, 132, 212, 0.3)",
+        // Brand glows — bound to the live --brand token (lime) so the
+        // shadow follows merchant branding overrides too. Previously
+        // hardcoded to the dead Logistics-blue rgba. Audit § "Brand
+        // drift" (2026-05-09).
+        glow: "0 0 12px hsl(var(--brand) / 0.18)",
+        "glow-strong": "0 0 24px hsl(var(--brand) / 0.32)",
       },
       keyframes: {
         "accordion-down": {

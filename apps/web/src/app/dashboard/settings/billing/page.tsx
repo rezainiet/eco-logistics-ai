@@ -517,11 +517,7 @@ export default function BillingPage() {
             return (
               <Card
                 key={p.tier}
-                className={
-                  isCurrent
-                    ? "border-brand shadow-[0_0_12px_rgba(0,132,212,0.15)]"
-                    : ""
-                }
+                className={isCurrent ? "border-brand shadow-glow" : ""}
               >
                 <CardHeader>
                   <div className="flex items-center gap-2">

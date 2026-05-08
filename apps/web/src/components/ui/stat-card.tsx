@@ -8,8 +8,13 @@ import { Sparkline } from "@/components/charts/sparkline";
 
 export type StatTone = "brand" | "success" | "warning" | "danger" | "violet" | "info";
 
+// Spark colors for the brand tone resolve to the live Cordon lime
+// (#C6F84F = hsl 76 92% 64%). Previously this was hsl 202° — the dead
+// Logistics blue — and the icon swatch painted lime while the
+// sparkline next to it painted blue, making every brand-toned KPI
+// look two-coloured. Audit § "Brand drift" (2026-05-09).
 const TONE: Record<StatTone, { icon: string; spark: string }> = {
-  brand: { icon: "bg-brand/12 text-brand", spark: "hsl(202 100% 55%)" },
+  brand: { icon: "bg-brand/12 text-brand", spark: "hsl(76 92% 64%)" },
   success: { icon: "bg-success-subtle text-success", spark: "hsl(160 84% 45%)" },
   warning: { icon: "bg-warning-subtle text-warning", spark: "hsl(38 92% 55%)" },
   danger: { icon: "bg-danger-subtle text-danger", spark: "hsl(0 84% 66%)" },

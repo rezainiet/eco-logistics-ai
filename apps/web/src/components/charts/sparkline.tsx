@@ -10,7 +10,7 @@ type SparklineProps = {
   className?: string;
 };
 
-export function Sparkline({ data, color = "hsl(202 100% 41%)", height = 36, className }: SparklineProps) {
+export function Sparkline({ data, color = "hsl(76 92% 64%)", height = 36, className }: SparklineProps) {
   const series = React.useMemo(
     () => data.map((v, i) => ({ i, v: Number.isFinite(v) ? v : 0 })),
     [data],
