@@ -1,11 +1,45 @@
 import Link from "next/link";
-import { getServerSession } from "next-auth";
+import { cookies } from "next/headers";
 import { getBrandingSync } from "@ecom/branding";
-import { authOptions } from "@/lib/auth";
 import styles from "./landing.module.css";
 import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
 import { PricingHighlighter } from "./_components/pricing-highlighter";
+
+/**
+ * Force the marketing route into dynamic rendering. Required because the
+ * page reads cookies() to detect the signed-in CTA path, which already
+ * opts the page out of static — declaring it explicitly stops Next 14.2
+ * from leaving the page in a half-static state where the RSC client-
+ * reference manifest can come back undefined at request time
+ * ("Cannot read properties of undefined (reading 'clientModules')").
+ */
+export const dynamic = "force-dynamic";
+
+/**
+ * NextAuth v4 cookie names. Production uses the `__Secure-` prefix
+ * because the cookie is `Secure` (set only over HTTPS); dev uses the
+ * unprefixed name. Checking both lets the same code path work in
+ * either environment without an env-aware branch.
+ *
+ * We intentionally only check cookie PRESENCE — not the cookie's
+ * signature. This is a UI-level CTA selector ("show Open dashboard"
+ * vs "show Sign in"). A user with a stale or forged cookie sees the
+ * dashboard CTA, clicks it, and the dashboard's own server-side auth
+ * gate redirects them to /login. Worst case is one wasted click;
+ * the trade-off is zero NextAuth runtime weight on the public marketing
+ * surface, which is the explicit architectural rule for this route
+ * group (see apps/web/CLAUDE.md § Providers).
+ */
+const SESSION_COOKIE_NAMES = [
+  "__Secure-next-auth.session-token",
+  "next-auth.session-token",
+] as const;
+
+function detectSignedIn(): boolean {
+  const jar = cookies();
+  return SESSION_COOKIE_NAMES.some((name) => !!jar.get(name)?.value);
+}
 
 const SAAS_BRANDING = getBrandingSync();
 
@@ -219,14 +253,13 @@ const JSON_LD_FAQ_PAGE = {
   })),
 };
 
-export default async function HomePage() {
-  // Server-side session check. Runs on the server only — no
-  // SessionProvider, no /api/auth/session client roundtrip, nothing
-  // adds to the (marketing) bundle. Authenticated visitors get a
-  // single "Open dashboard" affordance in place of the
-  // Sign in / Start free trial CTAs scattered across the page.
-  const session = await getServerSession(authOptions);
-  const signedIn = !!session;
+export default function HomePage() {
+  // Cookie-presence check via Next's server-only cookies() reader.
+  // No SessionProvider, no /api/auth/session client roundtrip, no
+  // NextAuth runtime path on the marketing bundle. Authenticated
+  // visitors get a single "Open dashboard" affordance in place of
+  // the Sign in / Start free trial CTAs scattered across the page.
+  const signedIn = detectSignedIn();
 
   return (
     <>
