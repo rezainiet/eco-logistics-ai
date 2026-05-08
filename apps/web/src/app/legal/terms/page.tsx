@@ -14,8 +14,16 @@ export const metadata: Metadata = {
  * Required by Shopify Partner program for Public Distribution apps.
  * Linked from the Partner-app config "Terms of Service URL" field.
  *
- * Update placeholders (legal entity name, jurisdiction, support email)
- * before going live.
+ * TODO[brand] before flipping to Public Distribution:
+ *   - Confirm `_brand.legalName` resolves to the registered legal
+ *     entity (placeholder in @ecom/branding/defaults.ts).
+ *   - § 9 Limitation of liability: confirm the legal-entity name in
+ *     the all-caps clause matches `_brand.legalName`.
+ *   - Add a "governing law / jurisdiction" clause if your counsel
+ *     wants one (most BD/EU/CA registered entities do — typical
+ *     placement: between sections 9 and 10).
+ *   - `_brand.supportEmail` and `_brand.privacyEmail` must be
+ *     working inboxes; reviewers test delivery.
  */
 export default function TermsOfServicePage() {
   return (
@@ -27,22 +35,23 @@ export default function TermsOfServicePage() {
 
       <section className="mt-8 space-y-4 text-sm leading-relaxed text-fg-muted">
         <p>
-          These terms govern your use of the Cordon service
-          (&ldquo;Service&rdquo;). By creating an account, connecting a
-          commerce platform, or otherwise using the Service, you
-          (&ldquo;Merchant&rdquo;, &ldquo;you&rdquo;) agree to these terms.
-          If you are using the Service on behalf of a company, you confirm
-          you have authority to bind that company.
+          These terms govern your use of the {_brand.name} service
+          (&ldquo;Service&rdquo;), operated by {_brand.legalName}. By
+          creating an account, connecting a commerce platform, or otherwise
+          using the Service, you (&ldquo;Merchant&rdquo;, &ldquo;you&rdquo;)
+          agree to these terms. If you are using the Service on behalf of a
+          company, you confirm you have authority to bind that company.
         </p>
       </section>
 
       <h2 className="mt-10 text-xl font-semibold">1. The Service</h2>
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
-          Cordon provides ecommerce-logistics tooling: order sync
-          from connected commerce platforms, fraud scoring, customer
-          outreach, courier dispatch, and analytics. Specific feature
-          availability depends on your subscription tier; see{" "}
+          {_brand.name} provides COD operational tooling for Shopify and
+          WooCommerce merchants: order sync from connected commerce
+          platforms, operator-driven order verification, customer outreach,
+          courier dispatch, and analytics. Specific feature availability
+          depends on your subscription tier; see{" "}
           <a href="/pricing">Pricing</a> for details.
         </p>
       </div>
@@ -160,12 +169,12 @@ export default function TermsOfServicePage() {
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
           TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT
-          SHALL LOGISTICS CLOUD BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
-          SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF
-          PROFITS OR REVENUE, ARISING OUT OF OR IN CONNECTION WITH THE
-          SERVICE. OUR TOTAL LIABILITY UNDER THESE TERMS IS LIMITED TO
-          THE AMOUNT YOU PAID US IN THE TWELVE MONTHS PRIOR TO THE EVENT
-          GIVING RISE TO THE CLAIM.
+          SHALL {_brand.legalName.toUpperCase()} BE LIABLE FOR ANY
+          INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE
+          DAMAGES, OR ANY LOSS OF PROFITS OR REVENUE, ARISING OUT OF OR
+          IN CONNECTION WITH THE SERVICE. OUR TOTAL LIABILITY UNDER
+          THESE TERMS IS LIMITED TO THE AMOUNT YOU PAID US IN THE
+          TWELVE MONTHS PRIOR TO THE EVENT GIVING RISE TO THE CLAIM.
         </p>
       </div>
 

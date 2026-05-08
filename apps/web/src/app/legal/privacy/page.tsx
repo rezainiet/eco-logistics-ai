@@ -20,9 +20,16 @@ export const metadata: Metadata = {
  *     mechanism for customer / shop data deletion.
  *   - The contact email actually exists.
  *
- * Update the placeholder values (company legal name, support email,
- * physical address if your jurisdiction requires it) before flipping
- * the app to production.
+ * TODO[brand] before flipping to Public Distribution:
+ *   - Confirm `_brand.legalName` resolves to the registered legal
+ *     entity (currently the placeholder "ConfirmX Technologies Ltd."
+ *     in @ecom/branding/defaults.ts).
+ *   - Confirm `_brand.privacyEmail` is a working inbox — reviewers
+ *     test delivery.
+ *   - If your jurisdiction requires a physical-address disclosure
+ *     (BD/EU/CA), add it under § 9 Contact.
+ *   - Bump the "Last updated" line to the actual policy review date,
+ *     not the dynamic today() (currently dynamic for dev convenience).
  */
 export default function PrivacyPolicyPage() {
   return (
@@ -34,10 +41,11 @@ export default function PrivacyPolicyPage() {
 
       <section className="mt-8 space-y-4 text-sm leading-relaxed text-fg-muted">
         <p>
-          Cordon (&ldquo;we&rdquo;, &ldquo;us&rdquo;) provides
-          ecommerce-logistics software to merchants. This policy explains what
-          data we collect, why, how we store it, who we share it with, and
-          how merchants and their customers can request access or deletion.
+          {_brand.legalName} (&ldquo;we&rdquo;, &ldquo;us&rdquo;) operates the{" "}
+          {_brand.name} platform — COD order confirmation infrastructure for
+          Shopify and WooCommerce merchants. This policy explains what data we
+          collect, why, how we store it, who we share it with, and how
+          merchants and their customers can request access or deletion.
         </p>
         <p>
           We act as a <strong>data processor</strong> for the personal data
@@ -84,7 +92,8 @@ export default function PrivacyPolicyPage() {
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
           Strictly to deliver the contracted service: order management,
-          fraud scoring, customer outreach (recovery / call-centre), courier
+          COD order verification (operator-driven review of high-risk
+          orders), customer outreach (recovery / call-centre), courier
           dispatch, analytics for the merchant. We do not sell merchant or
           customer data to anyone, ever.
         </p>
@@ -145,18 +154,21 @@ export default function PrivacyPolicyPage() {
           If a customer of one of our merchants asks the merchant for their
           data, the merchant relays the request to Shopify, which forwards
           us a <code>customers/data_request</code> webhook. We log the
-          request to our audit trail. Per our processor / controller
-          relationship, the merchant fulfils the data subject access request
-          using the data they hold; we are available to them to extract
-          additional context if needed.
+          request to our audit trail (<code>shopify.gdpr_webhook</code>{" "}
+          and <code>shopify.gdpr_dispatch</code> events). Per our processor
+          / controller relationship, the merchant fulfils the data subject
+          access request using the data they hold; we are available to
+          them to extract additional context if needed.
         </p>
         <p>
           If a customer asks to be erased, Shopify forwards us a{" "}
           <code>customers/redact</code> webhook. Within 30 days of receipt
           we pseudonymise that customer&rsquo;s identifying fields across
           our order, call-log, recovery, tracking, audit, and webhook
-          inbox collections. Aggregated analytics remain because they no
-          longer identify the individual.
+          inbox collections, and hard-delete identity-pivoted rows
+          (recovery tasks, tracking sessions, matching webhook-inbox
+          entries). Aggregated analytics remain because they no longer
+          identify the individual.
         </p>
         <p>
           A customer who wants to skip the merchant and contact us directly
@@ -232,10 +244,15 @@ export default function PrivacyPolicyPage() {
         </p>
         <p>
           For Shopify-mandated privacy webhooks, the receiver is at{" "}
-          For Shopify-mandated privacy webhooks, the receiver is at{" "}
           <code>/api/webhooks/shopify/gdpr</code> on our production API
           domain.
         </p>
+        {/* TODO[brand]: add a physical-address line here if your
+            jurisdiction (BD / EU / CA) or your insurance posture
+            requires it before flipping the Shopify app to Public
+            Distribution. Reviewers do NOT strictly require it for
+            Shopify approval, but BD-registered legal entities
+            typically must publish a registered office address. */}
       </div>
     </article>
   );
