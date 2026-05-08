@@ -1,9 +1,12 @@
 import Link from "next/link";
+import { getBrandingSync } from "@ecom/branding";
 import styles from "./landing.module.css";
 import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
 import { PricingHighlighter } from "./_components/pricing-highlighter";
 import { ExitIntentModal } from "./_components/exit-intent-modal";
+
+const SAAS_BRANDING = getBrandingSync();
 
 /**
  * Cordon — landing page (Plan B + Plan C tone).
@@ -888,7 +891,12 @@ export default function HomePage() {
                   <li>Custom courier adapters</li>
                   <li>Volume pricing</li>
                 </ul>
-                <a href="mailto:sales@cordon.app?subject=Cordon%20Enterprise" className="btn btn-secondary">Book a 30-min call</a>
+                <a
+                  href={`mailto:${SAAS_BRANDING.salesEmail}?subject=${encodeURIComponent(SAAS_BRANDING.name)}%20Enterprise`}
+                  className="btn btn-secondary"
+                >
+                  Book a 30-min call
+                </a>
               </div>
             </div>
           </div>
@@ -984,7 +992,10 @@ export default function HomePage() {
                 <Link href="/signup" className="btn btn-primary btn-lg">
                   Start saving in 10 minutes <span className="arrow">→</span>
                 </Link>
-                <a href="mailto:hello@cordon.app?subject=Cordon%20walkthrough" className="btn btn-secondary btn-lg">
+                <a
+                  href={`mailto:${SAAS_BRANDING.helloEmail}?subject=${encodeURIComponent(SAAS_BRANDING.name)}%20walkthrough`}
+                  className="btn btn-secondary btn-lg"
+                >
                   Book a 15-min walkthrough
                 </a>
               </div>
@@ -1035,7 +1046,7 @@ export default function HomePage() {
               <Link href="/login">Sign in</Link>
               <Link href="/signup">Sign up</Link>
             </div>
-            <div>© {new Date().getFullYear()} Cordon. Built in Dhaka.</div>
+            <div>© {new Date().getFullYear()} {SAAS_BRANDING.name}. Built in Dhaka.</div>
           </div>
         </footer>
       </div>

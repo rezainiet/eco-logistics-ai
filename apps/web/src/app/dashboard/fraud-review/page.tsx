@@ -369,6 +369,25 @@ export default function FraudReviewPage() {
                             {it.reviewStatus.replace("_", " ")}
                           </Badge>
                         </div>
+                        {it.reasons && it.reasons.length > 0 ? (
+                          // Top reasons preview — surfaces the human-language
+                          // explanation right next to the score, so the
+                          // queue isn't a wall of bare numbers. Capped at 2
+                          // here; the detail panel below shows the full set.
+                          <ul className="mt-1 space-y-0.5 text-[11px] leading-snug text-fg-subtle">
+                            {it.reasons.slice(0, 2).map((reason, idx) => (
+                              <li key={idx} className="flex items-start gap-1.5">
+                                <span aria-hidden className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-fg-faint" />
+                                <span className="line-clamp-1">{reason}</span>
+                              </li>
+                            ))}
+                            {it.reasons.length > 2 ? (
+                              <li className="pl-2.5 text-fg-faint">
+                                +{it.reasons.length - 2} more reason{it.reasons.length - 2 === 1 ? "" : "s"}
+                              </li>
+                            ) : null}
+                          </ul>
+                        ) : null}
                       </button>
                     </li>
                   );
@@ -429,29 +448,81 @@ export default function FraudReviewPage() {
                       {detail.data.fraud.riskScore} · {detail.data.fraud.level}
                     </Badge>
                   </div>
-                  {detail.data.fraud.signals.length > 0 ? (
-                    <ul className="mt-3 space-y-2">
-                      {detail.data.fraud.signals.map((sig) => (
-                        <li
-                          key={sig.key}
-                          className="flex items-start gap-2 text-xs text-fg-muted"
-                        >
-                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-medium">{sig.key.replace(/_/g, " ")}</span>
-                              <span className="text-fg-faint">+{sig.weight}</span>
-                            </div>
-                            {sig.detail ? (
-                              <p className="text-fg-subtle">{sig.detail}</p>
-                            ) : null}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
+                  {detail.data.fraud.confidenceLabel ? (
+                    <p className="mt-1 text-xs text-fg-subtle">
+                      {detail.data.fraud.confidenceLabel === "Risky"
+                        ? "We'd recommend confirming on the phone before booking."
+                        : detail.data.fraud.confidenceLabel === "Verify"
+                          ? "A quick verification call is suggested before shipping."
+                          : "This order looks clean — proceed when ready."}
+                    </p>
+                  ) : null}
+
+                  {/*
+                    Reasons-first display. The `reasons` array is the
+                    merchant-language version of the signal computation
+                    (one full English sentence per finding, e.g. "Very
+                    high COD amount: ৳12,000"). Surfacing this above the
+                    raw signals lets a merchant decide without learning
+                    our internal taxonomy. The technical signals stay
+                    available below for operators who want them.
+                  */}
+                  {detail.data.fraud.reasons && detail.data.fraud.reasons.length > 0 ? (
+                    <div className="mt-3 space-y-2">
+                      <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
+                        Why this order is flagged
+                      </span>
+                      <ul className="space-y-1.5">
+                        {detail.data.fraud.reasons.map((reason, idx) => (
+                          <li
+                            key={idx}
+                            className="flex items-start gap-2 text-xs text-fg-muted"
+                          >
+                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                            <span className="flex-1 leading-snug">{reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : detail.data.fraud.signals.length === 0 ? (
                     <p className="mt-3 text-xs text-fg-subtle">No signals recorded.</p>
-                  )}
+                  ) : null}
+
+                  {detail.data.fraud.signals.length > 0 ? (
+                    /*
+                      Technical signal breakdown — the per-rule contribution
+                      to the score, with weights. Hidden by default behind
+                      <details> so the merchant view stays uncluttered;
+                      operators reviewing scoring behaviour can expand.
+                    */
+                    <details className="mt-3 group rounded-md border border-stroke/8 bg-surface-base/40 p-2">
+                      <summary className="cursor-pointer list-none text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle hover:text-fg-muted">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="transition-transform group-open:rotate-90" aria-hidden>›</span>
+                          Technical signals ({detail.data.fraud.signals.length}) · for operators
+                        </span>
+                      </summary>
+                      <ul className="mt-2 space-y-2">
+                        {detail.data.fraud.signals.map((sig) => (
+                          <li
+                            key={sig.key}
+                            className="flex items-start gap-2 text-xs text-fg-muted"
+                          >
+                            <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-warning/70" aria-hidden />
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-mono text-[11px] text-fg-subtle">{sig.key}</span>
+                                <span className="text-fg-faint">+{sig.weight}</span>
+                              </div>
+                              {sig.detail ? (
+                                <p className="text-fg-subtle">{sig.detail}</p>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                 </div>
 
                 <div className="space-y-1.5">
@@ -472,9 +543,24 @@ export default function FraudReviewPage() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-2 border-t border-stroke/8 pt-4 sm:flex-row">
+                {/*
+                  Action bar.
+                  Mobile: sticky to the bottom of the viewport so an
+                  operator scrolling through risk signals can decide
+                  without scrolling back up. Two-row 2x2 grid keeps
+                  every action 44px tall (above the iOS / Material
+                  tap-target floor) and keeps the four primary verbs
+                  visible at a glance — Call / Verify / No answer /
+                  Reject — without horizontal cramming. A faint top
+                  border + soft backdrop blur signals the bar is
+                  floating on top of content beneath it.
+                  Desktop (md+): falls back to the original single
+                  row, in-flow layout. No regression on operator
+                  desktop workflows.
+                */}
+                <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface/95 px-6 py-3 backdrop-blur-sm md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4 md:backdrop-blur-none">
                   <Button
-                    className="flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60"
+                    className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
                     disabled={
                       !callConfigured.data?.configured || initiateCall.isPending
                     }
@@ -490,7 +576,7 @@ export default function FraudReviewPage() {
                     Call customer
                   </Button>
                   <Button
-                    className="flex-1 bg-success text-white hover:bg-success/90 disabled:opacity-60"
+                    className="h-11 flex-1 bg-success text-white hover:bg-success/90 disabled:opacity-60 md:h-10"
                     disabled={verify.isPending}
                     onClick={() =>
                       verify.mutate({
@@ -504,7 +590,7 @@ export default function FraudReviewPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 border-warning-border bg-warning-subtle text-warning hover:bg-warning/20 hover:text-warning disabled:opacity-60"
+                    className="h-11 flex-1 border-warning-border bg-warning-subtle text-warning hover:bg-warning/20 hover:text-warning disabled:opacity-60 md:h-10"
                     disabled={noAnswer.isPending}
                     onClick={() =>
                       noAnswer.mutate({
@@ -518,7 +604,7 @@ export default function FraudReviewPage() {
                   </Button>
                   <Button
                     variant="outline"
-                    className="flex-1 border-danger-border bg-danger-subtle text-danger hover:bg-danger/20 hover:text-danger disabled:opacity-60"
+                    className="h-11 flex-1 border-danger-border bg-danger-subtle text-danger hover:bg-danger/20 hover:text-danger disabled:opacity-60 md:h-10"
                     disabled={reject.isPending}
                     onClick={() => {
                       setPendingRejectId(detail.data!.id);

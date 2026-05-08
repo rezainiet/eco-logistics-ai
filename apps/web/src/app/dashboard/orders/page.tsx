@@ -54,6 +54,7 @@ import {
 } from "@/components/automation/automation-badge";
 import { BulkAutomationBar } from "@/components/automation/bulk-automation-bar";
 import { OrdersCardList } from "@/components/orders/orders-card-list";
+import { SampleOrdersPreview } from "@/components/orders/sample-orders-preview";
 import { formatBDT, formatDate } from "@/lib/formatters";
 import { humanizeError } from "@/lib/friendly-errors";
 import {
@@ -684,6 +685,17 @@ export default function OrdersPage() {
                         }
                       />
                     )}
+                    {/*
+                      Skeleton-of-real-data preview rendered BELOW the
+                      EmptyState CTAs, only on the "no orders ever, no
+                      filters" onboarding path. Shows the merchant what
+                      an order with risk-score / status / COD looks
+                      like so the value of Cordon is legible before
+                      their first webhook arrives. Hidden when filters
+                      are active (debug state, not onboarding) and once
+                      real orders exist (the table speaks for itself).
+                    */}
+                    {!hasActiveFilters ? <SampleOrdersPreview /> : null}
                   </TableCell>
                 </TableRow>
               ) : (

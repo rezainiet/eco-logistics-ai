@@ -1,16 +1,23 @@
 /* eslint-disable */
 /**
- * Logistics behavior tracker — drop-in JS SDK for merchant storefronts.
+ * Cordon behavior tracker — drop-in JS SDK for merchant storefronts.
  *
  * Usage:
- *   <script async src="https://logistics.example.com/sdk.js"
+ *   <script async src="https://cordon.app/sdk.js"
  *           data-tracking-key="pub_xxxxxxxxxxxx"
- *           data-collector="https://api.logistics.example.com/track/collect"></script>
+ *           data-collector="https://api.cordon.app/track/collect"></script>
  *
- * Public API (window.LogisticsTracker):
+ * Public API (window.CordonTracker):
  *   identify({ phone, email })   // call on checkout submit
  *   track(eventName, props?)     // custom event
  *   reset()                      // clear session (logout)
+ *
+ * Backwards compatibility:
+ *   `window.LogisticsTracker` is preserved as a deprecated alias for
+ *   storefronts that installed this SDK pre-rebrand. Both globals point
+ *   at the same API object. The alias logs a one-time warning the first
+ *   time it's accessed so merchants know to update their snippets, and
+ *   will be removed in the next major SDK release.
  *
  * Privacy:
  *   - No third-party cookies; uses localStorage + sessionStorage only.
@@ -25,6 +32,9 @@
  *   - Hard cap of 200 buffered events to bound memory on long sessions.
  */
 (function (window, document) {
+  // Re-entry guard. Either global already-loaded blocks a second init —
+  // they alias the same object, so checking either is sufficient.
+  if (window.CordonTracker && window.CordonTracker.__loaded) return;
   if (window.LogisticsTracker && window.LogisticsTracker.__loaded) return;
 
   var script =
@@ -47,7 +57,7 @@
       }
     })();
   if (!TRACKING_KEY || !COLLECTOR) {
-    if (window.console) console.warn("[logistics] tracking key or collector missing");
+    if (window.console) console.warn("[cordon] tracking key or collector missing");
     return;
   }
 
@@ -379,7 +389,7 @@
   pageView();
 
   // Expose API.
-  window.LogisticsTracker = {
+  var api = {
     __loaded: true,
     track: track,
     identify: identify,
@@ -404,4 +414,23 @@
     sessionId: sessionId,
     anonId: anonId,
   };
+
+  // Primary global for the post-rebrand SDK.
+  window.CordonTracker = api;
+
+  // Backwards-compat alias for storefronts installed pre-rebrand. Both
+  // globals reference the same object, so a merchant calling
+  // `window.LogisticsTracker.track(...)` reaches the same code path as
+  // `window.CordonTracker.track(...)`. We log a one-time deprecation
+  // warning so merchants notice and migrate the snippet at their own
+  // pace; future major versions of the SDK will drop the alias.
+  window.LogisticsTracker = api;
+  if (window.console && !window.__cordonSdkAliasWarned) {
+    window.__cordonSdkAliasWarned = true;
+    console.warn(
+      "[cordon] window.LogisticsTracker is a deprecated alias for window.CordonTracker. " +
+        "Update your storefront <script> tag to reference CordonTracker. " +
+        "The alias will be removed in the next major release."
+    );
+  }
 })(window, document);

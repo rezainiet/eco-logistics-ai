@@ -47,7 +47,7 @@ function VerifyEmailContent() {
 
   if (status === "loading") {
     return (
-      <div className="rounded-2xl border border-stroke/10 bg-surface p-7 shadow-elevated">
+      <div className="cordon-card border border-stroke/30 bg-surface p-7 shadow-elevated">
         <div className="flex flex-col items-center gap-3 text-center">
           <Loader2 className="h-6 w-6 animate-spin text-brand" />
           <h1 className="text-lg font-semibold text-fg">Verifying your email…</h1>
@@ -59,21 +59,23 @@ function VerifyEmailContent() {
 
   if (status === "success") {
     return (
-      <div className="rounded-2xl border border-stroke/10 bg-surface p-7 shadow-elevated animate-slide-up">
+      <div className="cordon-card border border-stroke/30 bg-surface p-7 shadow-elevated animate-slide-up">
         <div className="flex flex-col items-center gap-3 text-center">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-success-subtle text-success">
             <CheckCircle2 className="h-5 w-5" />
           </div>
-          <h1 className="text-xl font-semibold text-fg">Email verified</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-fg">
+            You&apos;re <span className="cordon-serif">verified.</span>
+          </h1>
           <p className="max-w-sm text-sm text-fg-subtle">
-            Thanks for confirming. Your workspace is fully set up — head back to your
-            dashboard.
+            The pipeline is now live on your workspace — Cordon will start
+            scoring orders the moment your first webhook lands.
           </p>
           <Link
             href="/dashboard"
-            className="mt-2 inline-flex h-10 items-center rounded-md bg-brand px-4 text-sm font-medium text-white hover:bg-brand-hover"
+            className="mt-2 inline-flex h-11 items-center rounded-md bg-brand px-4 text-sm font-semibold text-brand-fg hover:bg-brand-hover"
           >
-            Open dashboard
+            Open dashboard <span className="cordon-arrow ml-1.5">→</span>
           </Link>
         </div>
       </div>

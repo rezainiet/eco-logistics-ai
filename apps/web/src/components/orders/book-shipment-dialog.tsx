@@ -99,7 +99,7 @@ export function BookShipmentDialog({
       <DialogContent className="max-w-xl border-[rgba(209,213,219,0.1)] bg-[#1A1D2E] text-[#F3F4F6]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <PackageCheck className="h-5 w-5 text-[#0084D4]" />
+            <PackageCheck className="h-5 w-5 text-brand" />
             Book courier pickup
           </DialogTitle>
           <DialogDescription className="text-[#9CA3AF]">
@@ -170,7 +170,7 @@ export function BookShipmentDialog({
           <Button
             onClick={submit}
             disabled={bulk.isLoading || orderIds.length === 0}
-            className="bg-[#0084D4] text-white hover:bg-[#0072BB]"
+            className="bg-brand text-brand-fg hover:bg-brand-hover"
           >
             {bulk.isLoading ? (
               <>

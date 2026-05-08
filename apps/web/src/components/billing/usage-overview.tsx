@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, ShieldAlert } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -35,8 +36,9 @@ const METRIC_LABELS: Record<string, string> = {
 };
 
 export function UsageOverview() {
+  const interval = useVisibilityInterval(60_000);
   const usage = trpc.billing.getUsage.useQuery(undefined, {
-    refetchInterval: 60_000,
+    refetchInterval: interval,
   });
   const ent = trpc.integrations.getEntitlements.useQuery();
 

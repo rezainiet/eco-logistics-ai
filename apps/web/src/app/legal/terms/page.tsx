@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
+import { getBrandingSync } from "@ecom/branding";
+
+const _brand = getBrandingSync();
 
 export const metadata: Metadata = {
-  title: "Terms of Service — Logistics Cloud",
-  description: "Terms governing use of the Logistics Cloud platform.",
+  title: `Terms of Service — ${_brand.name}`,
+  description: `Terms governing use of the ${_brand.name} platform.`,
 };
 
 /**
@@ -24,7 +27,7 @@ export default function TermsOfServicePage() {
 
       <section className="mt-8 space-y-4 text-sm leading-relaxed text-fg-muted">
         <p>
-          These terms govern your use of the Logistics Cloud service
+          These terms govern your use of the Cordon service
           (&ldquo;Service&rdquo;). By creating an account, connecting a
           commerce platform, or otherwise using the Service, you
           (&ldquo;Merchant&rdquo;, &ldquo;you&rdquo;) agree to these terms.
@@ -36,7 +39,7 @@ export default function TermsOfServicePage() {
       <h2 className="mt-10 text-xl font-semibold">1. The Service</h2>
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
-          Logistics Cloud provides ecommerce-logistics tooling: order sync
+          Cordon provides ecommerce-logistics tooling: order sync
           from connected commerce platforms, fraud scoring, customer
           outreach, courier dispatch, and analytics. Specific feature
           availability depends on your subscription tier; see{" "}
@@ -49,7 +52,7 @@ export default function TermsOfServicePage() {
         <p>
           You are responsible for keeping your account credentials secure
           and for all activity that happens under your account. Notify us
-          at <a href="mailto:support@logisticscloud.example">support@logisticscloud.example</a>{" "}
+          at <a href={`mailto:${_brand.supportEmail}`}>{_brand.supportEmail}</a>{" "}
           immediately if you suspect unauthorised access.
         </p>
         <p>
@@ -115,7 +118,7 @@ export default function TermsOfServicePage() {
         <p>
           On request via the standard Shopify privacy webhooks
           (<code>customers/redact</code>, <code>shop/redact</code>) or by
-          email to <a href="mailto:privacy@logisticscloud.example">privacy@logisticscloud.example</a>,
+          email to <a href={`mailto:${_brand.privacyEmail}`}>{_brand.privacyEmail}</a>,
           we will redact or delete data per the timelines in our Privacy
           Policy.
         </p>
@@ -179,10 +182,7 @@ export default function TermsOfServicePage() {
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
           Questions about these terms:{" "}
-          <a href="mailto:legal@logisticscloud.example">
-            legal@logisticscloud.example
-          </a>
-          .
+          <a href={`mailto:${_brand.supportEmail}`}>{_brand.supportEmail}</a>.
         </p>
       </div>
     </article>

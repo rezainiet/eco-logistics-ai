@@ -55,11 +55,17 @@ export default function ForgotPasswordPage() {
     return (
       <div className="cordon-card animate-slide-up border border-stroke/30 bg-surface p-7 shadow-elevated">
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-success-subtle text-success">
+          <div className="relative flex h-11 w-11 items-center justify-center rounded-full bg-success-subtle text-success">
             <CheckCircle2 className="h-5 w-5" />
+            {/* Cordon pulse — same beat as the landing/auth shell, but
+                tinted with the success hue to keep the meaning clear. */}
+            <span
+              aria-hidden
+              className="absolute -right-0.5 -top-0.5 inline-block h-2 w-2 rounded-full bg-success shadow-[0_0_8px_hsl(var(--success))]"
+            />
           </div>
           <h1 className="text-xl font-semibold tracking-tight text-fg">
-            Check your inbox
+            Check your <span className="cordon-serif">inbox.</span>
           </h1>
           <p className="max-w-sm text-sm text-fg-subtle">
             If an account exists for{" "}

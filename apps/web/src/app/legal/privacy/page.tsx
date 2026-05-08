@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import { getBrandingSync } from "@ecom/branding";
+
+const _brand = getBrandingSync();
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — Logistics Cloud",
-  description:
-    "How Logistics Cloud collects, processes, retains, and redacts merchant + customer data.",
+  title: `Privacy Policy — ${_brand.name}`,
+  description: `How ${_brand.name} collects, processes, retains, and redacts merchant + customer data.`,
 };
 
 /**
@@ -32,7 +34,7 @@ export default function PrivacyPolicyPage() {
 
       <section className="mt-8 space-y-4 text-sm leading-relaxed text-fg-muted">
         <p>
-          Logistics Cloud (&ldquo;we&rdquo;, &ldquo;us&rdquo;) provides
+          Cordon (&ldquo;we&rdquo;, &ldquo;us&rdquo;) provides
           ecommerce-logistics software to merchants. This policy explains what
           data we collect, why, how we store it, who we share it with, and
           how merchants and their customers can request access or deletion.
@@ -158,7 +160,8 @@ export default function PrivacyPolicyPage() {
         </p>
         <p>
           A customer who wants to skip the merchant and contact us directly
-          may email <a href="mailto:privacy@logisticscloud.example">privacy@logisticscloud.example</a>.
+          may email{" "}
+          <a href={`mailto:${_brand.privacyEmail}`}>{_brand.privacyEmail}</a>.
         </p>
       </div>
 
@@ -225,12 +228,10 @@ export default function PrivacyPolicyPage() {
       <div className="space-y-3 text-sm leading-relaxed text-fg-muted">
         <p>
           Questions about this policy or about how we handle data:{" "}
-          <a href="mailto:privacy@logisticscloud.example">
-            privacy@logisticscloud.example
-          </a>
-          .
+          <a href={`mailto:${_brand.privacyEmail}`}>{_brand.privacyEmail}</a>.
         </p>
         <p>
+          For Shopify-mandated privacy webhooks, the receiver is at{" "}
           For Shopify-mandated privacy webhooks, the receiver is at{" "}
           <code>/api/webhooks/shopify/gdpr</code> on our production API
           domain.

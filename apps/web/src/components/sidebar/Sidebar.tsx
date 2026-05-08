@@ -16,10 +16,18 @@ import {
   Settings,
   ShieldAlert,
 } from "lucide-react";
+import { defaultInitials, getBrandingSync } from "@ecom/branding";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+
+// SaaS branding fallback values for the sidebar wordmark + initial. We
+// intentionally use `getBrandingSync()` (defaults + ENV overrides only,
+// no DB) so this client component has zero I/O dependency. Live admin
+// edits propagate via a re-deploy or a server-rendered ancestor that
+// passes branding down via context (Phase F).
+const SAAS_BRANDING = getBrandingSync();
 
 type NavItem = {
   label: string;
@@ -56,13 +64,27 @@ const NAV: NavGroup[] = [
   {
     label: "Connect",
     items: [
-      { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
+      // Points at the new unified settings IA (settings/integrations).
+      // The old /dashboard/integrations URL still redirects in case any
+      // bookmark or external link is stale — see the legacy redirect at
+      // apps/web/src/app/dashboard/integrations/page.tsx.
+      {
+        label: "Integrations",
+        href: "/dashboard/settings/integrations",
+        icon: Plug,
+      },
     ],
   },
   {
     label: "Account",
     items: [
-      { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
+      // Same pattern — point straight at the new settings location to
+      // avoid an avoidable redirect hop on the most-clicked nav row.
+      {
+        label: "Billing",
+        href: "/dashboard/settings/billing",
+        icon: CreditCard,
+      },
       { label: "Settings", href: "/dashboard/settings", icon: Settings },
     ],
   },
@@ -124,12 +146,16 @@ function NavList({
   const pathname = usePathname();
   const allHrefs = NAV.flatMap((g) => g.items.map((i) => i.href));
   const activeHref = findActiveHref(pathname, allHrefs);
+  // Initials fallback comes from the centralized SaaS brand name when no
+  // merchant business name exists yet. Previously hardcoded "L" (a
+  // leftover from the "Logistics" rebrand) — that's tracked in the
+  // branding-drift audit § 3.3 and fixed here.
   const initials = (businessName ?? "")
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() ?? "")
-    .join("") || "L";
+    .join("") || defaultInitials(SAAS_BRANDING.name);
 
   return (
     <div className="flex h-full flex-col">
@@ -151,7 +177,7 @@ function NavList({
         </span>
         <div className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-sm font-semibold text-fg">
-            {businessName ?? "Logistics"}
+            {businessName ?? SAAS_BRANDING.name}
           </span>
           <span className="truncate text-2xs font-medium uppercase tracking-[0.08em] text-fg-subtle">
             Merchant workspace
@@ -233,6 +259,7 @@ export function Sidebar() {
           businessName={businessName}
         />
       </aside>
+
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>

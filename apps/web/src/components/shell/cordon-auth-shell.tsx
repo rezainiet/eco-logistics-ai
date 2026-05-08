@@ -1,5 +1,9 @@
+"use client";
+
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
+import { isPlanTier, PLANS } from "@ecom/types";
 import {
   CheckCircle2,
   ShieldCheck,
@@ -130,8 +134,16 @@ export function CordonAuthShell({ children }: { children: ReactNode }) {
     <>
       <style dangerouslySetInnerHTML={{ __html: CORDON_AUTH_TOKENS }} />
       <main className="cordon-auth relative overflow-hidden">
-        <div className="relative z-10 mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 gap-10 px-4 py-10 md:grid-cols-2 md:gap-16 md:px-8 md:py-16 lg:py-20">
-          <ValueColumn />
+        <div className="relative z-10 mx-auto grid min-h-screen w-full max-w-6xl grid-cols-1 gap-8 px-4 py-8 md:grid-cols-2 md:gap-16 md:px-8 md:py-16 lg:py-20">
+          {/*
+            useSearchParams() requires a Suspense boundary in Next 14
+            App Router because the shell is rendered inside server-built
+            layouts. Falling back to the wordmark-only header keeps the
+            initial paint budget tiny while the URL params resolve.
+          */}
+          <Suspense fallback={<WordmarkOnly />}>
+            <ValueColumn />
+          </Suspense>
           <div className="flex items-center md:justify-end">
             <div className="w-full max-w-md">{children}</div>
           </div>
@@ -141,9 +153,28 @@ export function CordonAuthShell({ children }: { children: ReactNode }) {
   );
 }
 
-function ValueColumn() {
+function WordmarkOnly() {
   return (
-    <section className="flex flex-col gap-8 md:gap-10">
+    <Link
+      href="/"
+      className="flex items-center gap-2.5 self-start rounded-md outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
+      <span className="cordon-logo-dot" aria-hidden />
+      <span className="text-base font-semibold tracking-tight text-fg">Cordon</span>
+    </Link>
+  );
+}
+
+function ValueColumn() {
+  // Read `?plan=` so the auth shell echoes the merchant's pricing-page
+  // selection. The eyebrow, headline, and proof points re-skin to the
+  // plan when present; otherwise the default Cordon hero stays.
+  const params = useSearchParams();
+  const planParam = params?.get("plan") ?? null;
+  const plan = isPlanTier(planParam) ? PLANS[planParam] : null;
+
+  return (
+    <section className="flex flex-col gap-6 md:gap-10">
       <Link
         href="/"
         className="flex items-center gap-2.5 self-start rounded-md outline-none focus-visible:ring-2 focus-visible:ring-brand"
@@ -152,21 +183,83 @@ function ValueColumn() {
         <span className="text-base font-semibold tracking-tight text-fg">Cordon</span>
       </Link>
 
+      {/* Mobile proof-band — preserves the brand voice + trust signals on
+          phones, where ~60% of BD signups happen. The desktop ValueColumn
+          stays hidden below md; this band stays hidden above md. */}
+      <div className="md:hidden">
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand/10 px-2.5 py-1 text-2xs font-medium text-brand">
+          <span className="cordon-pulse" aria-hidden />
+          {plan ? `${plan.name} · 14-day trial` : "Built for Bangladesh's COD economy"}
+        </span>
+        <h2 className="mt-3 text-[1.4rem] font-semibold leading-[1.15] tracking-tight text-fg">
+          {plan ? (
+            <>
+              Start your{" "}
+              <span className="cordon-serif">{plan.name.toLowerCase()}</span>{" "}
+              trial.
+            </>
+          ) : (
+            <>
+              Stop shipping to{" "}
+              <span className="cordon-serif">fraudsters.</span>
+            </>
+          )}
+        </h2>
+        <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl border border-stroke/30 bg-surface/60 p-2.5 text-center">
+          <div>
+            <div className="font-mono text-xs font-semibold text-fg">200+</div>
+            <div className="text-2xs text-fg-faint">BD merchants</div>
+          </div>
+          <div className="border-x border-stroke/30">
+            <div className="font-mono text-xs font-semibold text-fg">৳45 Cr+</div>
+            <div className="text-2xs text-fg-faint">RTO prevented</div>
+          </div>
+          <div>
+            <div className="font-mono text-xs font-semibold text-fg">99.9%</div>
+            <div className="text-2xs text-fg-faint">webhook uptime</div>
+          </div>
+        </div>
+      </div>
+
       <div className="hidden flex-col gap-5 md:flex">
         <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-brand/25 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">
           <span className="cordon-pulse" aria-hidden />
-          Built for Bangladesh&apos;s COD economy
+          {plan ? `${plan.name} plan · 14-day trial · no card` : "Built for Bangladesh's COD economy"}
         </span>
         <h2 className="text-3xl font-semibold leading-[1.05] tracking-tight text-fg lg:text-[2.5rem]">
-          Stop shipping to{" "}
-          <span className="cordon-serif">fraudsters.</span>
-          <br />
-          Get paid for what you actually deliver.
+          {plan ? (
+            <>
+              Start your{" "}
+              <span className="cordon-serif">{plan.name.toLowerCase()}</span>{" "}
+              trial.
+              <br />
+              <span className="text-fg-muted">{plan.tagline}</span>
+            </>
+          ) : (
+            <>
+              Stop shipping to{" "}
+              <span className="cordon-serif">fraudsters.</span>
+              <br />
+              Get paid for what you actually deliver.
+            </>
+          )}
         </h2>
         <p className="max-w-md text-sm text-fg-muted">
-          Real-time fraud scoring across a cross-merchant network, automated
-          booking on Pathao / Steadfast / RedX, and webhook delivery you can
-          actually trust. Cordon merchants cut RTO by up to 60%.
+          {plan ? (
+            <>
+              You picked <strong className="text-fg">{plan.name}</strong>{" "}
+              (৳{plan.priceBDT.toLocaleString()} / month after the trial). 14
+              days free, no card. Cancel before day 14 and you&apos;re not
+              charged.
+            </>
+          ) : (
+            <>
+              Real-time fraud scoring across a cross-merchant network,
+              automated booking on Pathao / Steadfast / RedX, and webhook
+              delivery you can actually trust. Cordon merchants cut RTO by
+              up to 60%.
+            </>
+          )}
         </p>
 
         <ul className="flex flex-col gap-2.5 text-sm text-fg-muted">
@@ -202,12 +295,6 @@ function ValueColumn() {
           <TrustPill>Audit-logged</TrustPill>
           <TrustPill>Role-based access</TrustPill>
         </div>
-      </div>
-
-      <div className="md:hidden">
-        <p className="text-sm text-fg-muted">
-          Used by 200+ BD merchants. ৳45 Cr+ RTO prevented in the last year.
-        </p>
       </div>
     </section>
   );

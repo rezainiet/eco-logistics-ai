@@ -27,11 +27,19 @@
     --stroke-default: 220 13% 85%;
     --stroke-strong: 220 13% 85%;
 
-    /* Brand */
-    --brand: 202 100% 41%;              /* #0084D4 */
-    --brand-hover: 204 100% 37%;        /* #0072BB */
-    --brand-active: 207 100% 32%;       /* #0059A3 */
-    --brand-fg: 0 0% 100%;
+    /* Brand — lime Cordon. Defaults match `@ecom/branding/defaults`
+     * (DEFAULT_BRANDING.colors). The root layout server-renders an
+     * override <style> from `getBranding()` so admin edits propagate
+     * without redeploy; if that override is missing (e.g. error
+     * boundary, edge cache miss) these defaults still paint a coherent
+     * Cordon look. The previous blue tokens (#0084D4/#0072BB/#0059A3)
+     * were the leftover Logistics palette and caused visible drift
+     * between marketing/auth (lime) and dashboard/admin (blue).
+     * Unified 2026-05-08 as part of the Centralized Branding Phase 2. */
+    --brand: 76 92% 64%;                /* #C6F84F */
+    --brand-hover: 85 84% 50%;          /* #8AE619 */
+    --brand-active: 85 84% 44%;         /* #7CCC15 */
+    --brand-fg: 240 6% 5%;              /* #0A0A0B — AAA contrast on lime */
 
     /* Status */
     --success: 160 84% 39%;             /* #10B981 */

@@ -2,15 +2,17 @@
 
 import { trpc } from "@/lib/trpc";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 
 /**
  * Tiny green/yellow/red dot for the dashboard header. Reads the existing
- * health endpoint (already shipped). Refreshes every 60s.
+ * health endpoint (already shipped). Refreshes every 60s while visible.
  */
 export function SystemStatusPill() {
+  const interval = useVisibilityInterval(60_000);
   const health = trpc.health.useQuery(undefined, {
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    refetchInterval: interval,
   });
 
   if (health.isLoading) {

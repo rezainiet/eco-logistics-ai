@@ -21,6 +21,7 @@ import { OrdersBarChart } from "@/components/analytics/orders-bar-chart";
 import { CallHeatmap } from "@/components/analytics/call-heatmap";
 import { CallCenterSection } from "@/components/analytics/call-center-section";
 import { FraudSection } from "@/components/analytics/fraud-section";
+import { RtoIntelligenceSection } from "@/components/intelligence/rto-intelligence-section";
 import { formatBDT, formatPercent } from "@/lib/formatters";
 
 export default function AnalyticsPage() {
@@ -148,6 +149,8 @@ export default function AnalyticsPage() {
           )}
         </ChartCard>
       </div>
+
+      <RtoIntelligenceSection />
 
       <FraudSection />
 

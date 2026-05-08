@@ -11,6 +11,7 @@ import {
   Webhook,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
@@ -34,8 +35,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
  * thinking about it.
  */
 export function SystemStatusPanel() {
+  // Pause the 30s timer while the tab is hidden — see
+  // `useVisibilityInterval` for why this is a net UX-positive.
+  const interval = useVisibilityInterval(30_000);
   const q = trpc.integrations.systemStatus.useQuery(undefined, {
-    refetchInterval: 30_000,
+    refetchInterval: interval,
     refetchOnWindowFocus: true,
   });
 

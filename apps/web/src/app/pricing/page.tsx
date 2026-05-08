@@ -17,9 +17,9 @@ import {
 } from "@ecom/types";
 
 export const metadata = {
-  title: "Pricing — Logistics",
+  title: "Pricing — Cordon",
   description:
-    "Simple, predictable pricing for e-commerce merchants in Bangladesh. 14-day free trial on every plan.",
+    "Simple, predictable pricing for Bangladesh e-commerce merchants who want to stop bleeding RTO. 14-day free trial on every plan, no card.",
 };
 
 const ICON: Record<PlanTier, typeof Sparkles> = {
@@ -135,11 +135,13 @@ export default function PricingPage() {
       />
 
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <Link href="/" className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand text-sm font-bold text-white shadow-glow">
-            L
-          </span>
-          <span className="text-sm font-semibold text-fg">Logistics</span>
+        <Link href="/" className="flex items-center gap-2.5">
+          {/* Cordon wordmark — pulse-dot logo (matches landing + auth shell) */}
+          <span
+            aria-hidden
+            className="inline-block h-2.5 w-2.5 rounded-full bg-brand shadow-[0_0_14px_hsl(var(--brand))]"
+          />
+          <span className="text-sm font-semibold tracking-tight text-fg">Cordon</span>
         </Link>
         <nav className="flex items-center gap-2">
           <Link
@@ -445,7 +447,7 @@ export default function PricingPage() {
         {/* Footer kept minimal — comparison table above is the
             informational anchor, footer is just navigation. */}
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-6 text-xs text-fg-subtle md:flex-row">
-          <p>© {new Date().getFullYear()} Logistics · Built for Bangladesh e-commerce.</p>
+          <p>© {new Date().getFullYear()} Cordon · Built for Bangladesh&apos;s COD economy.</p>
           <div className="flex items-center gap-5">
             <Link href="/" className="hover:text-fg">
               Home

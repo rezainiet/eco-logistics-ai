@@ -11,6 +11,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,15 +39,16 @@ const TIER_LABEL: Record<string, string> = {
 export default function RecoveryPage() {
   const ent = trpc.recovery.getEntitlements.useQuery();
   const enabled = !!ent.data?.enabled;
+  const interval = useVisibilityInterval(30_000);
 
   const list = trpc.recovery.list.useQuery(
     { status: "pending", limit: 100 },
-    { enabled, retry: false, refetchInterval: 30_000 },
+    { enabled, retry: false, refetchInterval: interval },
   );
   const counts = trpc.recovery.counts.useQuery(undefined, {
     enabled,
     retry: false,
-    refetchInterval: 30_000,
+    refetchInterval: interval,
   });
   const utils = trpc.useUtils();
 

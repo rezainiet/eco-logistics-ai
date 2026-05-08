@@ -93,7 +93,7 @@ export function SubscriptionBanner() {
         <Link href="/dashboard/billing" className="underline">
           Choose a plan
         </Link>{" "}
-        to keep using Logistics.
+        to keep using Cordon.
       </Banner>
     );
   }

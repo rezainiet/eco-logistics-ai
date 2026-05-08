@@ -106,7 +106,7 @@ export function NotificationsDrawer({
         tone: "danger",
         icon: AlertCircle,
         title: "Trial has ended",
-        body: "Choose a plan to keep using Logistics.",
+        body: "Choose a plan to keep using Cordon.",
         href: "/dashboard/billing",
       });
     }

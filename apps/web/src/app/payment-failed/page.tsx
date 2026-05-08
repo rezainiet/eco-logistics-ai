@@ -4,7 +4,10 @@ import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, ArrowLeft, MessageCircle, RefreshCw } from "lucide-react";
+import { getBrandingSync } from "@ecom/branding";
 import { Button } from "@/components/ui/button";
+
+const SAAS_BRANDING = getBrandingSync();
 
 /**
  * Maps the upstream `?reason=` query into a human explanation. The keys
@@ -88,7 +91,10 @@ function PaymentFailedInner() {
           variant="outline"
           className="h-10 w-full border-stroke/30 bg-transparent text-fg-muted hover:bg-surface-raised hover:text-fg"
         >
-          <a href="mailto:support@cordon.app?subject=Payment%20issue" className="inline-flex items-center gap-2">
+          <a
+            href={`mailto:${SAAS_BRANDING.supportEmail}?subject=Payment%20issue`}
+            className="inline-flex items-center gap-2"
+          >
             <MessageCircle className="h-4 w-4" /> Email support
           </a>
         </Button>

@@ -65,6 +65,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             Admin access
           </Link>
           <Link
+            href="/admin/branding"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            SaaS branding
+          </Link>
+          <Link
             href="/dashboard"
             className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
           >

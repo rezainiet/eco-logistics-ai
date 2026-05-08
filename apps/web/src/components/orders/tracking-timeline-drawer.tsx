@@ -24,6 +24,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { toast } from "@/components/ui/toast";
+import {
+  AddressQualityPanel,
+  IntentPanel,
+} from "@/components/orders/intelligence-panels";
+import { OperationalHintPanel } from "@/components/orders/operational-hint-panel";
 
 type TrackingBadge = { label: string; className: string; icon: typeof Package };
 const FALLBACK_BADGE: TrackingBadge = {
@@ -166,6 +171,24 @@ export function TrackingTimelineDrawer({
                   </div>
                 )}
               </div>
+
+              {/* Operational hint — highest-priority callout. The panel
+                  returns null when the order looks healthy, so this slot
+                  collapses cleanly. Visibility-only; no buttons mutate
+                  the order. */}
+              <OperationalHintPanel
+                hint={(order as { operationalHint?: unknown }).operationalHint as never}
+              />
+
+              {/* RTO Intelligence v1 panels — observation-only. Either may
+                  be null on legacy orders or when the kill-switch was off
+                  at ingest. The panel components themselves return null
+                  rather than rendering an empty shell. */}
+              <IntentPanel intent={(order as { intent?: unknown }).intent as never} />
+              <AddressQualityPanel
+                addressQuality={(order as { addressQuality?: unknown }).addressQuality as never}
+                thana={(order as { thana?: string | null }).thana ?? null}
+              />
 
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-[#F3F4F6]">Timeline</h3>
@@ -316,9 +339,9 @@ function ProgressStepper({
           const circleClass = failedTerminal
             ? "border-[#F87171] bg-[rgba(239,68,68,0.18)] text-[#F87171]"
             : completed
-              ? "border-[#0084D4] bg-[#0084D4] text-white"
+              ? "border-brand bg-brand text-brand-fg"
               : active
-                ? "border-[#0084D4] bg-[rgba(0,132,212,0.18)] text-[#60A5FA] ring-2 ring-[rgba(0,132,212,0.35)]"
+                ? "border-brand bg-brand/20 text-brand ring-2 ring-brand/35"
                 : "border-[rgba(209,213,219,0.2)] bg-[#111318] text-[#6B7280]";
           const labelClass = active
             ? failedTerminal
@@ -335,7 +358,7 @@ function ProgressStepper({
                     idx === 0
                       ? "bg-transparent"
                       : idx <= reached
-                        ? "bg-[#0084D4]"
+                        ? "bg-brand"
                         : "bg-[rgba(209,213,219,0.15)]"
                   }`}
                 />
@@ -349,7 +372,7 @@ function ProgressStepper({
                     idx === steps.length - 1
                       ? "bg-transparent"
                       : idx < reached
-                        ? "bg-[#0084D4]"
+                        ? "bg-brand"
                         : "bg-[rgba(209,213,219,0.15)]"
                   }`}
                 />

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, Clock, Info } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 
 /**
  * Reads the merchant's recent in-app notifications and surfaces ONE plain-
@@ -18,9 +19,10 @@ import { trpc } from "@/lib/trpc";
  * If none of these conditions are met, the banner renders nothing.
  */
 export function OperationalBanner() {
+  const interval = useVisibilityInterval(60_000);
   const notifications = trpc.notifications.list.useQuery(
     { limit: 25, onlyUnread: false } as never,
-    { staleTime: 30_000, refetchInterval: 60_000 },
+    { staleTime: 30_000, refetchInterval: interval },
   );
   const orders = trpc.orders.listOrders.useQuery(
     { limit: 50 } as never,

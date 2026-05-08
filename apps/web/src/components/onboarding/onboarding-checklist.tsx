@@ -42,12 +42,21 @@ const STEP_TIMES: Record<OnboardingStepKey, string> = {
   test_sms: "about 1 minute",
 };
 
+// Hints lead with merchant benefit, not a technology list. The
+// platform list ("Shopify · Pathao · …") was the original copy and it
+// implicitly asked the merchant to learn our taxonomy before knowing
+// why the step matters. Benefit-first reads cleaner on first-touch.
 const STEP_HINTS: Record<OnboardingStepKey, string> = {
-  connect_store: "Shopify · WooCommerce",
-  import_orders: "Last 25 orders",
-  add_courier: "Pathao · Steadfast · RedX",
-  enable_automation: "Manual · semi · full",
-  test_sms: "Closes the loop",
+  connect_store:
+    "So Cordon sees every order the moment it's placed (Shopify · WooCommerce)",
+  import_orders:
+    "Pulls your most recent orders so the dashboard isn't empty on day one",
+  add_courier:
+    "So we can book and track shipments automatically (Pathao · Steadfast · RedX)",
+  enable_automation:
+    "Picks who to confirm via SMS and who to send straight to the courier",
+  test_sms:
+    "Confirms your merchant SMS templates actually reach a real handset",
 };
 
 export function OnboardingChecklist({

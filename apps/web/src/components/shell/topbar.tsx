@@ -33,6 +33,7 @@ import {
   NotificationsDrawer,
   useNotificationCount,
 } from "@/components/shell/notifications-drawer";
+import { FeedbackButton } from "@/components/feedback/feedback-button";
 
 type Crumb = { label: string; href?: string };
 
@@ -191,6 +192,7 @@ export function Topbar({ userLabel }: { userLabel: string }) {
         */}
         <HelpButton />
         <SupportButton />
+        <FeedbackButton />
         <button
           type="button"
           aria-label={
