@@ -8,6 +8,17 @@ coverage
 .env.local
 .env.*.local
 
+# Env backups / dumps (never commit)
+.env.env.*
+.env.*backup*
+.env.*-backup-*
+
+# Local backup artifacts (never commit)
+*.ts.new
+*.tsx.new
+*.ts.clean
+*.tsx.clean
+
 # Local notes / scratch — never commit credentials
 readme.txt
 notes.local.*
