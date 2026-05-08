@@ -29,6 +29,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ChartCard } from "@/components/charts/chart-card";
+import { KpiGrid } from "@/components/dashboard/kpi-grid";
 import { NewMerchantRedirect } from "@/components/onboarding/new-merchant-redirect";
 import { FirstFlagBanner } from "@/components/onboarding/activation-moments";
 import { NextStepBanner } from "@/components/dashboard/next-step-banner";
@@ -92,7 +93,7 @@ export default function DashboardPage() {
   const loading = dashboard.isLoading;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-7">
       <NewMerchantRedirect />
       {/* First-flag celebration — renders only for ~7 days after the
           first risky order Cordon catches. Anchors the activation
@@ -125,7 +126,7 @@ export default function DashboardPage() {
         }
       />
 
-      <section aria-label="Key metrics" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiGrid>
         <StatCard
           label="Total orders"
           value={loading ? "—" : (d?.totalOrders ?? 0).toLocaleString()}
@@ -162,7 +163,7 @@ export default function DashboardPage() {
           footer="Delivered orders · today"
           loading={loading}
         />
-      </section>
+      </KpiGrid>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <ChartCard

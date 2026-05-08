@@ -25,6 +25,7 @@ import {
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
+import { KpiGrid } from "@/components/dashboard/kpi-grid";
 import {
   Select,
   SelectContent,
@@ -260,7 +261,7 @@ export default function FraudReviewPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KpiGrid ariaLabel="Fraud review metrics">
         <StatCard label="In queue" value={total.toLocaleString()} icon={ShieldAlert} tone="danger" />
         <StatCard
           label="Verified today"
@@ -280,7 +281,7 @@ export default function FraudReviewPage() {
           icon={CheckCircle2}
           tone="violet"
         />
-      </div>
+      </KpiGrid>
 
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-2">

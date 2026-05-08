@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
+import { KpiGrid } from "@/components/dashboard/kpi-grid";
 import {
   Table,
   TableBody,
@@ -65,14 +66,14 @@ export default function RecoveryPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Outreach"
         title="Cart recovery"
         description="Identified buyers who added items to cart but didn't check out. Reach them while their intent is hot."
       />
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <KpiGrid ariaLabel="Recovery metrics">
         <StatCard
           label="Pending"
           value={formatNumber(counts.data?.pending.count)}
@@ -104,7 +105,7 @@ export default function RecoveryPage() {
           loading={counts.isLoading}
           footer="Pending + contacted carts"
         />
-      </div>
+      </KpiGrid>
 
       <Card>
         <CardHeader>
