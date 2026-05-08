@@ -1,7 +1,13 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-type Level = "display" | "page" | "section" | "subsection" | "eyebrow";
+type Level =
+  | "display"
+  | "page"
+  | "section"
+  | "subsection"
+  | "eyebrow"
+  | "metric";
 
 const LEVEL_CLASS: Record<Level, string> = {
   display: "text-3xl font-semibold tracking-tight text-fg md:text-4xl",
@@ -10,6 +16,11 @@ const LEVEL_CLASS: Record<Level, string> = {
   subsection: "text-sm font-semibold text-fg",
   eyebrow:
     "text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle",
+  // Metric — for KPI values. tabular-nums keeps digit columns aligned
+  // so ৳ amounts don't shift width while the number is updating
+  // (e.g. live revenue ticker, COD-saved counter on fraud-review).
+  metric:
+    "text-[28px] font-semibold leading-none tracking-tight tabular-nums text-fg",
 };
 
 const LEVEL_TAG: Record<Level, keyof JSX.IntrinsicElements> = {
@@ -18,6 +29,7 @@ const LEVEL_TAG: Record<Level, keyof JSX.IntrinsicElements> = {
   section: "h2",
   subsection: "h3",
   eyebrow: "p",
+  metric: "p",
 };
 
 type HeadingProps = {

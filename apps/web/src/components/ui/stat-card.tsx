@@ -5,6 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sparkline } from "@/components/charts/sparkline";
+import { Heading } from "@/components/ui/heading";
 
 export type StatTone = "brand" | "success" | "warning" | "danger" | "violet" | "info";
 
@@ -92,9 +93,9 @@ export function StatCard({
 
       <div className="mt-3 flex items-end justify-between gap-3">
         <div className="space-y-1">
-          <p className="text-[28px] font-semibold leading-none tracking-tight text-fg">
+          <Heading level="metric">
             {loading ? <span className="inline-block h-7 w-20 animate-shimmer rounded-md align-middle" /> : value}
-          </p>
+          </Heading>
           {delta ? (
             <div className={cn("inline-flex items-center gap-1 text-xs font-medium", deltaClass)}>
               <DeltaIcon className="h-3 w-3" aria-hidden />

@@ -103,9 +103,9 @@ export default function DashboardPage() {
       <NextStepBanner />
       <OperationalBanner />
       <PageHeader
-        eyebrow="Overview"
-        title="Welcome back"
-        description="Your logistics operations at a glance — last 7 days trend included on every KPI."
+        eyebrow="Today"
+        title="Operations overview"
+        description="COD operations at a glance. KPIs include 7-day trend; charts cover the same window."
         actions={
           <>
             {queueTotal > 0 ? (

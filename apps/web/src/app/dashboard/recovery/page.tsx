@@ -14,7 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
@@ -110,10 +110,10 @@ export default function RecoveryPage() {
       <Card>
         <CardHeader>
           <CardTitle>Pending outreach</CardTitle>
-          <p className="text-xs text-fg-subtle">
+          <CardDescription>
             Stitched-identity sessions abandoned with items in cart. Mark
             contacted as you reach out — recovered orders auto-link by phone.
-          </p>
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {list.isLoading ? (

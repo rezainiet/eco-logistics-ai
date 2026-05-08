@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/ui/page-header";
+import { Eyebrow } from "@/components/ui/heading";
 
 const LIVE_STATUSES = new Set(["queued", "initiated", "ringing", "in-progress"]);
 
@@ -133,12 +135,11 @@ export default function CallCustomerPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-fg">Call customer</h1>
-        <p className="mt-1 text-sm text-fg-subtle">
-          Place outbound calls via Twilio and track status in real time.
-        </p>
-      </div>
+      <PageHeader
+        eyebrow="Outreach"
+        title="Call customer"
+        description="Place outbound calls and track status in real time."
+      />
 
       {configured.isSuccess && !configured.data?.configured && (
         <Card className="border-warning/30 bg-warning/8 text-fg">
@@ -237,7 +238,7 @@ export default function CallCustomerPage() {
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">Status</span>
+                  <Eyebrow>Status</Eyebrow>
                   <Badge
                     variant="outline"
                     className={`border-transparent ${statusClass(liveStatus.data?.status ?? null)}`}
@@ -246,17 +247,13 @@ export default function CallCustomerPage() {
                   </Badge>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
-                    To
-                  </span>
+                  <Eyebrow>To</Eyebrow>
                   <span className="font-mono text-sm text-fg">
                     {liveStatus.data?.customerPhone ?? "—"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-[0.4px] text-fg-subtle">
-                    Duration
-                  </span>
+                  <Eyebrow>Duration</Eyebrow>
                   <span className="flex items-center gap-1.5 text-sm text-fg">
                     <Timer className="h-3.5 w-3.5 text-fg-subtle" />
                     {formatDuration(liveStatus.data?.duration ?? 0)}
