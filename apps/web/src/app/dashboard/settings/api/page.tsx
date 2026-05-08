@@ -16,6 +16,11 @@ import {
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  SettingsPageHeader,
+  SettingsSection,
+} from "@/components/settings/section";
+import { SETTINGS_BY_KEY } from "@/components/settings/nav-config";
 
 /**
  * /dashboard/api — webhook endpoint surface.
@@ -227,33 +232,32 @@ export default function ApiPage() {
 
   // ───────────────────────── render ───────────────────────────────
 
+  /*
+   * Settings IA alignment (UI/UX audit pass): this page used to ship
+   * its own ad-hoc <header> + four `rounded-2xl shadow-elevated` cards
+   * — visually heavier than every other settings section and
+   * inconsistent with the SettingsSection / SettingsPageHeader
+   * primitives. We now reuse the shared shell so:
+   *   - the page title sits under the same hairline as Workspace,
+   *     Security, Couriers etc.
+   *   - card chrome (radius, border tone, internal divider, padding
+   *     rhythm) matches the rest of Settings.
+   *   - the action buttons rows reflow cleanly on narrow viewports
+   *     instead of wrapping into a clutter of half-width controls.
+   * Logic, fetch endpoints, copy text and security guarantees are
+   * unchanged.
+   */
+  const meta = SETTINGS_BY_KEY.api;
+
   return (
-    <main className="space-y-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight text-fg md:text-3xl">
-          API &amp; webhooks
-        </h1>
-        <p className="text-sm text-fg-muted">
-          Where to point Shopify / Woo, and how to verify the events that
-          arrive. Cordon validates every request with HMAC-SHA256 and
-          rejects anything that doesn&apos;t match.
-        </p>
-      </header>
+    <>
+      <SettingsPageHeader title={meta.label} description={meta.description} />
 
-      {/* Endpoint card */}
-      <section className="space-y-4 rounded-2xl border border-stroke/30 bg-surface p-6 shadow-elevated">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-surface-raised text-brand">
-            <Webhook className="h-4 w-4" />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold text-fg">Webhook URL</h2>
-            <p className="text-xs text-fg-faint">
-              Paste this into your store&apos;s webhook settings. POST + JSON.
-            </p>
-          </div>
-        </div>
-
+      <SettingsSection
+        icon={Webhook}
+        title="Webhook URL"
+        description="Paste this into your store's webhook settings. POST + JSON."
+      >
         {configLoading ? (
           <div className="flex items-center gap-2 text-sm text-fg-muted">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
@@ -265,14 +269,14 @@ export default function ApiPage() {
           </div>
         ) : config ? (
           <div className="flex items-stretch gap-2">
-            <code className="flex flex-1 items-center overflow-x-auto rounded-md border border-stroke/30 bg-surface-raised px-3 py-2 font-mono text-xs text-fg">
+            <code className="flex min-w-0 flex-1 items-center overflow-x-auto rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 font-mono text-xs text-fg">
               {config.url}
             </code>
             <Button
               type="button"
               variant="outline"
               onClick={() => handleCopy("url", config.url)}
-              className="h-auto shrink-0 border-stroke/30 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg"
+              className="h-auto shrink-0 border-stroke/14 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg"
               aria-label="Copy webhook URL"
             >
               {copyFeedback === "url" ? (
@@ -283,212 +287,232 @@ export default function ApiPage() {
             </Button>
           </div>
         ) : null}
-      </section>
+      </SettingsSection>
 
-      {/* Signing secret */}
-      <section className="space-y-4 rounded-2xl border border-stroke/30 bg-surface p-6 shadow-elevated">
-        <div className="flex items-center gap-2">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-surface-raised text-brand">
-            <KeyRound className="h-4 w-4" />
-          </span>
-          <div>
-            <h2 className="text-base font-semibold text-fg">Signing secret</h2>
-            <p className="text-xs text-fg-faint">
-              Compute <code className="font-mono">HMAC-SHA256(rawBody, secret)</code> and
-              send the hex digest in the <code className="font-mono">x-cordon-signature</code> header.
-            </p>
-          </div>
-        </div>
-
-        {config ? (
+      <SettingsSection
+        icon={KeyRound}
+        title="Signing secret"
+        description={
           <>
-            <div className="flex items-stretch gap-2">
-              <code className="flex flex-1 items-center overflow-x-auto rounded-md border border-stroke/30 bg-surface-raised px-3 py-2 font-mono text-xs text-fg">
-                {config.secret
-                  ? secretRevealed
-                    ? config.secret
-                    : maskSecret(config.secret)
-                  : "(no secret yet — click rotate to generate one)"}
-              </code>
-              {config.secret ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setSecretRevealed((v) => !v)}
-                    className="h-auto shrink-0 border-stroke/30 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg"
-                    aria-label={secretRevealed ? "Hide secret" : "Reveal secret"}
-                    aria-pressed={secretRevealed}
-                  >
-                    {secretRevealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => handleCopy("secret", config.secret ?? "")}
-                    disabled={!secretRevealed}
-                    className="h-auto shrink-0 border-stroke/30 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg disabled:opacity-50"
-                    aria-label="Copy secret"
-                  >
-                    {copyFeedback === "secret" ? (
-                      <CheckCircle2 className="h-4 w-4 text-success" />
-                    ) : (
-                      <Copy className="h-4 w-4" />
-                    )}
-                  </Button>
-                </>
-              ) : null}
-            </div>
+            Compute{" "}
+            <code className="font-mono">HMAC-SHA256(rawBody, secret)</code> and
+            send the hex digest in the{" "}
+            <code className="font-mono">x-cordon-signature</code> header.
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {config ? (
+            <>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                <code className="flex min-w-0 flex-1 items-center overflow-x-auto rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 font-mono text-xs text-fg">
+                  {config.secret
+                    ? secretRevealed
+                      ? config.secret
+                      : maskSecret(config.secret)
+                    : "(no secret yet — click rotate to generate one)"}
+                </code>
+                {config.secret ? (
+                  <div className="flex shrink-0 items-stretch gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setSecretRevealed((v) => !v)}
+                      className="h-auto shrink-0 border-stroke/14 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg"
+                      aria-label={secretRevealed ? "Hide secret" : "Reveal secret"}
+                      aria-pressed={secretRevealed}
+                    >
+                      {secretRevealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleCopy("secret", config.secret ?? "")}
+                      disabled={!secretRevealed}
+                      className="h-auto shrink-0 border-stroke/14 bg-transparent px-3 text-fg-muted hover:bg-surface-raised hover:text-fg disabled:opacity-50"
+                      aria-label="Copy secret"
+                    >
+                      {copyFeedback === "secret" ? (
+                        <CheckCircle2 className="h-4 w-4 text-success" />
+                      ) : (
+                        <Copy className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-stroke/20 pt-4">
-              <div className="text-xs text-fg-faint">
-                {config.rotatedAt ? (
-                  <>Last rotated {new Date(config.rotatedAt).toLocaleString()}</>
+              {/*
+                Rotation row. The confirm path puts THREE controls
+                inline (timestamp text + Cancel + Yes, rotate) which
+                blew past the column at <sm. Stack vertically below
+                sm so the confirmation copy stays readable and the
+                destructive button gets full width.
+              */}
+              <div className="flex flex-col gap-3 border-t border-stroke/8 pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+                <div className="text-xs text-fg-faint">
+                  {config.rotatedAt ? (
+                    <>Last rotated {new Date(config.rotatedAt).toLocaleString()}</>
+                  ) : (
+                    <>Never rotated</>
+                  )}
+                </div>
+                {rotateState === "confirming" ? (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <span className="text-xs text-fg-muted sm:max-w-xs">
+                      This invalidates the old secret immediately. Continue?
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setRotateState("idle")}
+                        className="h-9 border-stroke/14 bg-transparent text-fg-muted hover:bg-surface-raised hover:text-fg"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={handleRotate}
+                        className="h-9 gap-1 bg-danger font-semibold text-white hover:bg-danger/90"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> Yes, rotate
+                      </Button>
+                    </div>
+                  </div>
                 ) : (
-                  <>Never rotated</>
+                  <Button
+                    type="button"
+                    onClick={() => setRotateState("confirming")}
+                    className="h-9 gap-1 bg-brand font-semibold text-brand-fg hover:bg-brand-hover"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {config.secret ? "Rotate secret" : "Generate secret"}
+                  </Button>
                 )}
               </div>
-              {rotateState === "confirming" ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-fg-muted">
-                    This invalidates the old secret immediately. Continue?
-                  </span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setRotateState("idle")}
-                    className="h-9 border-stroke/30 bg-transparent text-fg-muted hover:bg-surface-raised hover:text-fg"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handleRotate}
-                    className="h-9 gap-1 bg-danger font-semibold text-white hover:bg-danger/90"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" /> Yes, rotate
-                  </Button>
+
+              {rotateState === "rotating" ? (
+                <div className="flex items-center gap-2 text-sm text-fg-muted">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Rotating…
                 </div>
-              ) : (
-                <Button
-                  type="button"
-                  onClick={() => setRotateState("confirming")}
-                  className="h-9 gap-1 bg-brand font-semibold text-brand-fg hover:bg-brand-hover"
-                >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  {config.secret ? "Rotate secret" : "Generate secret"}
-                </Button>
-              )}
-            </div>
+              ) : null}
 
-            {rotateState === "rotating" ? (
-              <div className="flex items-center gap-2 text-sm text-fg-muted">
-                <Loader2 className="h-4 w-4 animate-spin" /> Rotating…
-              </div>
-            ) : null}
-
-            {rotateError ? (
-              <div className="flex items-start gap-2 rounded-md border border-danger-border bg-danger-subtle px-3 py-2 text-sm text-danger">
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{rotateError}</span>
-              </div>
-            ) : null}
-          </>
-        ) : null}
-
-        <div className="flex items-start gap-2 rounded-md border border-brand/20 bg-brand/5 px-3 py-2 text-xs text-fg-muted">
-          <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" aria-hidden />
-          <span>
-            We never log the secret in plaintext. Rotating doesn&apos;t
-            cancel in-flight retries — events queued under the previous
-            secret keep going through their backoff schedule.
-          </span>
-        </div>
-      </section>
-
-      {/* Test fire */}
-      <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-stroke/30 bg-surface p-6 shadow-elevated">
-        <div className="space-y-0.5">
-          <h2 className="text-base font-semibold text-fg">Fire a test event</h2>
-          <p className="text-xs text-fg-muted">
-            Sends an <code className="font-mono">order.test</code> event through the same pipeline as a real
-            Shopify webhook. Useful for validating downstream consumers
-            without waiting for a real order.
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {testState === "fired" ? (
-            <span className="inline-flex items-center gap-1 text-sm text-success">
-              <CheckCircle2 className="h-4 w-4" /> Test event queued
-            </span>
+              {rotateError ? (
+                <div className="flex items-start gap-2 rounded-md border border-danger-border bg-danger-subtle px-3 py-2 text-sm text-danger">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{rotateError}</span>
+                </div>
+              ) : null}
+            </>
           ) : null}
-          {testError ? (
-            <span className="inline-flex items-center gap-1 text-sm text-danger">
-              <AlertCircle className="h-4 w-4" /> {testError}
-            </span>
-          ) : null}
-          <Button
-            type="button"
-            onClick={handleTestFire}
-            disabled={testState === "firing"}
-            className="h-10 gap-2 bg-brand font-semibold text-brand-fg hover:bg-brand-hover disabled:opacity-60"
-          >
-            {testState === "firing" ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Firing…
-              </>
-            ) : (
-              <>
-                <PlayCircle className="h-4 w-4" /> Fire test webhook
-              </>
-            )}
-          </Button>
-        </div>
-      </section>
 
-      {/* Delivery log */}
-      <section className="space-y-4 rounded-2xl border border-stroke/30 bg-surface p-6 shadow-elevated">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-base font-semibold text-fg">Recent deliveries</h2>
-            <p className="text-xs text-fg-muted">
-              Last 25 webhook events. Cordon retries failures with
-              exponential backoff before dead-lettering — see the attempts
-              column.
-            </p>
+          <div className="flex items-start gap-2 rounded-md border border-brand/20 bg-brand/5 px-3 py-2 text-xs text-fg-muted">
+            <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-brand" aria-hidden />
+            <span>
+              We never log the secret in plaintext. Rotating doesn&apos;t
+              cancel in-flight retries — events queued under the previous
+              secret keep going through their backoff schedule.
+            </span>
           </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={PlayCircle}
+        title="Fire a test event"
+        description={
+          <>
+            Sends an <code className="font-mono">order.test</code> event through
+            the same pipeline as a real Shopify webhook. Useful for validating
+            downstream consumers without waiting for a real order.
+          </>
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-3">
+            {testState === "fired" ? (
+              <span className="inline-flex items-center gap-1 text-sm text-success">
+                <CheckCircle2 className="h-4 w-4" /> Test event queued
+              </span>
+            ) : null}
+            {testError ? (
+              <span className="inline-flex items-center gap-1 text-sm text-danger">
+                <AlertCircle className="h-4 w-4" /> {testError}
+              </span>
+            ) : null}
+            <Button
+              type="button"
+              onClick={handleTestFire}
+              disabled={testState === "firing"}
+              className="h-10 gap-2 bg-brand font-semibold text-brand-fg hover:bg-brand-hover disabled:opacity-60"
+            >
+              {testState === "firing" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> Firing…
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="h-4 w-4" /> Fire test webhook
+                </>
+              )}
+            </Button>
+          </div>
+        }
+      >
+        {/*
+          Body intentionally empty — the section header carries
+          everything. Keeping the empty body prevents the section from
+          collapsing into nothing when a future addition (e.g. a
+          last-fired-at status) needs a place to render.
+        */}
+        <p className="text-xs text-fg-faint">
+          The test event flows through the same idempotency keys, retry
+          backoff, and dead-letter queue as production webhooks.
+        </p>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={RefreshCw}
+        title="Recent deliveries"
+        description="Last 25 webhook events. Cordon retries failures with exponential backoff before dead-lettering — see the attempts column."
+        actions={
           <Button
             type="button"
             variant="outline"
             onClick={() => void loadDeliveries()}
-            className="h-9 gap-1 border-stroke/30 bg-transparent text-fg-muted hover:bg-surface-raised hover:text-fg"
+            className="h-9 gap-1 border-stroke/14 bg-transparent text-fg-muted hover:bg-surface-raised hover:text-fg"
           >
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </Button>
-        </div>
-
+        }
+        bodyClassName="px-0 sm:px-0"
+      >
         {deliveriesLoading ? (
-          <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <div className="flex items-center gap-2 px-4 text-sm text-fg-muted sm:px-6">
             <Loader2 className="h-4 w-4 animate-spin" /> Loading…
           </div>
         ) : deliveries.length === 0 ? (
-          <div className="rounded-xl border border-stroke/20 bg-surface-raised/40 p-8 text-center text-sm text-fg-muted">
+          <div className="mx-4 rounded-xl border border-stroke/14 bg-surface-raised/40 p-8 text-center text-sm text-fg-muted sm:mx-6">
             <p>No webhook deliveries yet.</p>
             <p className="mt-1 text-xs text-fg-faint">
               Connect a store or fire a test event above to see entries here.
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-stroke/30">
-            <table className="w-full text-sm">
+          // overflow-x-auto + min-w-[640px] keeps the table usable on
+          // narrow tablets without forcing a full mobile-card rewrite.
+          // The horizontal scroll affordance is the same pattern used
+          // by the Orders and Integrations tables.
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-surface-raised text-xs uppercase tracking-[0.08em] text-fg-faint">
                 <tr>
-                  <th className="px-3 py-2 text-left font-medium">Event</th>
+                  <th className="px-4 py-2 text-left font-medium sm:px-6">Event</th>
                   <th className="px-3 py-2 text-left font-medium">Status</th>
                   <th className="px-3 py-2 text-right font-medium">Attempts</th>
                   <th className="px-3 py-2 text-right font-medium">Latency</th>
                   <th className="px-3 py-2 text-right font-medium">Code</th>
-                  <th className="px-3 py-2 text-right font-medium">Received</th>
+                  <th className="px-4 py-2 text-right font-medium sm:px-6">Received</th>
                 </tr>
               </thead>
               <tbody>
@@ -498,9 +522,11 @@ export default function ApiPage() {
                   return (
                     <tr
                       key={d.id}
-                      className="border-t border-stroke/20 text-fg-muted hover:bg-surface-raised/60"
+                      className="border-t border-stroke/8 text-fg-muted hover:bg-surface-raised/60"
                     >
-                      <td className="px-3 py-2 font-mono text-xs text-fg">{d.event}</td>
+                      <td className="px-4 py-2 font-mono text-xs text-fg sm:px-6">
+                        {d.event}
+                      </td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs ${pill.cls}`}>
                           <Icon className={`h-3 w-3 ${d.status === "retrying" ? "animate-spin" : ""}`} />
@@ -516,7 +542,7 @@ export default function ApiPage() {
                       <td className="px-3 py-2 text-right font-mono text-xs">
                         {d.responseCode ?? "—"}
                       </td>
-                      <td className="px-3 py-2 text-right text-xs">
+                      <td className="px-4 py-2 text-right text-xs sm:px-6">
                         {new Date(d.receivedAt).toLocaleString()}
                       </td>
                     </tr>
@@ -526,8 +552,8 @@ export default function ApiPage() {
             </table>
           </div>
         )}
-      </section>
-    </main>
+      </SettingsSection>
+    </>
   );
 }
 

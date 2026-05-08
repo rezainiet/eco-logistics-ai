@@ -127,7 +127,7 @@ export function CouriersSection() {
             {[0, 1].map((i) => (
               <div
                 key={i}
-                className="h-16 animate-pulse rounded-md border border-stroke/6 bg-white/5"
+                className="h-16 animate-pulse rounded-md border border-stroke/8 bg-surface-overlay"
               />
             ))}
           </div>
@@ -140,7 +140,11 @@ export function CouriersSection() {
           return (
             <div
               key={c.name}
-              className="flex flex-col gap-3 rounded-lg border border-stroke/8 bg-white/5 p-4 sm:flex-row sm:items-center sm:justify-between"
+              // bg-surface-overlay (instead of the previous `bg-white/5`)
+              // gives a real surface tone in both themes — `white/5` was
+              // nearly invisible on light surfaces. Spacing/breakpoints
+              // unchanged so the layout tests still pass.
+              className="flex flex-col gap-3 rounded-lg border border-stroke/8 bg-surface-overlay p-4 sm:flex-row sm:items-center sm:justify-between"
             >
               <div className="flex items-start gap-3">
                 <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-md bg-surface-overlay text-xs font-bold uppercase text-brand">

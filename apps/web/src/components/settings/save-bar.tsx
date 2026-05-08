@@ -63,10 +63,17 @@ export function SaveBar({
       aria-label="Unsaved changes"
       aria-hidden={!dirty}
       className={cn(
-        "pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 pb-3 transition-all duration-200 md:bottom-3 md:pb-0",
-        // Mobile: sit above the bottom-nav (h-14 + safe-area). Desktop:
-        // float in the bottom of the content area.
-        "pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem+3.5rem)] md:pb-0",
+        // Position offsets:
+        //   <md (mobile / small tablet): full-width, account for the
+        //     mobile bottom-nav height (h-14 = 3.5rem) + safe-area.
+        //   md+ (sidebar visible): shift the bar's left edge by the
+        //     sidebar width (w-60 = 15rem) so the centered card
+        //     visually centers in the CONTENT column, not the
+        //     viewport. Without this offset the bar drifts left on
+        //     desktop and crowds the sidebar at narrower laptops.
+        "pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 transition-all duration-200",
+        "pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem+3.5rem)]",
+        "md:left-60 md:bottom-3 md:pb-0",
         dirty
           ? "translate-y-0 opacity-100"
           : "pointer-events-none translate-y-2 opacity-0",

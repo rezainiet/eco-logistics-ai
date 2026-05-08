@@ -52,38 +52,47 @@ export function SettingsNav() {
   return (
     <>
       {/* Desktop left-rail. Sticky so it stays visible while a long
-          section's form scrolls under the topbar. */}
+          section's form scrolls under the topbar. The width steps up
+          slightly at xl (10 vs 60) so two-word labels like "Team &
+          access" never truncate on cramped 14" laptops while still
+          leaving room for the form column. */}
       <aside
         aria-label="Settings sections"
-        className="sticky top-6 hidden h-fit w-60 shrink-0 self-start lg:block"
+        className="sticky top-6 hidden h-fit w-56 shrink-0 self-start lg:block xl:w-60"
       >
         <DesktopList active={active} pathname={pathname} />
       </aside>
 
       {/* Mobile + tablet header — collapses to one row showing the
-          current section, expands to the full grouped nav on tap. */}
+          current section, expands to the full grouped nav on tap.
+          The inner label uses min-w-0 + truncate so very-narrow
+          viewports (≤360px Bangla / Burmese strings) don't blow out
+          the row and force the chevron off-screen. */}
       <div className="lg:hidden">
         <button
           type="button"
           onClick={() => setMobileOpen((v) => !v)}
           className={cn(
-            "flex w-full items-center justify-between gap-3 rounded-lg border border-stroke/10 bg-surface px-4 py-3 text-left text-sm font-medium text-fg shadow-[0_1px_0_0_rgba(0,0,0,0.02)]",
+            "flex w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-stroke/10 bg-surface px-4 py-3 text-left text-sm font-medium text-fg shadow-[0_1px_0_0_rgba(0,0,0,0.02)]",
             "focus:outline-none focus:ring-2 focus:ring-brand/40",
           )}
           aria-expanded={mobileOpen}
           aria-controls="settings-mobile-nav"
         >
-          <span className="flex items-center gap-2.5">
+          <span className="flex min-w-0 items-center gap-2 sm:gap-2.5">
             {active?.icon ? (
-              <active.icon className="h-4 w-4 text-fg-subtle" aria-hidden />
+              <active.icon
+                className="h-4 w-4 shrink-0 text-fg-subtle"
+                aria-hidden
+              />
             ) : null}
-            <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
+            <span className="hidden text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle sm:inline">
               Settings
             </span>
-            <span aria-hidden className="text-fg-faint">
+            <span aria-hidden className="hidden text-fg-faint sm:inline">
               /
             </span>
-            <span className="text-fg">
+            <span className="truncate text-fg">
               {active?.label ?? "Choose a section"}
             </span>
           </span>

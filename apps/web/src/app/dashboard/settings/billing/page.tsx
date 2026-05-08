@@ -57,6 +57,8 @@ import {
 import { toast } from "@/components/ui/toast";
 
 import { humanizeError } from "@/lib/friendly-errors";
+import { SettingsPageHeader } from "@/components/settings/section";
+import { SETTINGS_BY_KEY } from "@/components/settings/nav-config";
 const PLAN_ICON = {
   starter: Sparkles,
   growth: Zap,
@@ -274,6 +276,12 @@ export default function BillingPage() {
     });
   }
 
+  // Use the shared settings page header (audit pass) so Billing
+  // matches the visual rhythm of every other settings sub-route —
+  // same hairline, same title weight, same description treatment as
+  // Workspace / Security / Couriers / API.
+  const billingMeta = SETTINGS_BY_KEY.billing;
+
   return (
     <div className="space-y-6">
       {/* Confirmation modal for any tier change — runs the dry-run
@@ -294,16 +302,15 @@ export default function BillingPage() {
         }
       />
 
+      <SettingsPageHeader
+        title={billingMeta.label}
+        description="Manage your plan, track monthly usage, and submit payments."
+      />
+
       {/* BD-first payment rails — surfaces bKash/Nagad/bank instructions
           ahead of Stripe for the local merchant audience. Hidden when no
           PAY_*_NUMBER env entries are configured. */}
       <BdPaymentRails />
-      <header>
-        <h1 className="text-2xl font-semibold text-fg">Billing &amp; subscription</h1>
-        <p className="text-sm text-fg-subtle">
-          Manage your plan, track monthly usage, and submit payments.
-        </p>
-      </header>
 
       {/* Usage panel — orders/shipments/fraud-reviews/calls/integrations
           rolled up. Triggers an upgrade CTA at 80% and a hard banner

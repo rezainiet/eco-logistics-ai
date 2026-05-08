@@ -46,18 +46,27 @@ export function SettingsSection({
   return (
     <section
       className={cn(
-        "rounded-xl border border-stroke/10 bg-surface text-fg shadow-[0_1px_0_0_rgba(0,0,0,0.02)]",
+        // `overflow-hidden` keeps long inline content (webhook URLs,
+        // signing secrets, courier API tokens) inside the rounded
+        // border instead of poking out of the corners on narrow
+        // viewports. The body itself is still scrollable horizontally
+        // for tables / code blocks via `overflow-x-auto` on those
+        // children.
+        "overflow-hidden rounded-xl border border-stroke/10 bg-surface text-fg shadow-[0_1px_0_0_rgba(0,0,0,0.02)]",
         className,
       )}
     >
       <header
         className={cn(
-          "flex flex-col gap-3 border-b border-stroke/8 px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:px-6 sm:py-5",
+          // Vertical-stack on mobile so action buttons don't shove the
+          // title off-screen on 360px viewports; row at sm+ where the
+          // extra width buys back inline alignment.
+          "flex flex-col gap-3 border-b border-stroke/8 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-6 sm:px-6 sm:py-5",
           sticky &&
             "sticky top-0 z-10 rounded-t-xl bg-surface/95 backdrop-blur-sm supports-[backdrop-filter]:bg-surface/80",
         )}
       >
-        <div className="flex min-w-0 items-start gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
           {Icon ? (
             <span
               aria-hidden
@@ -76,12 +85,12 @@ export function SettingsSection({
           </div>
         </div>
         {actions ? (
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
             {actions}
           </div>
         ) : null}
       </header>
-      <div className={cn("px-5 py-5 sm:px-6 sm:py-6", bodyClassName)}>
+      <div className={cn("px-4 py-5 sm:px-6 sm:py-6", bodyClassName)}>
         {children}
       </div>
     </section>
@@ -92,6 +101,11 @@ export function SettingsSection({
  * Settings page header — top of every section route. Pairs with the
  * sidebar entry from nav-config.ts. Stays terse (one sentence
  * description) so the section's actual content isn't drowned out.
+ *
+ * The bottom hairline matches the shared `<PageHeader>` primitive used
+ * elsewhere in the dashboard so settings pages feel like they live in
+ * the same family — without that line the title floated awkwardly
+ * above the first SettingsSection card on every breakpoint.
  */
 export function SettingsPageHeader({
   title,
@@ -103,8 +117,8 @@ export function SettingsPageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
-      <div className="space-y-1.5">
+    <div className="flex flex-col gap-3 border-b border-stroke/8 pb-5 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
+      <div className="min-w-0 space-y-1.5">
         <Heading level="page" className="leading-tight">
           {title}
         </Heading>
@@ -113,7 +127,7 @@ export function SettingsPageHeader({
         ) : null}
       </div>
       {actions ? (
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2">
+        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
           {actions}
         </div>
       ) : null}
