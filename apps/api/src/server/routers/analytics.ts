@@ -1,9 +1,30 @@
 import { Types } from "mongoose";
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
 import { CallLog, Merchant, MerchantStats, Order } from "@ecom/db";
 import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 import { cached } from "../../lib/cache.js";
 import { getPlan, type AnalyticsLevel } from "../../lib/plans.js";
+import {
+  loadCourierReliabilityOverview,
+  loadReliabilityDistribution,
+  loadReliabilityHealthSnapshot,
+  loadReliabilitySummary,
+} from "../../lib/delivery-reliability-analytics.js";
+import { isAnalyticsEnabledForMerchant } from "../../lib/delivery-reliability-rollout.js";
+
+function assertReliabilityAnalyticsEnabled(merchantId: Types.ObjectId): void {
+  if (!isAnalyticsEnabledForMerchant(merchantId)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "delivery reliability analytics are not enabled",
+    });
+  }
+}
+
+const reliabilityAxisInput = z
+  .object({ axis: z.enum(["customer", "address"]).default("customer") })
+  .default({ axis: "customer" });
 
 /* -------------------------------------------------------------------------- *
  * RTO Intelligence v1 — every handler + schema + helper lives in
@@ -364,5 +385,48 @@ export const analyticsRouter = router({
   repeatVisitorOutcomes: protectedProcedure
     .input(intelligenceDaysInput)
     .query(repeatVisitorOutcomesHandler),
+
+  /* ======================================================================
+   * Delivery Reliability v1 — analytics surfaces (S7).
+   *
+   * SAFETY CONTRACT:
+   *   - Read-only. No writes to any collection. No queue dispatches. No
+   *     fraud / automation / order mutations.
+   *   - Merchant-scoped. Every query starts with `merchantId` and hits
+   *     the unique compound index on the target reliability collection.
+   *   - Bounded. `loadReliability*` capped at ANALYTICS_MAX_SCAN rows
+   *     (5000) per call. No `Order` aggregation.
+   *   - Gated behind `DELIVERY_RELIABILITY_ANALYTICS_ENABLED` (default
+   *     OFF). Surface returns 403 FORBIDDEN until the flag is flipped.
+   *   - Never throws into the response — every helper degrades to an
+   *     empty/zeroed result on Mongo failure.
+   * ====================================================================== */
+  deliveryReliabilitySummary: protectedProcedure
+    .input(reliabilityAxisInput)
+    .query(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      assertReliabilityAnalyticsEnabled(merchantId);
+      return loadReliabilitySummary({ merchantId, axis: input.axis });
+    }),
+
+  deliveryReliabilityDistribution: protectedProcedure
+    .input(reliabilityAxisInput)
+    .query(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      assertReliabilityAnalyticsEnabled(merchantId);
+      return loadReliabilityDistribution({ merchantId, axis: input.axis });
+    }),
+
+  courierReliabilityOverview: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    assertReliabilityAnalyticsEnabled(merchantId);
+    return loadCourierReliabilityOverview({ merchantId });
+  }),
+
+  reliabilityHealthSnapshot: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx);
+    assertReliabilityAnalyticsEnabled(merchantId);
+    return loadReliabilityHealthSnapshot({ merchantId });
+  }),
 });
 

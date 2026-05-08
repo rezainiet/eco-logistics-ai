@@ -14,6 +14,12 @@ import { invalidate } from "../lib/cache.js";
 import { enqueueRescore } from "../workers/riskRecompute.js";
 import { contributeOutcome, hashPhoneForNetwork } from "../lib/fraud-network.js";
 import { recordCourierOutcome } from "../lib/courier-intelligence.js";
+import {
+  recordAddressOutcome,
+  recordCustomerOutcome,
+} from "../lib/delivery-reliability-writers.js";
+import { recordReliabilityOutcome } from "../lib/observability/delivery-reliability.js";
+import { isWriteEnabledForMerchant } from "../lib/delivery-reliability-rollout.js";
 
 /**
  * Tracking lifecycle mapper — courier event → order.status. Only terminal
@@ -106,6 +112,15 @@ export async function applyTrackingEvents(
   const prevStatus = order.order.status;
   const nextStatus = STATUS_MAP[normalizedStatus] ?? prevStatus;
 
+  // Single canonical terminal timestamp. Used for both `Order.logistics
+  // .deliveredAt` / `returnedAt` AND propagated to the delivery-reliability
+  // helpers' `now` parameter so the aggregate's `firstOutcomeAt` is byte-
+  // equal to the order's terminal timestamp on first flip. Without this
+  // unification, the helper's later `new Date()` produces a strict-`<`
+  // window exclusion in the reconciler. See
+  // `docs/audits/reconciliation-window-race-investigation.md`.
+  const terminalNow = options.deliveredAt ?? new Date();
+
   const set: Record<string, unknown> = {};
   if (source === "webhook") {
     set["logistics.lastWebhookAt"] = new Date();
@@ -116,11 +131,11 @@ export async function applyTrackingEvents(
   }
   if (nextStatus !== prevStatus) set["order.status"] = nextStatus;
   if (normalizedStatus === "delivered" && !order.logistics?.deliveredAt) {
-    set["logistics.deliveredAt"] = options.deliveredAt ?? new Date();
-    set["logistics.actualDelivery"] = options.deliveredAt ?? new Date();
+    set["logistics.deliveredAt"] = terminalNow;
+    set["logistics.actualDelivery"] = terminalNow;
   }
   if (normalizedStatus === "rto" && !order.logistics?.returnedAt) {
-    set["logistics.returnedAt"] = new Date();
+    set["logistics.returnedAt"] = terminalNow;
   }
 
   const update: Record<string, unknown> = { $set: set };
@@ -189,6 +204,24 @@ export async function applyTrackingEvents(
     // merchant's experience. Privacy-safe (only hashes are persisted).
     // Best-effort, never blocks the tracking pipeline.
     if (nextStatus === "delivered" || nextStatus === "rto" || nextStatus === "cancelled") {
+      // Observability — chokepoint entered the terminal block but the
+      // atomic Order.updateOne filter rejected the write. This is the
+      // documented §6.2 caveat manifesting; existing fan-outs (FraudPrediction,
+      // contributeOutcome, recordCourierOutcome) STILL fire under v1's
+      // gating semantics. The log line gives ops a way to spot stale-snapshot
+      // writers without changing the gate. No mutation, no decision.
+      if (!persisted) {
+        recordReliabilityOutcome({
+          event: "invalid_transition",
+          merchantId: String(order.merchantId),
+          reason: "atomic_guard_rejected_write",
+          meta: {
+            from: prevStatus,
+            to: nextStatus,
+            newEventsAttempted: newEvents.length,
+          },
+        });
+      }
       // Feedback loop: stamp the outcome on the prediction row so the monthly
       // tuner can compute per-signal precision/recall. Idempotent via the
       // `orderId` unique index — if the row already has an outcome, a later
@@ -261,7 +294,100 @@ export async function applyTrackingEvents(
           console.error("[courier-intel] record failed", (err as Error).message),
         );
       }
+
+      // Delivery-reliability v1 — observation-only aggregate fan-out. Sits at
+      // the end of the existing terminal block, AFTER FraudPrediction +
+      // contributeOutcome + recordCourierOutcome, with the same fire-and-
+      // forget posture. Reuses the phoneHash + addressHash + district
+      // already computed above; never enqueues, never reads Order, never
+      // mutates fraud / automation / order status.
+      //
+      // Replay-safety: the chokepoint's existing guards (status filter,
+      // dedupe-key $nin, `nextStatus !== prevStatus` gate) ensure these
+      // helpers are invoked AT MOST ONCE per real terminal transition.
+      // Helpers themselves do NOT dedupe by orderId.
+      //
+      // Gated by `isWriteEnabledForMerchant` (env.DELIVERY_RELIABILITY_WRITE_ENABLED
+      // ANDed with the optional rollout allowlist). Default off. A write
+      // failure is swallowed inside the helper; the outer .catch is a
+      // defence-in-depth match to the existing fan-outs above.
+      if (isWriteEnabledForMerchant(order.merchantId)) {
+        if (phoneHash) {
+          void recordCustomerOutcome({
+            merchantId: order.merchantId,
+            phoneHash,
+            outcome: nextStatus as "delivered" | "rto" | "cancelled",
+            district: district ?? null,
+            orderId: order._id,
+            // Unify aggregate `firstOutcomeAt` with `Order.logistics
+            // .deliveredAt` / `returnedAt` to eliminate the strict-`<`
+            // reconciler window exclusion on the first flip per
+            // (merchant, key). See `reconciliation-window-race-
+            // investigation.md`.
+            now: terminalNow,
+          }).catch((err) =>
+            console.error(
+              "[delivery-reliability] customer chokepoint failed",
+              (err as Error).message,
+            ),
+          );
+        } else {
+          recordReliabilityOutcome({
+            event: "aggregate_skipped",
+            merchantId: String(order.merchantId),
+            axis: "customer",
+            reason: "missing_phone_hash",
+          });
+        }
+        if (addressHash) {
+          void recordAddressOutcome({
+            merchantId: order.merchantId,
+            addressHash,
+            phoneHash: phoneHash ?? null,
+            outcome: nextStatus as "delivered" | "rto" | "cancelled",
+            district: district ?? null,
+            orderId: order._id,
+            now: terminalNow,
+          }).catch((err) =>
+            console.error(
+              "[delivery-reliability] address chokepoint failed",
+              (err as Error).message,
+            ),
+          );
+        } else {
+          recordReliabilityOutcome({
+            event: "aggregate_skipped",
+            merchantId: String(order.merchantId),
+            axis: "address",
+            reason: "missing_address_hash",
+          });
+        }
+      } else {
+        recordReliabilityOutcome({
+          event: "aggregate_skipped",
+          merchantId: String(order.merchantId),
+          reason: "flag_off",
+          meta: { transition: `${prevStatus}->${nextStatus}` },
+        });
+      }
     }
+  } else if (
+    newEvents.length === 0 &&
+    (nextStatus === "delivered" ||
+      nextStatus === "rto" ||
+      nextStatus === "cancelled")
+  ) {
+    // No transition AND no new tracking events appended AND the order is
+    // already in a terminal status — the canonical "replay" footprint at
+    // the chokepoint level. Emitted as a low-severity log so replay storms
+    // are observable without flooding the error stream. Pure observation;
+    // does not change the chokepoint's no-op behaviour.
+    recordReliabilityOutcome({
+      event: "replay_suppressed",
+      merchantId: String(order.merchantId),
+      reason: "terminal_status_unchanged",
+      meta: { status: nextStatus },
+    });
   }
 
   return {

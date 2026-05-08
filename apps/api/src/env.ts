@@ -184,6 +184,84 @@ const schema = z
       .enum(["0", "1"])
       .default("1")
       .transform((v) => v === "1"),
+    /**
+     * Master flag for the Delivery Reliability Intelligence v1 chokepoint
+     * fan-out. When "0" (the default), `applyTrackingEvents` does NOT
+     * invoke `recordCustomerOutcome` / `recordAddressOutcome`. The new
+     * aggregate collections (`customer_reliabilities`,
+     * `address_reliabilities`) remain empty and downstream classifier
+     * reads degrade to `tier: "no_data"` — the intended cold-start
+     * posture.
+     *
+     * Default OFF. Flip to "1" only after the validation gates in the
+     * blueprint §5.5 are satisfied. Independent of the read-side flag
+     * (`DELIVERY_RELIABILITY_READ_ENABLED`, S6) so writes can warm up
+     * days before merchants see the surface.
+     */
+    DELIVERY_RELIABILITY_WRITE_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /**
+     * Observability toggle for the Delivery Reliability layer (S5).
+     * When "0", `recordReliabilityOutcome` becomes a no-op — no structured
+     * log lines, no in-process counter bumps, no Sentry breadcrumbs.
+     * Useful as an emergency mute if the log volume turns out to be
+     * pathological under load. Default ON: observability is the operational
+     * confidence story for a freshly-wired chokepoint fan-out (S4) and
+     * should remain visible until the rollout has stabilised.
+     */
+    DELIVERY_RELIABILITY_OBSERVABILITY_ENABLED: z
+      .enum(["0", "1"])
+      .default("1")
+      .transform((v) => v === "1"),
+    /**
+     * Read-side surfacing of the Delivery Reliability layer (S6). When "0"
+     * (the default), `orders.getOrder` does NOT issue the aggregate
+     * lookups and does NOT include the `deliveryReliability` field in
+     * its response. Independent of `DELIVERY_RELIABILITY_WRITE_ENABLED`
+     * so writes can warm up days before merchants see the surface.
+     *
+     * Default OFF. Flip to "1" only after the validation gates in the
+     * blueprint §5.5 are satisfied (drift detector green for ≥7d in
+     * production with the write flag on).
+     */
+    DELIVERY_RELIABILITY_READ_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /**
+     * Analytics surfacing for the Delivery Reliability layer (S7). When
+     * "0" (the default), the four analytics tRPC procedures
+     * (`deliveryReliabilitySummary`, `deliveryReliabilityDistribution`,
+     * `courierReliabilityOverview`, `reliabilityHealthSnapshot`) refuse
+     * with `FORBIDDEN`. Independent of `DELIVERY_RELIABILITY_READ_ENABLED`
+     * so analytics can be enabled separately for internal dogfooding.
+     *
+     * Default OFF.
+     */
+    DELIVERY_RELIABILITY_ANALYTICS_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /**
+     * Optional comma-separated allowlist of merchant ObjectId hex strings
+     * for staged rollout (S9). When non-empty, ALL three Delivery
+     * Reliability gates (write / read / analytics) additionally require
+     * the merchantId to be in this list — i.e. each gate becomes
+     * `flagOn AND merchantInAllowlist`. When empty / unset (the default),
+     * the gates behave exactly as before — purely env-flag-driven.
+     *
+     * Use this to roll the feature to staff merchants first, then a
+     * low-volume cohort, before flipping the flag globally with the
+     * allowlist cleared.
+     *
+     * Example: `DELIVERY_RELIABILITY_ROLLOUT_MERCHANTS=507f1f77bcf86cd799439011,5e8a...`
+     */
+    DELIVERY_RELIABILITY_ROLLOUT_MERCHANTS: z
+      .string()
+      .optional()
+      .transform((v) => v?.trim() ?? ""),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",

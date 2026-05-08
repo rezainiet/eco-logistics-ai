@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import {
+  AddressReliability,
   AuditLog,
   CallLog,
+  CustomerReliability,
   ImportJob,
   Integration,
   Merchant,
@@ -45,6 +47,9 @@ const MODELS = [
   ["TrackingSession", TrackingSession],
   ["Usage", Usage],
   ["WebhookInbox", WebhookInbox],
+  // Delivery Reliability v1 — see `docs/audits/final-production-readiness-report.md §3.2`.
+  ["CustomerReliability", CustomerReliability],
+  ["AddressReliability", AddressReliability],
 ] as const;
 
 async function main() {

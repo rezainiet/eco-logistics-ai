@@ -130,13 +130,28 @@ async function main() {
   // block the port-bind handshake the Railway healthcheck depends on.
   void (async () => {
     try {
-      const { Order, WebhookInbox, Integration, Merchant, ImportJob } = await import("@ecom/db");
+      const {
+        Order,
+        WebhookInbox,
+        Integration,
+        Merchant,
+        ImportJob,
+        CustomerReliability,
+        AddressReliability,
+      } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
         ["Order", Order as unknown as { syncIndexes: () => Promise<unknown> }],
         ["WebhookInbox", WebhookInbox as unknown as { syncIndexes: () => Promise<unknown> }],
         ["Integration", Integration as unknown as { syncIndexes: () => Promise<unknown> }],
         ["Merchant", Merchant as unknown as { syncIndexes: () => Promise<unknown> }],
         ["ImportJob", ImportJob as unknown as { syncIndexes: () => Promise<unknown> }],
+        // Delivery Reliability v1 — unique compound indexes on
+        // (merchantId, phoneHash) / (merchantId, addressHash) are the upsert
+        // race-safety guarantee. autoIndex=false in production means these
+        // MUST be synced explicitly. See
+        // `docs/audits/final-production-readiness-report.md §3.2`.
+        ["CustomerReliability", CustomerReliability as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["AddressReliability", AddressReliability as unknown as { syncIndexes: () => Promise<unknown> }],
       ];
       for (const [name, model] of models) {
         try {

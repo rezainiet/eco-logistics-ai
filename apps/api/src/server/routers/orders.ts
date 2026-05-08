@@ -59,6 +59,7 @@ import { getMerchantValueRollup } from "../../lib/merchantValueRollup.js";
 import { FraudPrediction } from "@ecom/db";
 import { writeAudit } from "../../lib/audit.js";
 import { classifyOperationalHint } from "../../lib/operational-hints.js";
+import { loadDeliveryReliability } from "../../lib/delivery-reliability-read.js";
 import {
   buildFraudRejectSnapshot,
   buildPreActionSnapshot,
@@ -1658,6 +1659,34 @@ export const ordersRouter = router({
         })),
       });
 
+      // Delivery Reliability v1 — observation-only read surface.
+      // Returns null when DELIVERY_RELIABILITY_READ_ENABLED=false (the
+      // default during write-flag warm-up). When on, issues at most three
+      // small parallel `findOne`/`find` lookups against the per-merchant
+      // aggregates and runs the pure classifier. Never throws — every
+      // failure path degrades to `tier: "no_data"`. Never persists,
+      // never enqueues, never feeds fraud / automation / courier
+      // selection.
+      const deliveryReliability = await loadDeliveryReliability({
+        merchantId,
+        phone: order.customer?.phone ?? null,
+        addressHash: order.source?.addressHash ?? null,
+        courier: order.logistics?.courier ?? null,
+        district: order.customer?.district ?? null,
+        thana: order.customer?.thana ?? null,
+        addressQuality: order.address?.quality
+          ? {
+              completeness: order.address.quality.completeness as
+                | "complete"
+                | "partial"
+                | "incomplete"
+                | undefined,
+              score: order.address.quality.score ?? undefined,
+              missingHints: order.address.quality.missingHints ?? [],
+            }
+          : null,
+      }).catch(() => null);
+
       return {
         id: String(order._id),
         orderNumber: order.orderNumber,
@@ -1713,6 +1742,10 @@ export const ordersRouter = router({
         // Operational-hint label — null when the order looks healthy.
         // Visibility-only; the merchant decides what to do.
         operationalHint,
+        // Delivery Reliability v1 — observation-only. `null` when the
+        // DELIVERY_RELIABILITY_READ_ENABLED flag is off (default) OR
+        // when every aggregate read failed. Consumers MUST null-check.
+        deliveryReliability,
         createdAt: order.createdAt,
       };
     }),

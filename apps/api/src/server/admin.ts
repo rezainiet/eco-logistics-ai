@@ -3,8 +3,10 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { Types } from "mongoose";
 import { z } from "zod";
 import {
+  AddressReliability,
   AuditLog,
   CallLog,
+  CustomerReliability,
   ImportJob,
   Integration,
   Merchant,
@@ -174,6 +176,9 @@ adminRouter.post("/sync-indexes", requireAdminSecret, async (_req: Request, res:
     ["TrackingSession", TrackingSession as unknown as { syncIndexes: () => Promise<unknown> }],
     ["Usage", Usage as unknown as { syncIndexes: () => Promise<unknown> }],
     ["WebhookInbox", WebhookInbox as unknown as { syncIndexes: () => Promise<unknown> }],
+    // Delivery Reliability v1 — see `docs/audits/final-production-readiness-report.md §3.2`.
+    ["CustomerReliability", CustomerReliability as unknown as { syncIndexes: () => Promise<unknown> }],
+    ["AddressReliability", AddressReliability as unknown as { syncIndexes: () => Promise<unknown> }],
   ];
   const summary: Record<string, { created?: string[]; dropped?: string[]; error?: string }> = {};
   let created = 0;

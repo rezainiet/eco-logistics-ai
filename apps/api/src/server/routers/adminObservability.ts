@@ -15,6 +15,13 @@ import {
 } from "@ecom/db";
 import { adminProcedure, router } from "../trpc.js";
 import { QUEUE_NAMES, getQueue } from "../../lib/queue.js";
+import {
+  getMerchantRolloutSnapshot,
+  getRolloutState,
+} from "../../lib/delivery-reliability-rollout.js";
+import { snapshotReliabilityCounters } from "../../lib/observability/delivery-reliability.js";
+import { reconcileSlice } from "../../lib/delivery-reliability-reconciliation.js";
+import { loadReliabilityHealthSnapshot } from "../../lib/delivery-reliability-analytics.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -541,5 +548,68 @@ export const adminObservabilityRouter = router({
         { $set: update },
       );
       return { ok: r.matchedCount > 0 };
+    }),
+
+  /* ======================================================================
+   * Delivery Reliability — admin operational surfaces (S10).
+   *
+   * SAFETY CONTRACT (binding):
+   *   - Read-only. Never writes. Never enqueues. Never triggers replay.
+   *   - Admin-only via `adminProcedure`.
+   *   - Lightweight — bounded scans only; no realtime subscriptions.
+   *   - Surfaces existing state (rollout flags, in-process counters,
+   *     reconciliation drift sample). Does NOT mutate any aggregate
+   *     row, does NOT trigger repair (repair is CLI-only).
+   * ====================================================================== */
+  deliveryReliabilityRolloutState: adminProcedure
+    .input(
+      z
+        .object({ merchantId: z.string().optional() })
+        .optional()
+        .default({}),
+    )
+    .query(({ input }) => {
+      const state = getRolloutState();
+      const counters = snapshotReliabilityCounters();
+      const merchantSnapshot =
+        input?.merchantId && Types.ObjectId.isValid(input.merchantId)
+          ? getMerchantRolloutSnapshot(new Types.ObjectId(input.merchantId))
+          : null;
+      return {
+        rollout: state,
+        observabilityCounters: counters,
+        merchant: merchantSnapshot,
+        generatedAt: new Date(),
+      };
+    }),
+
+  deliveryReliabilityMerchantHealth: adminProcedure
+    .input(z.object({ merchantId: z.string().min(1) }))
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) {
+        return null;
+      }
+      return loadReliabilityHealthSnapshot({
+        merchantId: new Types.ObjectId(input.merchantId),
+      });
+    }),
+
+  deliveryReliabilityDriftSample: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        axis: z.enum(["customer", "address"]).default("customer"),
+        scanLimit: z.number().int().min(1).max(10_000).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) {
+        return null;
+      }
+      return reconcileSlice({
+        merchantId: new Types.ObjectId(input.merchantId),
+        axis: input.axis,
+        scanLimit: input.scanLimit,
+      });
     }),
 });

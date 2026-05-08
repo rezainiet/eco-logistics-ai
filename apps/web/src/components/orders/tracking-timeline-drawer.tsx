@@ -29,6 +29,7 @@ import {
   IntentPanel,
 } from "@/components/orders/intelligence-panels";
 import { OperationalHintPanel } from "@/components/orders/operational-hint-panel";
+import { DeliveryReliabilityPanel } from "@/components/orders/delivery-reliability-panel";
 
 type TrackingBadge = { label: string; className: string; icon: typeof Package };
 const FALLBACK_BADGE: TrackingBadge = {
@@ -178,6 +179,15 @@ export function TrackingTimelineDrawer({
                   the order. */}
               <OperationalHintPanel
                 hint={(order as { operationalHint?: unknown }).operationalHint as never}
+              />
+
+              {/* Delivery Reliability v1 — observation-only operational
+                  context. Returns null when DELIVERY_RELIABILITY_READ_ENABLED
+                  is off (default) or when the backend read fell back to null.
+                  Order detail rendering is unaffected when the panel is
+                  absent. Never triggers writes / automation / fraud workflows. */}
+              <DeliveryReliabilityPanel
+                reliability={(order as { deliveryReliability?: unknown }).deliveryReliability as never}
               />
 
               {/* RTO Intelligence v1 panels — observation-only. Either may
