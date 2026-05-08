@@ -309,7 +309,8 @@ export default function FraudReviewPage() {
                 icon={AlertTriangle}
                 title="Could not load review queue"
                 description="Something went wrong on our end. Try again in a moment."
-                className="m-4 border-0 bg-transparent"
+                variant="inset"
+                className="m-4"
                 action={
                   <Button variant="outline" size="sm" onClick={() => queue.refetch()}>
                     Retry
@@ -328,7 +329,8 @@ export default function FraudReviewPage() {
                 tone="success"
                 title="Queue is clear"
                 description="No orders are waiting on review. New risky orders will appear here automatically."
-                className="m-4 border-0 bg-transparent"
+                variant="inset"
+                className="m-4"
               />
             ) : (
               <ul className="max-h-[600px] divide-y divide-stroke/6 overflow-auto">

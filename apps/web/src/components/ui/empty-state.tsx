@@ -9,6 +9,17 @@ type EmptyStateProps = {
   action?: React.ReactNode;
   className?: string;
   tone?: "neutral" | "success" | "warning" | "danger";
+  /**
+   * `card` (default) — standalone empty surface with its own dashed
+   *   outline. Use when the empty state is the only content in a
+   *   region.
+   * `inset` — no border, no rounded surface, tighter vertical
+   *   padding. Use when the empty state already sits inside a
+   *   bordered container (Card, Table cell). Avoids the
+   *   double-border that earlier callers worked around with
+   *   `className="border-0 bg-transparent"`.
+   */
+  variant?: "card" | "inset";
 };
 
 const TONE_CLASS: Record<NonNullable<EmptyStateProps["tone"]>, string> = {
@@ -18,6 +29,11 @@ const TONE_CLASS: Record<NonNullable<EmptyStateProps["tone"]>, string> = {
   danger: "bg-danger-subtle text-danger",
 };
 
+const VARIANT_CLASS: Record<NonNullable<EmptyStateProps["variant"]>, string> = {
+  card: "rounded-xl border border-dashed border-stroke/12 px-6 py-12",
+  inset: "px-6 py-10",
+};
+
 export function EmptyState({
   icon: Icon,
   title,
@@ -25,11 +41,13 @@ export function EmptyState({
   action,
   className,
   tone = "neutral",
+  variant = "card",
 }: EmptyStateProps) {
   return (
     <div
       className={cn(
-        "flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-stroke/12 px-6 py-12 text-center",
+        "flex flex-col items-center justify-center gap-3 text-center",
+        VARIANT_CLASS[variant],
         className,
       )}
     >

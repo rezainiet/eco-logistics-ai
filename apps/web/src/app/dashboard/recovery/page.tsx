@@ -124,6 +124,7 @@ export default function RecoveryPage() {
               tone="success"
               title="Inbox is clear"
               description="No identified buyers have abandoned a cart in the recovery window."
+              variant="inset"
             />
           ) : (
             <Table>

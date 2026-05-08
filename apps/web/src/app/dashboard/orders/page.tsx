@@ -606,7 +606,8 @@ export default function OrdersPage() {
                       icon={AlertCircle}
                       title="Could not load orders"
                       description="Something went wrong on our end. Try again in a moment."
-                      className="m-4 border-0 bg-transparent"
+                      variant="inset"
+                      className="m-4"
                       action={
                         <Button
                           variant="outline"
@@ -636,7 +637,8 @@ export default function OrdersPage() {
                         icon={SearchX}
                         title="No orders match your filters"
                         description="Try broadening the status, phone number, or date range. Clearing filters returns to your full order list."
-                        className="m-4 border-0 bg-transparent"
+                        variant="inset"
+                        className="m-4"
                         action={
                           <Button
                             variant="outline"
@@ -659,7 +661,8 @@ export default function OrdersPage() {
                         icon={PackagePlus}
                         title="No orders yet"
                         description="Connect your store to ingest orders automatically, or create one manually to see how they flow through."
-                        className="m-4 border-0 bg-transparent"
+                        variant="inset"
+                        className="m-4"
                         action={
                           <div className="flex flex-wrap gap-2">
                             <Button
