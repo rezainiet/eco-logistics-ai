@@ -40,20 +40,19 @@ import {
  * express.json — re-stringifying parsed JSON would change whitespace
  * and break verification).
  *
- * Behaviour split by maturity:
+ * Behaviour:
  *   - HMAC verification is REAL. A failed signature returns 401 and
  *     does NOT touch the database. This is the gate Shopify reviewers
  *     check first.
  *   - Audit logging is REAL. Every accepted webhook lands in the
- *     audit log so we have a paper trail for compliance.
- *   - Actual data redaction is currently STUBBED with a TODO + a
- *     "redaction.queued" audit entry. Production must implement the
- *     model-by-model deletion sweep before flipping the app to
- *     Public Distribution. Shipping the receiver first is correct —
- *     it satisfies the review gate and gives us the audit trail to
- *     prove receipt; the actual sweep is a follow-up task that needs
- *     a careful inventory of every collection that holds customer
- *     PII.
+ *     audit log (twice — receipt event + dispatch outcome) so we
+ *     have a paper trail for compliance.
+ *   - Data redaction is REAL. customers/redact dispatches to
+ *     `redactCustomer` (pseudonymises PII across Order + CallLog,
+ *     hard-deletes identity-pivoted rows in RecoveryTask /
+ *     TrackingSession / matching WebhookInbox); shop/redact
+ *     dispatches to `redactShop` (hard-deletes 13 collections in
+ *     dependency order). See `apps/api/src/lib/gdpr/redaction.ts`.
  *
  * Mounted at `/api/webhooks/shopify/gdpr` in apps/api/src/index.ts.
  */
@@ -157,14 +156,22 @@ shopifyGdprWebhookRouter.post(
       (payload.shop_domain as string | undefined) ??
       (payload.shop_id ? `shop_id:${String(payload.shop_id)}` : null);
     let merchantId: Types.ObjectId | null = null;
+    // Pull `status` + `connectedAt` alongside merchantId so the
+    // shop/redact branch can detect a fresh-install-in-place race
+    // (see the dispatch block below).
+    let integrationStatus: string | null = null;
+    let integrationConnectedAt: Date | null = null;
     if (shopDomain && /\.myshopify\.com$/i.test(shopDomain)) {
       const integration = await Integration.findOne({
         provider: "shopify",
         accountKey: shopDomain.toLowerCase(),
       })
-        .select("merchantId")
+        .select("merchantId status connectedAt")
         .lean();
       merchantId = (integration?.merchantId as Types.ObjectId | undefined) ?? null;
+      integrationStatus = (integration?.status as string | undefined) ?? null;
+      integrationConnectedAt =
+        (integration?.connectedAt as Date | undefined) ?? null;
     }
 
     // Always audit, regardless of dispatch outcome. The audit row IS
@@ -204,7 +211,10 @@ shopifyGdprWebhookRouter.post(
     // sweep result alongside the receipt event. If volumes ever grow
     // to where this feels tight, move the heavy work to a queue and
     // let the worker emit a follow-up audit row.
-    let dispatchSummary: RedactionResult[] | { kind: string; note: string } | null = null;
+    let dispatchSummary:
+      | RedactionResult[]
+      | { kind: string; note: string; connectedAt?: string | null }
+      | null = null;
 
     if (topic === "customers/data_request") {
       // Per Shopify's spec, our job is to make the merchant aware so
@@ -229,6 +239,22 @@ shopifyGdprWebhookRouter.post(
     } else if (topic === "shop/redact") {
       if (!merchantId) {
         dispatchSummary = { kind: "no_op", note: "merchant not resolvable" };
+      } else if (integrationStatus === "connected") {
+        // Race guard: Shopify's shop/redact fires 48h after a merchant
+        // uninstalls. If the merchant uninstalled THEN re-installed
+        // within those 48h, the integration row matched here is the
+        // FRESH install, not the prior one this redact event refers
+        // to. Hard-deleting now would wipe a merchant who's actively
+        // using the app. Skip with an audit row; if they truly want
+        // their shop data gone they need to uninstall again.
+        dispatchSummary = {
+          kind: "skipped_fresh_install",
+          note:
+            "shop/redact arrived for a shop that is currently connected — likely uninstalled then re-installed within 48h. Redaction declined; the live install's data is retained.",
+          connectedAt: integrationConnectedAt
+            ? integrationConnectedAt.toISOString()
+            : null,
+        };
       } else {
         // Belt-and-braces: also flip every Shopify integration to
         // disconnected. redactShop deletes the Integration rows
