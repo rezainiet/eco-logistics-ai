@@ -17,9 +17,9 @@ import {
 } from "@ecom/types";
 
 export const metadata = {
-  title: "Pricing — Cordon",
+  title: "Pricing — ConfirmX",
   description:
-    "Simple, predictable pricing for Bangladesh e-commerce merchants who want to stop bleeding RTO. 14-day free trial on every plan, no card.",
+    "Simple, predictable pricing for Bangladesh COD merchants. ConfirmX helps reduce avoidable RTO through operator-driven order confirmation workflows. 14-day free trial on every plan, no card.",
 };
 
 const ICON: Record<PlanTier, typeof Sparkles> = {
@@ -447,7 +447,7 @@ export default function PricingPage() {
         {/* Footer kept minimal — comparison table above is the
             informational anchor, footer is just navigation. */}
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-6 text-xs text-fg-subtle md:flex-row">
-          <p>© {new Date().getFullYear()} Cordon · Built for Bangladesh&apos;s COD economy.</p>
+          <p>© {new Date().getFullYear()} ConfirmX · Built for Bangladesh&apos;s COD economy.</p>
           <div className="flex items-center gap-5">
             <Link href="/" className="hover:text-fg">
               Home

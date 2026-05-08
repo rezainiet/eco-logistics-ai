@@ -7,14 +7,19 @@ import { useEffect, useMemo, useState } from "react";
  * Interactive ROI calculator for the marketing landing.
  *
  * Inputs: monthly orders, average order value (BDT), current RTO%.
- * Output assumption: Cordon merchants reduce RTO by ~60% (operator-tested
- * baseline; the in-product number tunes per merchant). The component uses
- * pure useState — no third-party UI deps — so the JS payload stays tiny
- * and the marketing route remains light.
+ * Output: an estimate of avoidable RTO bleed under operator-driven
+ * confirmation workflows. The reduction constant is an estimate-builder
+ * default; actual reduction varies by store, product mix, and operator
+ * staffing. The component uses pure useState — no third-party UI deps
+ * — so the JS payload stays tiny and the marketing route remains light.
  */
 
 const fmt = new Intl.NumberFormat("en-IN");
-const RTO_REDUCTION = 0.6; // 60% — Cordon's claimed average reduction
+// Estimate-builder default — operator-tested baseline used by the
+// calculator UI. Not surfaced to the merchant as a hard claim;
+// the user-facing hint frames it as "based on operator-tested
+// confirmation workflows; actual reduction varies by store".
+const RTO_REDUCTION = 0.6;
 
 type PlanRec = { name: string; price: number | null; tag: string };
 
@@ -66,8 +71,8 @@ export function RoiCalculator() {
       monthlySavings: calc.monthlySavings,
       plan: calc.plan.name,
     };
-    (window as unknown as { __cordonCalc?: typeof detail }).__cordonCalc = detail;
-    window.dispatchEvent(new CustomEvent("cordon:calc-update", { detail }));
+    (window as unknown as { __confirmxCalc?: typeof detail }).__confirmxCalc = detail;
+    window.dispatchEvent(new CustomEvent("confirmx:calc-update", { detail }));
   }, [calc.monthlyBleed, calc.monthlySavings, calc.plan.name]);
 
   return (
@@ -108,10 +113,10 @@ export function RoiCalculator() {
           tone="danger"
         />
         <Output
-          label="Bleed with Cordon"
+          label="Estimated bleed with ConfirmX"
           value={`৳${fmt.format(Math.round(calc.remaining))}`}
           tone="muted"
-          hint={`assumes ${Math.round(RTO_REDUCTION * 100)}% RTO reduction`}
+          hint="based on operator-tested confirmation workflows; actual reduction varies by store"
         />
         <Output
           label="You save / month"

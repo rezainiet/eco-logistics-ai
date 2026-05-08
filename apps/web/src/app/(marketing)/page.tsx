@@ -10,7 +10,7 @@ import { PricingHighlighter } from "./_components/pricing-highlighter";
 const SAAS_BRANDING = getBrandingSync();
 
 /**
- * Cordon — landing page (Plan B + Plan C tone).
+ * ConfirmX — landing page (Plan B + Plan C tone).
  *
  * Lives inside the (marketing) route group, which means it inherits a layout
  * with NO providers — no SessionProvider, no TRPCProvider, no QueryClient.
@@ -65,11 +65,12 @@ const PAGE_SCRIPT = `
  *   - twitter.title / .description for the same reason
  *   - alternates.canonical so search engines treat "/" as the home URL
  */
-const PAGE_TITLE = `${SAAS_BRANDING.name} — Bangladesh COD operations OS`;
+const PAGE_TITLE = `${SAAS_BRANDING.name} — Bangladesh COD order confirmation infrastructure`;
 const PAGE_DESCRIPTION =
-  `The order operations OS for Bangladesh COD merchants. Real-time fraud ` +
-  `scoring, automated courier booking on Pathao, Steadfast & RedX, and ` +
-  `idempotent webhook delivery for Shopify and WooCommerce.`;
+  `COD order confirmation infrastructure for Bangladesh merchants. ` +
+  `Real-time order verification, automated courier booking on Pathao, ` +
+  `Steadfast & RedX, and idempotent webhook delivery for Shopify and ` +
+  `WooCommerce.`;
 
 export const metadata = {
   title: PAGE_TITLE,
@@ -161,13 +162,15 @@ const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
       "kickoff to production.",
   },
   {
-    q: "Will fraud detection block real customers?",
+    q: "Will order verification block real customers?",
     a:
-      "No order is auto-rejected. The risk score routes orders into one " +
-      "of three buckets — auto-confirm, confirmation call, or human " +
-      "review queue. You stay in control of every threshold, and the " +
-      "model tunes against your store's baseline RTO so a 30%-RTO " +
-      "category doesn't flag normal buyers as risky.",
+      "No order is auto-rejected — an operator decides on every flagged " +
+      "order. ConfirmX surfaces signals (phone history, address " +
+      "consistency, COD-amount anomalies) and routes orders into three " +
+      "buckets — auto-confirm, confirmation call, or human review queue. " +
+      "Every threshold is yours to tune, and the system calibrates " +
+      "against your store's baseline RTO so a 30%-RTO category doesn't " +
+      "flag normal buyers.",
   },
   {
     q: "How long does setup take?",
@@ -187,7 +190,7 @@ const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
   {
     q: "What about my Shopify orders that already shipped?",
     a:
-      "Cordon ingests new orders from the moment you connect — older " +
+      "ConfirmX ingests new orders from the moment you connect — older " +
       "orders stay where they are. If you want a backfill (typically the " +
       "last 30 days for risk modeling), the Growth plan and above " +
       "include a one-click historical sync.",
@@ -196,10 +199,10 @@ const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
     q: "What happens to my data if I leave?",
     a:
       "Your raw webhook payloads are reaped after 30 days regardless. " +
-      "On cancellation, your order metadata, fraud signals, and tracking " +
-      "history are exportable as JSON or CSV for 90 days, then deleted. " +
-      "We don't retain on-platform data after the export window — " +
-      "written into the contract.",
+      "On cancellation, your order metadata, operational risk signals, " +
+      "and tracking history are exportable as JSON or CSV for 90 days, " +
+      "then deleted. We don't retain on-platform data after the export " +
+      "window — written into the contract.",
   },
 ];
 
@@ -248,7 +251,7 @@ export default async function HomePage() {
           <div className="container nav-inner">
             <Link href="/" className="logo">
               <span className="logo-dot" />
-              <span>Cordon</span>
+              <span>ConfirmX</span>
             </Link>
             <div className="nav-links">
               <a href="#how">How it works</a>
@@ -286,14 +289,14 @@ export default async function HomePage() {
                 Built for Bangladesh&apos;s COD economy
               </div>
               <h1 className="hero-title">
-                Stop shipping COD orders to <span className="accent">fraudsters</span>.{" "}
-                <span className="serif">Catch them</span> before the courier picks up.
+                <span className="serif">Confirm</span> every COD order before it ships.
               </h1>
               <p className="hero-sub">
-                The order operations OS for Bangladesh COD stores. Real-time
-                fraud scoring, automated courier booking, and idempotent
-                webhook delivery — RTO down up to 60% on the orders Cordon
-                scores.
+                COD order confirmation infrastructure for Bangladesh stores.
+                Real-time order verification, automated courier booking, and
+                idempotent webhook delivery — helping merchants reduce
+                avoidable RTO through operator-driven confirmation
+                workflows.
               </p>
               <div className="hero-ctas">
                 <a href="#calculator" className="btn btn-primary btn-lg">
@@ -401,7 +404,7 @@ export default async function HomePage() {
               Stop paying the <span className="serif">RTO tax.</span>
             </h2>
             <p className="section-sub">
-              Cordon scores every order before it ships. The bad ones get held. The good ones
+              ConfirmX scores every order before it ships. The bad ones get held. The good ones
               auto-book to the right courier. Your team only sees the exceptions.
             </p>
 
@@ -410,9 +413,10 @@ export default async function HomePage() {
                 <div className="solution-step">Layer 01 — Score</div>
                 <h3>Every order, risk-rated in milliseconds.</h3>
                 <p>
-                  Per-merchant fraud rules — COD thresholds, suspicious districts, velocity
-                  limits — combined with a cross-merchant signal network. Score, level, and
-                  signals attached to the order before it moves.
+                  Per-merchant verification rules — COD thresholds, high-RTO
+                  districts, velocity limits — combined with a cross-merchant
+                  signal network. Score, level, and signals attached to the
+                  order before it moves.
                 </p>
               </div>
               <div className="solution-card">
@@ -504,17 +508,17 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* FRAUD NETWORK */}
+        {/* CROSS-MERCHANT SIGNAL NETWORK */}
         <section id="fraud">
           <div className="container">
             <div className="section-eyebrow">05 / Cross-merchant network</div>
             <h2 className="section-title">
-              The fraudster who burned another store today is calling yours{" "}
-              <span className="serif">tomorrow.</span>
+              A buyer who refused two parcels at other stores today is
+              ordering from yours <span className="serif">tomorrow.</span>
             </h2>
             <p className="section-sub">
-              Cordon connects the dots they hoped you wouldn&apos;t see — without ever touching
-              their PII or yours.
+              ConfirmX connects the dots — without ever touching buyer PII
+              or merchant data outside your store boundary.
             </p>
 
             <div className="network-card">
@@ -526,7 +530,7 @@ export default async function HomePage() {
                     store. We don&apos;t share buyer data — we share signal.
                   </p>
                   <p>
-                    When a buyer who refused two parcels at two other Cordon stores tries to
+                    When a buyer who refused two parcels at two other ConfirmX stores tries to
                     place a COD order with you, you&apos;ll know <em>before</em> the courier is
                     booked.
                   </p>
@@ -595,7 +599,7 @@ export default async function HomePage() {
               Three modes. <span className="serif">You decide how much to let go.</span>
             </h2>
             <p className="section-sub">
-              From cautious to fully autonomous. Cordon respects how you want to run your store
+              From cautious to fully autonomous. ConfirmX respects how you want to run your store
               — and lets you change your mind whenever.
             </p>
 
@@ -604,8 +608,8 @@ export default async function HomePage() {
                 <div className="mode-name">Mode 01</div>
                 <h3>Manual</h3>
                 <p>
-                  Cordon scores every order. You decide every action. Best for new stores or
-                  fraud-sensitive categories.
+                  ConfirmX surfaces signals on every order. You decide every
+                  action. Best for new stores or high-RTO categories.
                 </p>
                 <ul className="mode-list">
                   <li>Risk score on every order</li>
@@ -674,18 +678,18 @@ export default async function HomePage() {
             <div className="section-eyebrow">08 / What changes</div>
             <h2 className="section-title">
               What changes the day you{" "}
-              <span className="serif">connect Cordon.</span>
+              <span className="serif">connect ConfirmX.</span>
             </h2>
             <p className="section-sub">
-              Operational patterns Cordon enables for Bangladesh COD stores.
+              Operational patterns ConfirmX enables for Bangladesh COD stores.
               The numbers below describe what the system does, not customer
               counts — those land here once we have written permission to
               cite them.
             </p>
 
-            {/* Category strip — represents who Cordon serves; not a customer
+            {/* Category strip — represents who ConfirmX serves; not a customer
                 count claim. */}
-            <div className="trust-strip" aria-label="Categories Cordon supports">
+            <div className="trust-strip" aria-label="Categories ConfirmX supports">
               <div className="trust-strip-label">Built for stores in</div>
               <div className="trust-categories">
                 <span className="trust-cat">D2C apparel</span>
@@ -703,7 +707,7 @@ export default async function HomePage() {
             <div className="metric-row">
               <div className="metric">
                 <div className="metric-num">Hashed</div>
-                <div className="metric-label">Cross-merchant fraud signals share SHA-256 hashes only — buyer PII never leaves your store boundary</div>
+                <div className="metric-label">Cross-merchant operational signals share SHA-256 hashes only — buyer PII never leaves your store boundary</div>
               </div>
               <div className="metric">
                 <div className="metric-num">3 of 3</div>
@@ -740,20 +744,20 @@ export default async function HomePage() {
               <figure className="testimonial">
                 <blockquote>
                   When the cross-merchant network flags a buyer who refused
-                  parcels at other Cordon stores in the same week, the
+                  parcels at other ConfirmX stores in the same week, the
                   signal is on the order before the courier is booked.
                   One catch can pay for months of subscription.
                 </blockquote>
                 <figcaption>
-                  <div className="testimonial-name">Pattern · fraud catch</div>
-                  <div className="testimonial-role">Cross-merchant fraud network</div>
+                  <div className="testimonial-name">Pattern · operational catch</div>
+                  <div className="testimonial-role">Cross-merchant signal network</div>
                 </figcaption>
               </figure>
 
               <figure className="testimonial">
                 <blockquote>
                   An 18&ndash;22% RTO baseline can drop into the 6&ndash;8%
-                  band on the orders Cordon scores — same catalog, same
+                  band on the orders ConfirmX scores — same catalog, same
                   couriers — once fake-order shipping is held back at the
                   pickup stage.
                 </blockquote>
@@ -821,7 +825,7 @@ export default async function HomePage() {
                 </div>
                 <h4>Courier outages auto-route</h4>
                 <p>
-                  When a courier is degraded, Cordon routes around it;
+                  When a courier is degraded, ConfirmX routes around it;
                   when it recovers, traffic returns. Circuit breakers
                   track booking attempts and fall through to backups
                   automatically.
@@ -856,7 +860,7 @@ export default async function HomePage() {
                 <p>
                   Courier API keys are wrapped with envelope encryption
                   (v1:iv:tag:ct) before they hit the database. Even
-                  Cordon database admins can&apos;t read them in
+                  ConfirmX database admins can&apos;t read them in
                   plaintext.
                 </p>
               </div>
@@ -887,19 +891,19 @@ export default async function HomePage() {
               The same store, <span className="serif">two different months.</span>
             </h2>
             <p className="section-sub">
-              Six axes that change the day a merchant connects Cordon. Numbers
+              Six axes that change the day a merchant connects ConfirmX. Numbers
               are typical, not best-case — your store will sit somewhere on
               this range.
             </p>
 
-            <div className="compare-table" role="table" aria-label="Without Cordon vs With Cordon">
+            <div className="compare-table" role="table" aria-label="Without ConfirmX vs With ConfirmX">
               <div className="compare-head" role="row">
                 <div className="compare-axis" role="columnheader">Axis</div>
                 <div className="compare-bad" role="columnheader">
-                  <span className="compare-tag compare-tag-bad">Without Cordon</span>
+                  <span className="compare-tag compare-tag-bad">Without ConfirmX</span>
                 </div>
                 <div className="compare-good" role="columnheader">
-                  <span className="compare-tag compare-tag-good">With Cordon</span>
+                  <span className="compare-tag compare-tag-good">With ConfirmX</span>
                 </div>
               </div>
 
@@ -911,12 +915,12 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">RTO rate</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">18 — 22%</span>
                   <span className="compare-note">Industry baseline for BD COD</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">6 — 8%</span>
                   <span className="compare-note">After cross-merchant scoring</span>
                 </div>
@@ -925,12 +929,12 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Confirmation calls</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">80 / day</span>
                   <span className="compare-note">Your team on the phone, manually</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">8 / day</span>
                   <span className="compare-note">Twilio handles the rest, only exceptions reach a human</span>
                 </div>
@@ -939,12 +943,12 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Courier choice</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">Manual</span>
                   <span className="compare-note">Ops lead picks per order or per region</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">Auto-routed</span>
                   <span className="compare-note">Best-fit by zone × success rate × your overrides</span>
                 </div>
@@ -953,12 +957,12 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Webhook drops</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">Silent</span>
                   <span className="compare-note">You find out from a buyer&apos;s angry call</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">Replayed</span>
                   <span className="compare-note">Idempotent inbox, exponential backoff, dead-letter alerts</span>
                 </div>
@@ -967,12 +971,12 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Ops team time</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">3 — 4 hrs/day</span>
                   <span className="compare-note">Calls, courier dashboards, reconciliation</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">~30 min/day</span>
                   <span className="compare-note">Review queue + exception inbox, that&apos;s it</span>
                 </div>
@@ -981,14 +985,14 @@ export default async function HomePage() {
               <div className="compare-row" role="row">
                 <div className="compare-axis" role="cell">Reporting surface</div>
                 <div className="compare-bad" role="cell">
-                  <span className="compare-cell-label">Without Cordon</span>
+                  <span className="compare-cell-label">Without ConfirmX</span>
                   <span className="compare-num compare-num-bad">3 dashboards</span>
                   <span className="compare-note">Pathao + Steadfast + RedX, manually merged</span>
                 </div>
                 <div className="compare-good" role="cell">
-                  <span className="compare-cell-label">With Cordon</span>
+                  <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">1 dashboard</span>
-                  <span className="compare-note">Unified tracking, fraud, billing, recovery</span>
+                  <span className="compare-note">Unified tracking, verification, billing, recovery</span>
                 </div>
               </div>
             </div>
@@ -1037,7 +1041,7 @@ export default async function HomePage() {
                   <li>All Starter features</li>
                   <li>Full-auto mode + Twilio calls</li>
                   <li>3 couriers (Pathao + Steadfast + RedX)</li>
-                  <li>Cross-merchant fraud network</li>
+                  <li>Cross-merchant signal network</li>
                   <li>Cart recovery worker</li>
                 </ul>
                 {signedIn ? (
@@ -1061,7 +1065,7 @@ export default async function HomePage() {
                 <ul className="price-features">
                   <li>All Growth features</li>
                   <li>Multi-store / multi-merchant</li>
-                  <li>Custom fraud rules + tuning</li>
+                  <li>Custom verification rules + tuning</li>
                   <li>Priority queue + Slack support</li>
                 </ul>
                 {signedIn ? (
@@ -1085,11 +1089,11 @@ export default async function HomePage() {
                 </ul>
                 <a
                   href={`mailto:${SAAS_BRANDING.salesEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} Enterprise — sales conversation`)}&body=${encodeURIComponent(
-                    "Hi Cordon,\n\nI run a Bangladesh ecommerce store doing 25,000+ COD orders a month. I'd like to talk about Enterprise.\n\nMonthly order volume:\nCouriers we use:\nPlatform (Shopify / WooCommerce / custom):\nTimezone for the call:\n\nThanks,",
+                    "Hi ConfirmX,\n\nI run a Bangladesh ecommerce store doing 25,000+ COD orders a month. I'd like to talk about Enterprise.\n\nMonthly order volume:\nCouriers we use:\nPlatform (Shopify / WooCommerce / custom):\nTimezone for the call:\n\nThanks,",
                   )}`}
                   className="btn btn-secondary"
                 >
-                  Talk to Cordon — Enterprise
+                  Talk to ConfirmX — Enterprise
                 </a>
               </div>
             </div>
@@ -1118,13 +1122,14 @@ export default async function HomePage() {
               </details>
 
               <details className="faq-item">
-                <summary>Will fraud detection block real customers?</summary>
+                <summary>Will order verification block real customers?</summary>
                 <p>
-                  No order is auto-rejected. The risk score routes orders into one of three
-                  buckets — auto-confirm, confirmation call, or human review queue.
-                  You stay in control of every threshold, and the model tunes against your
-                  store&apos;s baseline RTO so a 30%-RTO category doesn&apos;t flag normal
-                  buyers as risky.
+                  No order is auto-rejected — an operator decides on every flagged order.
+                  ConfirmX surfaces signals (phone history, address consistency, COD-amount
+                  anomalies) and routes orders into three buckets — auto-confirm,
+                  confirmation call, or human review queue. Every threshold is yours to
+                  tune, and the system calibrates against your store&apos;s baseline RTO so
+                  a 30%-RTO category doesn&apos;t flag normal buyers.
                 </p>
               </details>
 
@@ -1150,7 +1155,7 @@ export default async function HomePage() {
               <details className="faq-item">
                 <summary>What about my Shopify orders that already shipped?</summary>
                 <p>
-                  Cordon ingests new orders from the moment you connect — older orders
+                  ConfirmX ingests new orders from the moment you connect — older orders
                   stay where they are. If you want a backfill (typically the last 30
                   days for risk modeling), the Growth plan and above include a one-click
                   historical sync.
@@ -1161,10 +1166,10 @@ export default async function HomePage() {
                 <summary>What happens to my data if I leave?</summary>
                 <p>
                   Your raw webhook payloads are reaped after 30 days regardless. On
-                  cancellation, your order metadata, fraud signals, and tracking history
-                  are exportable as JSON or CSV for 90 days, then deleted. We don&apos;t
-                  retain on-platform data after the export window — written into the
-                  contract.
+                  cancellation, your order metadata, operational risk signals, and
+                  tracking history are exportable as JSON or CSV for 90 days, then
+                  deleted. We don&apos;t retain on-platform data after the export
+                  window — written into the contract.
                 </p>
               </details>
             </div>
@@ -1176,11 +1181,12 @@ export default async function HomePage() {
           <div className="container">
             <div className="final-cta">
               <h2>
-                Stop shipping to <span className="serif">fraudsters.</span>
+                <span className="serif">Confirm</span> every COD order before it ships.
               </h2>
               <p>
-                Connect your Shopify or WooCommerce store in under 10 minutes. The average
-                Cordon merchant pays back the subscription in week one.
+                Connect your Shopify or WooCommerce store in under 10 minutes.
+                Most ConfirmX merchants see meaningful operational lift from
+                week one.
               </p>
               <div className="ctas">
                 {signedIn ? (
@@ -1194,7 +1200,7 @@ export default async function HomePage() {
                 )}
                 <a
                   href={`mailto:${SAAS_BRANDING.helloEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} — request a walkthrough`)}&body=${encodeURIComponent(
-                    "Hi Cordon,\n\nI'd like a 15-minute walkthrough of how Cordon would work for my store.\n\nStore name:\nPlatform (Shopify / WooCommerce):\nMonthly order volume:\nCouriers we use:\nBest time + timezone for a call:\n\nThanks,",
+                    "Hi ConfirmX,\n\nI'd like a 15-minute walkthrough of how ConfirmX would work for my store.\n\nStore name:\nPlatform (Shopify / WooCommerce):\nMonthly order volume:\nCouriers we use:\nBest time + timezone for a call:\n\nThanks,",
                   )}`}
                   className="btn btn-secondary btn-lg"
                 >
@@ -1205,8 +1211,8 @@ export default async function HomePage() {
                 <span className="urgency-dot" />
                 <span>
                   <strong>Launch quarter:</strong> every new merchant gets a
-                  free fraud audit of their last 30 days of orders during
-                  onboarding.
+                  free reliability audit of their last 30 days of orders
+                  during onboarding.
                 </span>
               </div>
             </div>
@@ -1242,7 +1248,7 @@ export default async function HomePage() {
           <div className="container footer-inner">
             <Link href="/" className="logo">
               <span className="logo-dot" />
-              <span>Cordon</span>
+              <span>ConfirmX</span>
             </Link>
             <div className="footer-links">
               <a href="#how">How it works</a>

@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
  * calculator's sliders, follows them down the page, and stays until they
  * either click through or dismiss it.
  *
- * Talks to the calculator via a window CustomEvent (`cordon:calc-update`)
+ * Talks to the calculator via a window CustomEvent (`confirmx:calc-update`)
  * — no shared state container, no provider wrapper. Hidden on mobile so it
  * doesn't fight the sticky CTA bar that already lives there.
  */
@@ -31,8 +31,8 @@ export function FloatingLossIndicator() {
       if (!detail) return;
       setSnap(detail);
     }
-    window.addEventListener("cordon:calc-update", onUpdate);
-    return () => window.removeEventListener("cordon:calc-update", onUpdate);
+    window.addEventListener("confirmx:calc-update", onUpdate);
+    return () => window.removeEventListener("confirmx:calc-update", onUpdate);
   }, []);
 
   if (!snap || dismissed) return null;
@@ -52,7 +52,7 @@ export function FloatingLossIndicator() {
         ৳{fmt.format(Math.round(snap.monthlyBleed))}
       </div>
       <div className="floating-loss-sub">
-        Cordon stops <strong>৳{fmt.format(Math.round(snap.monthlySavings))}</strong> of it.
+        ConfirmX helps reduce <strong>৳{fmt.format(Math.round(snap.monthlySavings))}</strong> of it.
       </div>
       <Link href="/signup" className="btn btn-primary floating-loss-cta">
         Stop the bleed <span className="arrow">→</span>

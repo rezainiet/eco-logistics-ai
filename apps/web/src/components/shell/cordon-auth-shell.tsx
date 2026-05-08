@@ -200,8 +200,8 @@ function ValueColumn() {
             </>
           ) : (
             <>
-              Stop shipping to{" "}
-              <span className="cordon-serif">fraudsters.</span>
+              <span className="cordon-serif">Confirm</span> every COD order
+              before it ships.
             </>
           )}
         </h2>
@@ -237,10 +237,10 @@ function ValueColumn() {
             </>
           ) : (
             <>
-              Stop shipping to{" "}
-              <span className="cordon-serif">fraudsters.</span>
+              <span className="cordon-serif">Confirm</span> every COD order
+              before it ships.
               <br />
-              Get paid for what you actually deliver.
+              <span className="text-fg-muted">Operator-driven verification, replay-safe webhooks.</span>
             </>
           )}
         </h2>
@@ -254,10 +254,11 @@ function ValueColumn() {
             </>
           ) : (
             <>
-              Real-time fraud scoring across a cross-merchant network,
-              automated booking on Pathao / Steadfast / RedX, and webhook
-              delivery you can actually trust. Cordon merchants cut RTO by
-              up to 60%.
+              Real-time order verification across a cross-merchant signal
+              network, automated booking on Pathao / Steadfast / RedX, and
+              webhook delivery you can actually trust. ConfirmX helps
+              merchants reduce avoidable RTO through operator-driven
+              confirmation workflows.
             </>
           )}
         </p>
