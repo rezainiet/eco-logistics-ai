@@ -18,3 +18,4 @@ export * from "./models/pendingJob.js";
 export * from "./models/fraudSignal.js";
 export * from "./models/fraudPrediction.js";
 export * from "./models/courierPerformance.js";
+export * from "./models/brandingConfig.js";

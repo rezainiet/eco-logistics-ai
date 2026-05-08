@@ -8,7 +8,9 @@
       "@ecom/db": ["../../packages/db/dist/index.d.ts"],
       "@ecom/db/*": ["../../packages/db/dist/*"],
       "@ecom/types": ["../../packages/types/dist/index.d.ts"],
-      "@ecom/types/*": ["../../packages/types/dist/*"]
+      "@ecom/types/*": ["../../packages/types/dist/*"],
+      "@ecom/branding": ["../../packages/branding/dist/index.d.ts"],
+      "@ecom/branding/*": ["../../packages/branding/dist/*"]
     }
   },
   "include": ["src/**/*"],

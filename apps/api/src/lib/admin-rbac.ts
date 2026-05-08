@@ -50,6 +50,12 @@ export const PERMISSIONS = {
   "admin.grant_scope": [] as AdminScope[], // super_admin only
   "admin.revoke_scope": [] as AdminScope[], // super_admin only
   "audit.verify_chain": [] as AdminScope[], // super_admin only
+  // Centralized SaaS branding edits — super_admin only. The brand reaches
+  // every public surface (marketing, auth, dashboard, emails, Stripe
+  // receipts, WC webhooks). Limit the blast radius to the highest-trust
+  // role until/unless we ship a granular `branding_admin` scope.
+  "branding.update": [] as AdminScope[], // super_admin only
+  "branding.reset": [] as AdminScope[], // super_admin only
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;
@@ -66,6 +72,10 @@ export const STEPUP_REQUIRED: ReadonlySet<Permission> = new Set<Permission>([
   "fraud.override",
   "admin.grant_scope",
   "admin.revoke_scope",
+  // Branding edits change every public-facing surface. The friction is
+  // worth it.
+  "branding.update",
+  "branding.reset",
 ]);
 
 interface AdminProfile {
@@ -140,9 +150,6 @@ export function assertPermission(
     });
   }
   if (profile.scopes.includes("super_admin")) return "super_admin";
-  // Cast to a concrete tuple — `required` for super-admin-only perms is the
-  // empty literal `[]`, which TS infers as `never[]`. We need it as
-  // `readonly AdminScope[]` so .includes accepts AdminScope candidates.
   const required = PERMISSIONS[permission] as readonly AdminScope[];
   return (
     profile.scopes.find((s) => required.includes(s)) ??

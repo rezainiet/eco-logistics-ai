@@ -50,6 +50,8 @@ type AuditAction =
   | "integration.resumed"
   | "integration.issues_resolved"
   | "merchant.branding_updated"
+  | "branding.updated"
+  | "branding.reset"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
   | "tracking.identified"

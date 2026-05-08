@@ -10,7 +10,9 @@
       "@ecom/db": ["../../packages/db/src/index.ts"],
       "@ecom/db/*": ["../../packages/db/src/*"],
       "@ecom/types": ["../../packages/types/src/index.ts"],
-      "@ecom/types/*": ["../../packages/types/src/*"]
+      "@ecom/types/*": ["../../packages/types/src/*"],
+      "@ecom/branding": ["../../packages/branding/src/index.ts"],
+      "@ecom/branding/*": ["../../packages/branding/src/*"]
     }
   },
   "include": ["src/**/*", "tests/**/*", "vitest.config.ts"]
