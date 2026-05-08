@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "postinstall": "npm --workspace @ecom/branding run build --if-present",
     "dev": "npm-run-all --parallel dev:api dev:web",
     "dev:api": "npm --workspace apps/api run dev",
     "dev:web": "npm --workspace apps/web run dev",
