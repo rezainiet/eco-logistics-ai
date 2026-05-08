@@ -77,6 +77,15 @@ trackingSessionSchema.index({ merchantId: 1, converted: 1, lastSeenAt: -1 });
 trackingSessionSchema.index({ merchantId: 1, abandonedCart: 1, lastSeenAt: -1 });
 trackingSessionSchema.index({ merchantId: 1, riskHint: -1 });
 trackingSessionSchema.index({ merchantId: 1, anonId: 1, firstSeenAt: -1 });
+// Intent Intelligence — fast lookup of every session resolved to a given
+// order. Partial filter keeps the index narrow (only sessions that actually
+// stitched). Read by `lib/intent.ts` `scoreIntentForOrder` post-ingest.
+trackingSessionSchema.index(
+  { merchantId: 1, resolvedOrderId: 1 },
+  {
+    partialFilterExpression: { resolvedOrderId: { $exists: true } },
+  },
+);
 
 export type TrackingSession = InferSchemaType<typeof trackingSessionSchema> & {
   _id: Types.ObjectId;

@@ -83,12 +83,33 @@ export const AUDIT_ACTIONS = [
   "integration.secret_revealed",
   "integration.shopify_oauth",
   "tracking.identified",
+  // Funnel-event audit signals — written exactly once per merchant +
+  // once per integration. Used by ops to measure activation drop-off
+  // (signup → integration.connected → integration.first_event) without
+  // inferring from order tables. Both must match the AuditAction union
+  // in apps/api/src/lib/audit.ts; they're enforced at the Mongoose
+  // schema layer here so a typo in caller code fails the write
+  // (rather than silently writing a row Mongoose would later reject).
+  "auth.signup",
+  "integration.first_event",
   "auth.reset_requested",
   "auth.password_reset",
   "auth.password_changed",
   "auth.email_verified",
   "auth.logout_all",
+  // Merchant-initiated config updates surfaced in the merchant audit
+  // trail (settings page).
+  "merchant.branding_updated",
   "merchant.test_sms_sent",
+  // Shopify-platform compliance webhooks — receipt + dispatch outcome.
+  // Two rows per delivery so a Partner-app reviewer can see (a) the
+  // webhook arrived + verified, and (b) what the redaction actually
+  // did, without mixing those into one over-stuffed row.
+  "shopify.gdpr_webhook",
+  "shopify.gdpr_dispatch",
+  // Manual webhook re-registration mutations from the dashboard.
+  "integration.shopify_webhooks_retried",
+  "integration.woo_webhooks_retried",
   "awb.reconcile.orphaned",
   "awb.reconcile.abandoned",
   "automation.queue_rebuilt",
@@ -107,6 +128,9 @@ export const AUDIT_ACTIONS = [
   "admin.unauthorized_attempt",
   // --- Anomaly engine ---
   "alert.fired",
+  // --- Centralized SaaS branding (super_admin only) ---
+  "branding.updated",
+  "branding.reset",
 ] as const;
 
 export const AUDIT_SUBJECT_TYPES = [

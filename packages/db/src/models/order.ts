@@ -24,6 +24,17 @@ const customerSchema = new Schema(
     },
     address: { type: String, required: true, trim: true },
     district: { type: String, required: true, trim: true, index: true },
+    /**
+     * Bangladesh thana / upazila. Optional, populated on a best-effort
+     * basis at ingest by `lib/thana-lexicon.ts`'s `extractThana(address,
+     * district)`. Undefined when the lexicon couldn't disambiguate
+     * (multiple matches across districts, etc) — never guessed.
+     *
+     * Bangladesh courier delivery is coordinated at the thana level.
+     * Read by the Address Intelligence layer + (medium-term) the
+     * thana-aware courier-performance scoring path.
+     */
+    thana: { type: String, trim: true, maxlength: 100 },
   },
   { _id: false }
 );
@@ -370,6 +381,82 @@ export interface OrderAutomation {
   lateReplyAcknowledgedAt?: Date;
 }
 
+/* -------------------------------------------------------------------------- */
+/* Intent Intelligence v1 — observation-only buyer-commitment subdoc.         */
+/* Populated fire-and-forget by lib/intent.ts after identity-resolution       */
+/* runs at ingest. NOT read by computeRisk; surfaced to the merchant + agent  */
+/* UI for visibility. v1 is observation-only by design (Roadmap §STEP 3).     */
+/* -------------------------------------------------------------------------- */
+
+const intentSignalSchema = new Schema(
+  {
+    /**
+     * One of the stable keys in `INTENT_SIGNAL_KEYS` (lib/intent.ts).
+     * Intentionally NOT enum-constrained at the schema level — adding a new
+     * signal key is a code-only change and we don't want a Mongoose strict-
+     * mode rejection silently dropping a signal during a deploy lap.
+     */
+    key: { type: String, required: true, trim: true, maxlength: 60 },
+    weight: { type: Number, required: true },
+    detail: { type: String, required: true, trim: true, maxlength: 240 },
+  },
+  { _id: false },
+);
+
+export const INTENT_TIERS = ["verified", "implicit", "unverified", "no_data"] as const;
+export type IntentTier = (typeof INTENT_TIERS)[number];
+
+const intentSchema = new Schema(
+  {
+    score: { type: Number, min: 0, max: 100 },
+    tier: { type: String, enum: INTENT_TIERS },
+    signals: { type: [intentSignalSchema], default: [] },
+    /** How many distinct TrackingSessions contributed (0 when no_data). */
+    sessionsConsidered: { type: Number, min: 0, default: 0 },
+    computedAt: { type: Date },
+  },
+  { _id: false },
+);
+
+/* -------------------------------------------------------------------------- */
+/* Address Intelligence v1 — deliverability-quality subdoc. Populated         */
+/* synchronously inline at ingest by lib/address-intelligence.ts. Pure-       */
+/* function compute, no DB cost, no external calls.                           */
+/* -------------------------------------------------------------------------- */
+
+export const ADDRESS_COMPLETENESS = ["complete", "partial", "incomplete"] as const;
+export const ADDRESS_SCRIPT_MIX = ["latin", "bangla", "mixed"] as const;
+export const ADDRESS_HINT_CODES = [
+  "no_anchor",
+  "no_landmark",
+  "no_number",
+  "too_short",
+  "too_few_tokens",
+  "mixed_script",
+] as const;
+
+const addressQualitySchema = new Schema(
+  {
+    score: { type: Number, min: 0, max: 100 },
+    completeness: { type: String, enum: ADDRESS_COMPLETENESS },
+    landmarks: { type: [String], default: [] },
+    hasNumber: { type: Boolean },
+    tokenCount: { type: Number, min: 0 },
+    scriptMix: { type: String, enum: ADDRESS_SCRIPT_MIX },
+    /** Stable hint codes — UI maps to localized copy. */
+    missingHints: { type: [String], default: [] },
+    computedAt: { type: Date },
+  },
+  { _id: false },
+);
+
+const addressSchema = new Schema(
+  {
+    quality: { type: addressQualitySchema, default: undefined },
+  },
+  { _id: false },
+);
+
 const orderSchema = new Schema(
   {
     merchantId: { type: Schema.Types.ObjectId, ref: "Merchant", required: true },
@@ -398,6 +485,19 @@ const orderSchema = new Schema(
      */
     preActionSnapshot: { type: Schema.Types.Mixed },
     source: { type: sourceSchema, default: () => ({}) },
+    /**
+     * Intent Intelligence v1. Stamped fire-and-forget post-identity-
+     * resolution at ingest. Absent on legacy orders and on orders whose
+     * SDK didn't capture a session (CSV / dashboard imports). Observation-
+     * only — no automation / fraud paths read this in v1.
+     */
+    intent: { type: intentSchema, default: undefined },
+    /**
+     * Address Intelligence v1. Stamped synchronously at ingest by the pure
+     * `computeAddressQuality(address, district)`. Absent on legacy orders.
+     * Observation-only.
+     */
+    address: { type: addressSchema, default: undefined },
     calls: { type: [orderCallSchema], default: [] },
     /**
      * Application-level optimistic-concurrency counter. Incremented on
@@ -486,6 +586,35 @@ orderSchema.index(
   {
     unique: true,
     partialFilterExpression: { "source.clientRequestId": { $exists: true, $type: "string" } },
+  },
+);
+// Address Intelligence — analytics cohort joins (completeness × outcome).
+// Partial-filter so legacy orders without a quality stamp don't bloat the
+// index, and so the planner is happy to use it on filtered scans.
+orderSchema.index(
+  { merchantId: 1, "address.quality.completeness": 1, createdAt: -1 },
+  {
+    partialFilterExpression: {
+      "address.quality.completeness": { $type: "string" },
+    },
+  },
+);
+// Thana-aware lookups (medium-term courier-perf will key on this). Sparse
+// partial — most orders won't have a thana populated until coverage grows.
+orderSchema.index(
+  { merchantId: 1, "customer.thana": 1, createdAt: -1 },
+  {
+    partialFilterExpression: {
+      "customer.thana": { $type: "string" },
+    },
+  },
+);
+// Intent Intelligence — analytics cohort (tier × outcome). Partial keeps
+// the index narrow until intent stamping is universal.
+orderSchema.index(
+  { merchantId: 1, "intent.tier": 1, createdAt: -1 },
+  {
+    partialFilterExpression: { "intent.tier": { $type: "string" } },
   },
 );
 // Sync worker: find active shipments that need polling, oldest first.
