@@ -16,6 +16,7 @@ import {
   WEBHOOK_RETRY_MAX_ATTEMPTS,
 } from "../src/server/ingest.js";
 import { sweepWebhookRetryQueue } from "../src/workers/webhookRetry.js";
+import { syncOneIntegration } from "../src/workers/orderSync.worker.js";
 import { Types } from "mongoose";
 import { decryptSecret, encryptSecret } from "../src/lib/crypto.js";
 
@@ -453,6 +454,161 @@ describe("integrations router + connectors", () => {
     expect(after?.nextRetryAt).toBeFalsy();
     const orderCount = await Order.countDocuments({ merchantId: m._id });
     expect(orderCount).toBe(1);
+  });
+
+  it("order-sync polling pushes Shopify raw deliveries through the webhook inbox path", async () => {
+    const m = await createMerchant();
+    const integration = await Integration.create({
+      merchantId: m._id,
+      provider: "shopify",
+      accountKey: "poll.myshopify.com",
+      status: "connected",
+      credentials: {
+        apiKey: encryptSecret("k"),
+        apiSecret: encryptSecret("s"),
+        accessToken: encryptSecret("shpat_poll"),
+        siteUrl: "poll.myshopify.com",
+      },
+      webhookSecret: encryptSecret("ws"),
+      lastSyncedAt: new Date("2026-05-01T00:00:00.000Z"),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toContain("/orders.json");
+      expect(parsed.searchParams.get("created_at_min")).toBeTruthy();
+      return new Response(
+        JSON.stringify({
+          orders: [
+            {
+              id: 91001,
+              name: "#91001",
+              total_price: "1250",
+              created_at: "2026-05-02T10:00:00.000Z",
+              customer: { first_name: "Polling", last_name: "Buyer", phone: "+8801711111111" },
+              shipping_address: {
+                name: "Polling Buyer",
+                phone: "+8801711111111",
+                address1: "House 1",
+                city: "Dhaka",
+              },
+              line_items: [{ id: 1, title: "Shirt", quantity: 1, price: "1250" }],
+              payment_gateway_names: ["Cash on Delivery"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const first = await syncOneIntegration(integration._id as Types.ObjectId, {
+        enqueueProcessor: false,
+      });
+      expect(first).toEqual({ enqueued: 1, duplicates: 0, failed: 0 });
+
+      const inbox = await WebhookInbox.findOne({
+        merchantId: m._id,
+        provider: "shopify",
+        externalId: "91001",
+      }).lean();
+      expect(inbox?.status).toBe("received");
+      expect(inbox?.topic).toBe("orders/create");
+
+      const replay = await replayWebhookInbox({ inboxId: inbox!._id as Types.ObjectId });
+      expect(replay.status).toBe("succeeded");
+      expect(replay.orderId).toBeTruthy();
+
+      const second = await syncOneIntegration(integration._id as Types.ObjectId, {
+        enqueueProcessor: false,
+      });
+      expect(second).toEqual({ enqueued: 0, duplicates: 1, failed: 0 });
+      expect(await Order.countDocuments({ merchantId: m._id })).toBe(1);
+      expect(await WebhookInbox.countDocuments({ merchantId: m._id, externalId: "91001" })).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("order-sync polling pushes WooCommerce raw deliveries through the webhook inbox path", async () => {
+    const m = await createMerchant();
+    const integration = await Integration.create({
+      merchantId: m._id,
+      provider: "woocommerce",
+      accountKey: "https://woo.example.com",
+      status: "connected",
+      credentials: {
+        consumerKey: encryptSecret("ck"),
+        consumerSecret: encryptSecret("cs"),
+        siteUrl: "https://woo.example.com",
+      },
+      webhookSecret: encryptSecret("ws"),
+      lastSyncedAt: new Date("2026-05-01T00:00:00.000Z"),
+    });
+
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      expect(parsed.pathname).toContain("/wp-json/wc/v3/orders");
+      expect(parsed.searchParams.get("after")).toBeTruthy();
+      return new Response(
+        JSON.stringify([
+          {
+            id: 81001,
+            number: "81001",
+            total: "900",
+            date_created: "2026-05-03T09:30:00.000Z",
+            payment_method: "cod",
+            billing: {
+              first_name: "Woo",
+              last_name: "Buyer",
+              phone: "+8801811111111",
+              email: "woo@example.com",
+              address_1: "Road 2",
+              city: "Dhaka",
+            },
+            shipping: {
+              first_name: "Woo",
+              last_name: "Buyer",
+              phone: "+8801811111111",
+              address_1: "Road 2",
+              city: "Dhaka",
+            },
+            line_items: [{ id: 1, name: "Panjabi", quantity: 1, total: "900" }],
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      const first = await syncOneIntegration(integration._id as Types.ObjectId, {
+        enqueueProcessor: false,
+      });
+      expect(first).toEqual({ enqueued: 1, duplicates: 0, failed: 0 });
+
+      const inbox = await WebhookInbox.findOne({
+        merchantId: m._id,
+        provider: "woocommerce",
+        externalId: "81001",
+      }).lean();
+      expect(inbox?.status).toBe("received");
+      expect(inbox?.topic).toBe("order.created");
+
+      const replay = await replayWebhookInbox({ inboxId: inbox!._id as Types.ObjectId });
+      expect(replay.status).toBe("succeeded");
+      expect(replay.orderId).toBeTruthy();
+
+      const second = await syncOneIntegration(integration._id as Types.ObjectId, {
+        enqueueProcessor: false,
+      });
+      expect(second).toEqual({ enqueued: 0, duplicates: 1, failed: 0 });
+      expect(await Order.countDocuments({ merchantId: m._id })).toBe(1);
+      expect(await WebhookInbox.countDocuments({ merchantId: m._id, externalId: "81001" })).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("retry worker dead-letters and alerts when attempts cap is reached", async () => {

@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       "@ecom/db": resolve(here, "../../packages/db/src/index.ts"),
       "@ecom/types": resolve(here, "../../packages/types/src/index.ts"),
+      "@ecom/branding": resolve(here, "../../packages/branding/src/index.ts"),
     },
   },
   test: {

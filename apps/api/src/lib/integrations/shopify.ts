@@ -212,22 +212,41 @@ export const shopifyAdapter: IntegrationAdapter = {
     }
   },
 
-  async fetchSampleOrders(creds, limit = 5): Promise<FetchSampleResult> {
+  async fetchSampleOrders(creds, limit = 5, since?: Date): Promise<FetchSampleResult> {
     try {
+      const params = new URLSearchParams({
+        status: "any",
+        limit: String(Math.min(50, Math.max(1, limit))),
+        order: "created_at asc",
+      });
+      if (since) params.set("created_at_min", since.toISOString());
       const data = await callShopify<{ orders: ShopifyOrderPayload[] }>(
         creds,
-        `/orders.json?status=any&limit=${Math.min(50, Math.max(1, limit))}`,
+        `/orders.json?${params.toString()}`,
       );
       // For the merchant-preview "Test connection" UI we drop both
       // ignored topics (null) and skip envelopes (missing required fields).
       // The webhook path uses the same normalizer but routes skips to
       // `needs_attention` instead of dropping them.
-      const sample = (data.orders ?? [])
+      const orders = data.orders ?? [];
+      const sample = orders
         .map((o) => normalizeShopifyOrder(o))
         .filter((o): o is NormalizedOrder =>
           o !== null && !isNormalizationSkip(o),
         );
-      return { ok: true, count: sample.length, sample };
+      return {
+        ok: true,
+        count: sample.length,
+        sample,
+        rawDeliveries: orders
+          .filter((o) => o?.id)
+          .map((o) => ({
+            topic: "orders/create",
+            externalId: String(o.id),
+            payload: o,
+            placedAt: o.created_at ? new Date(o.created_at) : undefined,
+          })),
+      };
     } catch (err) {
       return { ok: false, count: 0, sample: [], error: (err as Error).message };
     }

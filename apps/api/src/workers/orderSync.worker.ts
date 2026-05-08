@@ -187,6 +187,27 @@ export async function syncOneIntegration(
   }
 
   const deliveries: any[] = fetched.rawDeliveries ?? [];
+  if (deliveries.length === 0 && (fetched.sample?.length ?? 0) > 0) {
+    const errMsg =
+      "adapter contract mismatch: fetchSampleOrders returned sample rows without rawDeliveries";
+    console.error(
+      JSON.stringify({
+        evt: "order_sync.contract_mismatch",
+        integrationId: String(integrationId),
+        provider: integration.provider,
+        merchantId: String(integration.merchantId),
+        sampleCount: fetched.sample.length,
+      }),
+    );
+    await Integration.updateOne(
+      { _id: integration._id },
+      {
+        $inc: { errorCount: 1 },
+        $set: { lastSyncStatus: "error", lastError: errMsg },
+      },
+    ).catch(() => {});
+    return { enqueued: 0, duplicates: 0, failed: 1 };
+  }
   if (deliveries.length === 0) {
     // Nothing new — keep `lastSyncedAt` exactly where it is so the next
     // tick's `?after=` window stays anchored on the most recent ingest.

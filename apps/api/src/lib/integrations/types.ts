@@ -104,6 +104,19 @@ export interface FetchSampleResult {
   ok: boolean;
   count: number;
   sample: NormalizedOrder[];
+  /**
+   * Raw upstream order deliveries for the polling fallback worker.
+   *
+   * `sample` is intentionally normalized for preview/import UI. The polling
+   * recovery path must feed the same payload shape as real webhooks back
+   * through WebhookInbox so replay/idempotency semantics stay identical.
+   */
+  rawDeliveries?: Array<{
+    topic: string;
+    externalId: string;
+    payload: unknown;
+    placedAt?: Date;
+  }>;
   error?: string;
 }
 
@@ -125,7 +138,11 @@ export interface IntegrationCredentials {
 
 export interface IntegrationAdapter {
   testConnection(creds: IntegrationCredentials): Promise<ConnectionTestResult>;
-  fetchSampleOrders(creds: IntegrationCredentials, limit?: number): Promise<FetchSampleResult>;
+  fetchSampleOrders(
+    creds: IntegrationCredentials,
+    limit?: number,
+    since?: Date,
+  ): Promise<FetchSampleResult>;
   /**
    * Convert an upstream webhook payload into a normalized order.
    *

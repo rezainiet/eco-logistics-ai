@@ -294,22 +294,42 @@ export const wooAdapter: IntegrationAdapter = {
     }
   },
 
-  async fetchSampleOrders(creds, limit = 5): Promise<FetchSampleResult> {
+  async fetchSampleOrders(creds, limit = 5, since?: Date): Promise<FetchSampleResult> {
     try {
+      const params = new URLSearchParams({
+        per_page: String(Math.min(50, Math.max(1, limit))),
+        orderby: "date",
+        order: "asc",
+        status: "any",
+      });
+      if (since) params.set("after", since.toISOString());
       const orders = await callWoo<WooOrderPayload[]>(
         creds,
-        `/orders?per_page=${Math.min(50, Math.max(1, limit))}`,
+        `/orders?${params.toString()}`,
       );
       // Sample preview: drop null (irrelevant topics) AND skip envelopes
       // (orders that need merchant attention). The webhook path will
       // surface the skip envelopes via the inbox; here we just want a
       // clean preview of orders that would actually ingest cleanly.
-      const sample = (orders ?? [])
+      const rawOrders = orders ?? [];
+      const sample = rawOrders
         .map((o) => normalizeWooOrder(o))
         .filter((o): o is NormalizedOrder =>
           o !== null && !isNormalizationSkip(o),
         );
-      return { ok: true, count: sample.length, sample };
+      return {
+        ok: true,
+        count: sample.length,
+        sample,
+        rawDeliveries: rawOrders
+          .filter((o) => o?.id)
+          .map((o) => ({
+            topic: "order.created",
+            externalId: String(o.id),
+            payload: o,
+            placedAt: o.date_created ? new Date(o.date_created) : undefined,
+          })),
+      };
     } catch (err) {
       return { ok: false, count: 0, sample: [], error: (err as Error).message };
     }

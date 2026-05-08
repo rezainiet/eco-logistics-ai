@@ -101,6 +101,12 @@ const integrationSchema = new Schema(
     connectedAt: { type: Date },
     disconnectedAt: { type: Date },
     lastSyncAt: { type: Date },
+    /**
+     * Polling fallback cursor. Distinct from `lastSyncAt`:
+     * `lastSyncAt` is the merchant-visible sync stamp; `lastSyncedAt`
+     * is the upstream placed-at watermark used by orderSync.worker.
+     */
+    lastSyncedAt: { type: Date },
     // Observability snapshot — surfaced on the dashboard's Connections
     // panel + Health card. Maintained by the test/sync paths so a
     // merchant sees "Healthy / Sync issue / Idle" without round-tripping
