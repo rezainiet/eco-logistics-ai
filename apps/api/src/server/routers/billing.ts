@@ -12,6 +12,7 @@ import {
   scorePaymentRisk,
 } from "../../lib/manual-payments.js";
 import { writeAudit } from "../../lib/audit.js";
+import { loadBrandingFromStore } from "../../lib/branding-store.js";
 import { computeTrialState, daysLeftUntil } from "../../lib/billing.js";
 import { previewIntegrationCapacityChange } from "../../lib/entitlements.js";
 import {
@@ -272,7 +273,11 @@ export const billingRouter = router({
           plan: {
             amountSmallestUnit,
             currency,
-            productName: `Logistics ${plan.name} plan`,
+            // Product name reads from the centralized SaaS branding so a
+            // rebrand (or future white-label) only touches one place.
+            // Receipts + Customer Portal + bank-statement descriptors
+            // pick up the new prefix on every new checkout.
+            productName: `${(await loadBrandingFromStore()).operational.stripeProductPrefix} ${plan.name} plan`,
           },
           metadata: {
             merchantId: String(merchantId),
@@ -875,6 +880,7 @@ export const billingRouter = router({
     const merchantId = merchantObjectId(ctx);
     const merchant = await Merchant.findById(merchantId).select("subscription");
     if (!merchant) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
+
 
     const sub = merchant.subscription ?? {};
     (sub as Record<string, unknown>).status = "cancelled";

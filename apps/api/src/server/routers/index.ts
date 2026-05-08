@@ -15,6 +15,11 @@ import { notificationsRouter } from "./notifications.js";
 import { integrationsRouter } from "./integrations.js";
 import { trackingRouter } from "./tracking.js";
 import { recoveryRouter } from "./recovery.js";
+import { feedbackRouter } from "./feedback.js";
+import {
+  adminBrandingRouter,
+  publicBrandingRouter,
+} from "./adminBranding.js";
 
 export const appRouter = router({
   health: publicProcedure.query(() => ({ ok: true, ts: Date.now() })),
@@ -35,6 +40,11 @@ export const appRouter = router({
   integrations: integrationsRouter,
   tracking: trackingRouter,
   recovery: recoveryRouter,
+  feedback: feedbackRouter,
+  // Centralized SaaS branding. `branding` is public (SSR reads it from
+  // every layout); `adminBranding` is super_admin only.
+  branding: publicBrandingRouter,
+  adminBranding: adminBrandingRouter,
 });
 
 export type AppRouter = typeof appRouter;

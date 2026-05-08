@@ -242,6 +242,30 @@ authRouter.post("/signup", signupLimiter, async (req, res) => {
     console.error("[auth] verify email send failed", (err as Error).message),
   );
 
+  // Funnel-event audit. Lets ops answer "how many signups landed today?"
+  // by scanning AuditLog rather than diff-counting Merchant docs (which
+  // also includes seed/admin-created accounts). `subjectType:"merchant"`
+  // + `action:"auth.signup"` is the canonical signal for the activation
+  // funnel measurement (signup → integration.connected → first_event).
+  void writeAudit({
+    merchantId: merchant._id as import("mongoose").Types.ObjectId,
+    actorId: merchant._id as import("mongoose").Types.ObjectId,
+    actorEmail: merchant.email,
+    actorType: "merchant",
+    action: "auth.signup",
+    subjectType: "merchant",
+    subjectId: merchant._id as import("mongoose").Types.ObjectId,
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+    meta: {
+      country: merchant.country,
+      language: merchant.language,
+      hasPhone: Boolean(phone),
+      tier: "starter",
+      trialEndsAt,
+    },
+  });
+
   const { accessToken, csrfToken } = await setAuthCookies(req, res, merchant);
   res.json({
     id: String(merchant._id),

@@ -120,6 +120,47 @@ describe("webhook idempotency durability", () => {
     expect(orderCount).toBe(1);
   });
 
+  it("dead-lettered rows are preserved indefinitely — neither row nor payload is reaped", async () => {
+    // Operational trust pin: a dead-lettered row is the canonical
+    // forensic artefact for an unrecoverable webhook. If the reaper
+    // ever clears its payload (or someone slips a row-deletion TTL
+    // back in), ops loses the only debug surface for "why did this
+    // event never produce an order?" Treat dead-lettered as
+    // sacrosanct — both the dedup keys AND the payload stay forever.
+    const m = await createMerchant();
+    const caller = callerFor(authUserFor(m));
+    const integration = await caller.integrations.connect({ provider: "custom_api" });
+    const integrationId = new Types.ObjectId(integration.id);
+
+    const dead = await WebhookInbox.create({
+      merchantId: m._id,
+      integrationId,
+      provider: "custom_api",
+      topic: "order.created",
+      externalId: "ext-dead-1",
+      payload: { externalId: "ext-dead-1", important: "forensic" },
+      payloadBytes: 220,
+      status: "failed",
+      attempts: 5,
+      deadLetteredAt: new Date(Date.now() - 200 * SECONDS_PER_DAY * 1000),
+      // payloadReapAt 100 days in the past — well past the 90-day
+      // window. The reaper still must NOT touch this row because its
+      // status is "failed", not "succeeded".
+      payloadReapAt: new Date(Date.now() - 100 * SECONDS_PER_DAY * 1000),
+    });
+
+    const reaped = await reapWebhookPayloads();
+    expect(reaped).toBe(0);
+
+    const after = await WebhookInbox.findById(dead._id).lean();
+    expect(after).toBeTruthy();
+    expect(after?.payload).toBeTruthy();
+    expect(after?.payloadBytes).toBe(220);
+    expect(after?.payloadReaped).toBe(false);
+    expect(after?.deadLetteredAt).toBeTruthy();
+    expect(after?.status).toBe("failed");
+  });
+
   it("payload reap leaves non-succeeded rows alone (failed rows still need their payload to retry)", async () => {
     const m = await createMerchant();
     const caller = callerFor(authUserFor(m));

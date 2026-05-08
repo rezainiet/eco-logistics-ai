@@ -5,6 +5,25 @@ import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 import { cached } from "../../lib/cache.js";
 import { getPlan, type AnalyticsLevel } from "../../lib/plans.js";
 
+/* -------------------------------------------------------------------------- *
+ * RTO Intelligence v1 — every handler + schema + helper lives in
+ * `apps/api/src/server/services/intelligence/`. The router below stays
+ * declarative: each procedure pins a schema and a handler that the
+ * service layer owns. New intelligence cards land in that directory and
+ * register here as one-line additions.
+ * -------------------------------------------------------------------------- */
+import {
+  intelligenceDaysInput,
+  intelligenceTopThanasInput,
+} from "../services/intelligence/intelligenceSchemas.js";
+import {
+  addressQualityDistributionHandler,
+  campaignSourceOutcomesHandler,
+  intentDistributionHandler,
+  repeatVisitorOutcomesHandler,
+  topThanasHandler,
+} from "../services/intelligence/intelligenceHandlers.js";
+
 const DASHBOARD_TTL = 120;
 const NINETY_DAYS_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -297,4 +316,53 @@ export const analyticsRouter = router({
       byCourier: byCourier.map((c) => ({ courier: c._id ?? "unknown", count: c.count })),
     };
   }),
+
+  /* ======================================================================
+   * RTO Intelligence Dashboard v1 — observation + analytics layer.
+   *
+   * Five aggregation procedures that read from the additive subdocs landed
+   * in Milestone 1 (Order.intent, Order.address.quality, customer.thana)
+   * and the existing TrackingSession resolved-order linkage.
+   *
+   * SAFETY CONTRACT for every procedure below:
+   *   - Read-only. No writes to any collection.
+   *   - Merchant-scoped. Every $match starts with `merchantId` so a
+   *     merchant cannot enumerate cross-tenant data.
+   *   - Bounded windows. Every query carries `createdAt: { $gte: cutoff }`
+   *     so even a misconfigured caller cannot collection-scan.
+   *   - Index-aware. Each procedure documents the partial-filter index it
+   *     was designed against (added in Milestone 1's schema migration).
+   *   - Plan-gate-free in v1. All five are protectedProcedure — observation
+   *     is universally available; deep correlations can be entitlement-
+   *     gated later if needed.
+   *   - Resolved-vs-inflight split. Rates are computed over RESOLVED orders
+   *     (delivered + rto + cancelled) only. In-flight orders are counted
+   *     but excluded from rate denominators — pending RTOs would inflate
+   *     deliveredRate artificially.
+   *
+   * Helpers (`emptyBucket`, `addToBucket`, `finaliseBucket`,
+   * `cutoffFromDays`, `fetchOrdersAndSessions`, `categoriseCampaign`) are
+   * defined ABOVE the router declaration in this file — see the top of
+   * `analyticsRouter`.
+   * ====================================================================== */
+  intentDistribution: protectedProcedure
+    .input(intelligenceDaysInput)
+    .query(intentDistributionHandler),
+
+  addressQualityDistribution: protectedProcedure
+    .input(intelligenceDaysInput)
+    .query(addressQualityDistributionHandler),
+
+  topThanas: protectedProcedure
+    .input(intelligenceTopThanasInput)
+    .query(topThanasHandler),
+
+  campaignSourceOutcomes: protectedProcedure
+    .input(intelligenceDaysInput)
+    .query(campaignSourceOutcomesHandler),
+
+  repeatVisitorOutcomes: protectedProcedure
+    .input(intelligenceDaysInput)
+    .query(repeatVisitorOutcomesHandler),
 });
+

@@ -106,6 +106,20 @@ async function main() {
   await connectDb();
   await assertRedisOrExit();
 
+  // Seed the singleton SaaS branding row so the admin Branding Panel has
+  // something to update without racing the first writer. Idempotent —
+  // re-running is a no-op if the row already exists. Failure here is
+  // non-fatal: the resolver falls back to defaults if the row is missing.
+  try {
+    const { seedBranding } = await import("./scripts/seedBranding.js");
+    const r = await seedBranding();
+    if (r.created) console.log("[boot] branding singleton seeded");
+  } catch (err) {
+    console.warn(
+      `[boot] branding seed failed (non-fatal): ${(err as Error).message}`,
+    );
+  }
+
   // Fire-and-forget index sync. autoIndex is OFF in production (lib/db.ts)
   // so a fresh Atlas DB starts with no model indexes — including the
   // partial-unique on (merchantId, source.externalId) the ingest race fix
@@ -359,4 +373,3 @@ main().catch((err) => {
   console.error("[api] fatal", err);
   process.exit(1);
 });
-

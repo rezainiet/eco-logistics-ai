@@ -7,6 +7,7 @@ import {
   getPriceIdForPlan,
   listPricesForProduct,
 } from "../lib/stripe.js";
+import { loadBrandingFromStore } from "../lib/branding-store.js";
 
 /**
  * Bootstrap script — provisions one Stripe Product per plan tier and a
@@ -79,10 +80,16 @@ async function seedTier(
     productReused = true;
     console.log(`[seed] tier=${tier} product reused id=${productId}`);
   } else {
+    // Prefix from centralized branding so the Stripe Product name + every
+    // future receipt match the SaaS identity. Re-runs are idempotent: an
+    // already-provisioned tier hits the `found` branch above and the name
+    // is left as-is. To rename existing products, run the dedicated
+    // migration script (see BRANDING_ARCHITECTURE.md § 4.5).
+    const branding = await loadBrandingFromStore();
     const created = await createProduct({
-      name: `Logistics ${plan.name}`,
+      name: `${branding.operational.stripeProductPrefix} ${plan.name}`,
       description: plan.tagline,
-      metadata: { tier, source: "ecom-logistics-seed" },
+      metadata: { tier, source: "ecom-branding-seed" },
     });
     productId = created.id;
     console.log(`[seed] tier=${tier} product created id=${productId}`);

@@ -155,6 +155,35 @@ const schema = z
     // --- Telemetry (Sentry-compatible) ---
     SENTRY_DSN: z.string().optional(),
     SENTRY_RELEASE: z.string().optional(),
+    // --- RTO Engine v1 — observation-only kill switches ---
+    /**
+     * Master flag for the Address Intelligence v1 stamp + the thana
+     * extractor. When "0", `ingestNormalizedOrder` skips both
+     * `computeAddressQuality` and `extractThana` — neither is written to
+     * the Order. Existing values on already-stamped orders remain visible
+     * (we only stop minting new ones).
+     *
+     * Default ON (additive, observation-only, never affects fraud /
+     * automation / tracking decisions). Toggle to "0" for instant rollback
+     * of stamping without redeploy.
+     */
+    ADDRESS_QUALITY_ENABLED: z
+      .enum(["0", "1"])
+      .default("1")
+      .transform((v) => v === "1"),
+    /**
+     * Master flag for the Intent Intelligence v1 fire-and-forget
+     * post-identity-resolution write. When "0", `scoreIntentForOrder` is
+     * not invoked. Read-side surfaces (merchant UI) keep showing whatever
+     * was previously stamped.
+     *
+     * Default ON. v1 is observation-only; flag exists for ops kill-switch
+     * parity with `ADDRESS_QUALITY_ENABLED`.
+     */
+    INTENT_SCORING_ENABLED: z
+      .enum(["0", "1"])
+      .default("1")
+      .transform((v) => v === "1"),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",

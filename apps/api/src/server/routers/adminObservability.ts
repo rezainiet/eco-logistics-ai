@@ -1,8 +1,16 @@
 import { z } from "zod";
+import { Types } from "mongoose";
 import {
   AuditLog,
+  FEEDBACK_KINDS,
+  FEEDBACK_STATUSES,
+  Integration,
+  Merchant,
+  MerchantFeedback,
+  Notification,
   Order,
   Payment,
+  PendingJob,
   WebhookInbox,
 } from "@ecom/db";
 import { adminProcedure, router } from "../trpc.js";
@@ -72,22 +80,46 @@ export const adminObservabilityRouter = router({
     const since24h = new Date(Date.now() - DAY_MS);
     const since1h = new Date(Date.now() - HOUR_MS);
 
-    const [queues, webhookFailures, webhookSucceededLast24h, webhookFailures1h] =
-      await Promise.all([
-        readQueueSnapshot(),
-        WebhookInbox.countDocuments({
-          status: "failed",
-          updatedAt: { $gte: since24h },
-        }).catch(() => 0),
-        WebhookInbox.countDocuments({
-          status: "succeeded",
-          updatedAt: { $gte: since24h },
-        }).catch(() => 0),
-        WebhookInbox.countDocuments({
-          status: "failed",
-          updatedAt: { $gte: since1h },
-        }).catch(() => 0),
-      ]);
+    const [
+      queues,
+      webhookFailures,
+      webhookSucceededLast24h,
+      webhookFailures1h,
+      payloadReapPending,
+      deadLetteredCount,
+    ] = await Promise.all([
+      readQueueSnapshot(),
+      WebhookInbox.countDocuments({
+        status: "failed",
+        updatedAt: { $gte: since24h },
+      }).catch(() => 0),
+      WebhookInbox.countDocuments({
+        status: "succeeded",
+        updatedAt: { $gte: since24h },
+      }).catch(() => 0),
+      WebhookInbox.countDocuments({
+        status: "failed",
+        updatedAt: { $gte: since1h },
+      }).catch(() => 0),
+      // Payload-reap backlog: succeeded rows whose `payloadReapAt`
+      // has passed but whose payloads haven't been NULLed yet. A
+      // growing number here means the webhook-retry sweep isn't
+      // keeping up with reap demand — early signal of storage growth
+      // before it becomes a Mongo bill spike.
+      WebhookInbox.countDocuments({
+        status: "succeeded",
+        payloadReaped: false,
+        payloadReapAt: { $lte: new Date() },
+      }).catch(() => 0),
+      // Dead-lettered rows are preserved indefinitely (forensic
+      // artefacts). Surface the running total so a sudden jump is
+      // visible to ops — usually signals a platform-wide upstream
+      // issue, not noise.
+      WebhookInbox.countDocuments({
+        status: "failed",
+        deadLetteredAt: { $exists: true, $ne: null },
+      }).catch(() => 0),
+    ]);
 
     const totalQueueBacklog = queues.reduce(
       (acc, q) => acc + q.waiting + q.delayed,
@@ -106,6 +138,11 @@ export const adminObservabilityRouter = router({
         failedLast24h: webhookFailures,
         failedLast1h: webhookFailures1h,
         succeededLast24h: webhookSucceededLast24h,
+        // Retention-system observability — answers "is the reaper
+        // keeping up?" and "how many dead-lettered rows are we
+        // preserving?" without needing a separate ad-hoc query.
+        payloadReapPending,
+        deadLetteredTotal: deadLetteredCount,
       },
       generatedAt: new Date(),
     };
@@ -238,4 +275,271 @@ export const adminObservabilityRouter = router({
       generatedAt: new Date(),
     };
   }),
+
+  /**
+   * Per-merchant support snapshot — read-only diagnostic view for ops
+   * investigating a specific merchant ticket. Aggregates the existing
+   * Order / Integration / Notification / PendingJob / AuditLog tables
+   * into one round-trip so the support dashboard doesn't N+1.
+   *
+   * Read-only. No writes. Admin-scoped via `adminProcedure`.
+   *
+   * Each section degrades independently — a single failing collection
+   * read doesn't break the whole snapshot. Counts return 0 + the section
+   * surfaces an `error` field. The classic "rescue ticket from a slow
+   * Mongo replica" workflow stays usable.
+   */
+  merchantSupportSnapshot: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().refine(
+          (v) => Types.ObjectId.isValid(v),
+          "invalid merchant id",
+        ),
+      }),
+    )
+    .query(async ({ input }) => {
+      const merchantId = new Types.ObjectId(input.merchantId);
+      const since7d = new Date(Date.now() - 7 * DAY_MS);
+      const since24h = new Date(Date.now() - DAY_MS);
+
+      const [
+        merchant,
+        integrations,
+        ordersByStatus7d,
+        recentInbox,
+        recentInboxFailed,
+        unresolvedNotifications,
+        pendingJobs,
+        recentAudit,
+      ] = await Promise.all([
+        Merchant.findById(merchantId)
+          .select(
+            "_id email businessName country language role subscription createdAt",
+          )
+          .lean()
+          .catch(() => null),
+        Integration.find({ merchantId })
+          .select(
+            "provider accountKey status connectedAt disconnectedAt pausedAt lastSyncAt lastSyncStatus lastError errorCount degraded webhookStatus health counts",
+          )
+          .lean()
+          .catch(() => []),
+        Order.aggregate<{ _id: string; count: number }>([
+          { $match: { merchantId, createdAt: { $gte: since7d } } },
+          { $group: { _id: "$order.status", count: { $sum: 1 } } },
+        ]).catch(() => []),
+        WebhookInbox.find({ merchantId })
+          .sort({ createdAt: -1 })
+          .limit(10)
+          .select("provider topic externalId status attempts lastError createdAt processedAt")
+          .lean()
+          .catch(() => []),
+        WebhookInbox.countDocuments({
+          merchantId,
+          status: "failed",
+          updatedAt: { $gte: since24h },
+        }).catch(() => 0),
+        Notification.countDocuments({
+          merchantId,
+          readAt: null,
+          severity: { $in: ["warning", "critical"] },
+        }).catch(() => 0),
+        PendingJob.countDocuments({
+          "ctx.merchantId": String(merchantId),
+          status: "pending",
+        }).catch(() => 0),
+        AuditLog.find({ merchantId })
+          .sort({ at: -1 })
+          .limit(15)
+          .select("action subjectType subjectId at actorType meta")
+          .lean()
+          .catch(() => []),
+      ]);
+
+      if (!merchant) {
+        return {
+          ok: false as const,
+          error: "merchant_not_found" as const,
+          merchantId: input.merchantId,
+        };
+      }
+
+      // Compute the most recent ingestion activity across the merchant's
+      // integrations — useful single number for support: "last time we
+      // saw an order from this merchant" answers most "is anything
+      // working?" tickets in one glance.
+      let lastIngestionAt: Date | null = null;
+      for (const i of integrations) {
+        const stamp = i.lastImportAt ?? i.webhookStatus?.lastEventAt ?? null;
+        if (stamp && (!lastIngestionAt || stamp > lastIngestionAt)) {
+          lastIngestionAt = stamp;
+        }
+      }
+
+      const ordersFlat: Record<string, number> = {};
+      for (const r of ordersByStatus7d) ordersFlat[r._id ?? "unknown"] = r.count;
+      const totalOrders7d = Object.values(ordersFlat).reduce(
+        (a, b) => a + b,
+        0,
+      );
+
+      return {
+        ok: true as const,
+        merchantId: input.merchantId,
+        merchant: {
+          email: merchant.email,
+          businessName: merchant.businessName,
+          country: merchant.country,
+          language: merchant.language,
+          role: merchant.role,
+          subscription: {
+            tier: merchant.subscription?.tier ?? null,
+            status: merchant.subscription?.status ?? null,
+            trialEndsAt: merchant.subscription?.trialEndsAt ?? null,
+            currentPeriodEnd: merchant.subscription?.currentPeriodEnd ?? null,
+          },
+          createdAt: merchant.createdAt,
+        },
+        // Operational summary — what support agent sees first.
+        operational: {
+          lastIngestionAt,
+          unresolvedNotifications,
+          pendingJobs,
+          webhookFailures24h: recentInboxFailed,
+          totalOrders7d,
+        },
+        ordersByStatus7d: ordersFlat,
+        integrations: integrations.map((i) => ({
+          id: String(i._id),
+          provider: i.provider,
+          accountKey: i.accountKey,
+          status: i.status,
+          connectedAt: i.connectedAt ?? null,
+          disconnectedAt: i.disconnectedAt ?? null,
+          pausedAt: i.pausedAt ?? null,
+          lastSyncAt: i.lastSyncAt ?? null,
+          lastSyncStatus: i.lastSyncStatus ?? null,
+          lastError: i.lastError ?? null,
+          errorCount: i.errorCount ?? 0,
+          degraded: i.degraded ?? false,
+          webhookStatus: {
+            registered: i.webhookStatus?.registered ?? false,
+            lastEventAt: i.webhookStatus?.lastEventAt ?? null,
+            failures: i.webhookStatus?.failures ?? 0,
+            lastError: i.webhookStatus?.lastError ?? null,
+          },
+          health: {
+            ok: i.health?.ok ?? null,
+            lastError: i.health?.lastError ?? null,
+            lastCheckedAt: i.health?.lastCheckedAt ?? null,
+          },
+          counts: {
+            ordersImported: i.counts?.ordersImported ?? 0,
+            ordersFailed: i.counts?.ordersFailed ?? 0,
+          },
+        })),
+        recentInbox: recentInbox.map((row) => ({
+          id: String(row._id),
+          provider: row.provider,
+          topic: row.topic,
+          externalId: row.externalId,
+          status: row.status,
+          attempts: row.attempts ?? 0,
+          lastError: row.lastError ?? null,
+          createdAt: row.createdAt,
+          processedAt: row.processedAt ?? null,
+        })),
+        recentAudit: recentAudit.map((a) => ({
+          action: a.action,
+          subjectType: a.subjectType,
+          subjectId: a.subjectId ? String(a.subjectId) : null,
+          at: a.at,
+          actorType: a.actorType ?? null,
+          meta: a.meta ?? null,
+        })),
+        generatedAt: new Date(),
+      };
+    }),
+
+  /**
+   * List recent merchant-feedback rows for ops triage. Filterable by
+   * kind / status. Sorted newest-first; capped at 200 per call.
+   *
+   * Read-only. Admin-scoped. The merchant-side `feedback.submit`
+   * mutation is the only way new rows appear.
+   */
+  recentFeedback: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(200).default(50),
+          kind: z.enum(FEEDBACK_KINDS).optional(),
+          status: z.enum(FEEDBACK_STATUSES).optional(),
+        })
+        .default({ limit: 50 }),
+    )
+    .query(async ({ input }) => {
+      const filter: Record<string, unknown> = {};
+      if (input.kind) filter.kind = input.kind;
+      if (input.status) filter.status = input.status;
+      const rows = await MerchantFeedback.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(input.limit)
+        .lean();
+      return rows.map((r) => ({
+        id: String(r._id),
+        merchantId: r.merchantId ? String(r.merchantId) : null,
+        actorEmail: r.actorEmail ?? null,
+        kind: r.kind,
+        severity: r.severity,
+        message: r.message,
+        pagePath: r.pagePath ?? null,
+        userAgent: r.userAgent ?? null,
+        status: r.status,
+        internalNotes: r.internalNotes ?? null,
+        triagedAt: r.triagedAt ?? null,
+        triagedBy: r.triagedBy ? String(r.triagedBy) : null,
+        resolvedAt: r.resolvedAt ?? null,
+        createdAt: r.createdAt,
+      }));
+    }),
+
+  /**
+   * Update a feedback row's status / internalNotes from the admin UI.
+   *
+   * Permitted transitions: any → triaged | resolved | dismissed. We do
+   * not allow reverting back to `new` — the `new` state means "nobody
+   * looked at it yet" and once triaged that fact is preserved.
+   *
+   * Audit-only stamp on the row itself (`triagedAt`, `triagedBy`); the
+   * append-only `AuditLog` chain is reserved for risk/billing/admin-RBAC
+   * actions and feedback triage doesn't rise to that level.
+   */
+  triageFeedback: adminProcedure
+    .input(
+      z.object({
+        id: z.string().refine((v) => Types.ObjectId.isValid(v), "invalid id"),
+        status: z.enum(["triaged", "resolved", "dismissed"]),
+        internalNotes: z.string().trim().max(2000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const update: Record<string, unknown> = {
+        status: input.status,
+        triagedAt: new Date(),
+        triagedBy: new Types.ObjectId(ctx.user.id),
+      };
+      if (input.internalNotes !== undefined) {
+        update.internalNotes = input.internalNotes;
+      }
+      if (input.status === "resolved") {
+        update.resolvedAt = new Date();
+      }
+      const r = await MerchantFeedback.updateOne(
+        { _id: new Types.ObjectId(input.id) },
+        { $set: update },
+      );
+      return { ok: r.matchedCount > 0 };
+    }),
 });

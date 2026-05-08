@@ -58,6 +58,7 @@ import {
 import { getMerchantValueRollup } from "../../lib/merchantValueRollup.js";
 import { FraudPrediction } from "@ecom/db";
 import { writeAudit } from "../../lib/audit.js";
+import { classifyOperationalHint } from "../../lib/operational-hints.js";
 import {
   buildFraudRejectSnapshot,
   buildPreActionSnapshot,
@@ -1625,6 +1626,38 @@ export const ordersRouter = router({
       );
       const latest = events.length > 0 ? events[events.length - 1] : null;
 
+      // Operational hint — pure function over existing fields. Always
+      // safe to call: returns null when the order looks healthy. Never
+      // mutates state and never feeds risk decisions.
+      //
+      // `.lean()` surfaces some optional sub-fields as `null`; the
+      // classifier expects `undefined`. We coerce here so the contract
+      // stays explicit on both sides.
+      const operationalHint = classifyOperationalHint({
+        status: order.order.status,
+        addressCompleteness:
+          (order.address?.quality?.completeness ?? undefined) as
+            | "complete"
+            | "partial"
+            | "incomplete"
+            | undefined,
+        fraudReviewStatus: order.fraud?.reviewStatus ?? undefined,
+        automationState: order.automation?.state ?? undefined,
+        confirmationDeliveryStatus:
+          order.automation?.confirmationDeliveryStatus ?? undefined,
+        confirmationSentAt: order.automation?.confirmationSentAt ?? undefined,
+        shippedAt: order.logistics?.shippedAt ?? undefined,
+        lastTrackingActivityAt:
+          order.logistics?.lastWebhookAt ??
+          order.logistics?.lastPolledAt ??
+          null,
+        trackingEvents: events.map((e) => ({
+          at: new Date(e.at),
+          normalizedStatus: e.normalizedStatus,
+          description: e.description,
+        })),
+      });
+
       return {
         id: String(order._id),
         orderNumber: order.orderNumber,
@@ -1651,6 +1684,35 @@ export const ordersRouter = router({
           location: e.location ?? null,
         })),
         riskScore: order.fraud?.riskScore ?? 0,
+        // RTO Engine v1 — observation-only surfaces. Either field is null
+        // when stamping was disabled at the time of ingest (kill-switch
+        // off) or when the order pre-dates the engine. Consumers must
+        // null-check.
+        intent: order.intent
+          ? {
+              score: order.intent.score,
+              tier: order.intent.tier,
+              signals: order.intent.signals,
+              sessionsConsidered: order.intent.sessionsConsidered ?? 0,
+              computedAt: order.intent.computedAt,
+            }
+          : null,
+        addressQuality: order.address?.quality
+          ? {
+              score: order.address.quality.score,
+              completeness: order.address.quality.completeness,
+              landmarks: order.address.quality.landmarks ?? [],
+              hasNumber: order.address.quality.hasNumber,
+              tokenCount: order.address.quality.tokenCount,
+              scriptMix: order.address.quality.scriptMix,
+              missingHints: order.address.quality.missingHints ?? [],
+              computedAt: order.address.quality.computedAt,
+            }
+          : null,
+        thana: order.customer?.thana ?? null,
+        // Operational-hint label — null when the order looks healthy.
+        // Visibility-only; the merchant decides what to do.
+        operationalHint,
         createdAt: order.createdAt,
       };
     }),

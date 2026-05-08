@@ -8,6 +8,7 @@ import {
 } from "@ecom/db";
 import { buildAdminAlertEmail, sendEmail, webUrl } from "./email.js";
 import { sendCriticalAlertSms } from "./sms/index.js";
+import { loadBrandingFromStore } from "./branding-store.js";
 import type { Alert } from "./anomaly.js";
 
 /**
@@ -219,10 +220,14 @@ export async function deliverAdminAlert(
         admin.phone
       ) {
         try {
+          // SMS sender brand reads from centralized branding so a rebrand
+          // (or future white-label) propagates to every alert channel
+          // without code changes. Default = "Cordon Ops" today.
+          const branding = await loadBrandingFromStore();
           const r = await sendCriticalAlertSms(
             admin.phone,
             `${severity.toUpperCase()} ${alert.kind}: ${alert.message.slice(0, 120)}`,
-            { brand: "Logistics Ops", tag: `admin_alert_${alert.kind}` },
+            { brand: branding.operational.smsBrand, tag: `admin_alert_${alert.kind}` },
           );
           if (r.ok) result.sms++;
           else if (r.error) {

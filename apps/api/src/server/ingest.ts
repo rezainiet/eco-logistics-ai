@@ -26,6 +26,10 @@ import { getPlan } from "../lib/plans.js";
 import { invalidate } from "../lib/cache.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
 import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
+import { computeAddressQuality } from "../lib/address-intelligence.js";
+import { extractThana } from "../lib/thana-lexicon.js";
+import { scoreIntentForOrder } from "../lib/intent.js";
+import { env } from "../env.js";
 import {
   isNormalizationSkip,
   type NormalizationSkip,
@@ -165,6 +169,46 @@ export async function ingestNormalizedOrder(
       normalized.externalOrderNumber ??
       `${opts.source.toUpperCase().slice(0, 4)}-${normalized.externalId.slice(-8)}`;
 
+    // Address Intelligence v1 — pure-function compute, no DB cost. Stamped
+    // synchronously into the create payload. Observation-only: no consumer
+    // reads this in v1 to make a decision. Skipped entirely when the kill-
+    // switch env flag is off so an outage of the address layer can never
+    // block order creation.
+    const addressStartedAtMs = Date.now();
+    const addressQuality = env.ADDRESS_QUALITY_ENABLED
+      ? computeAddressQuality(
+          normalized.customer.address,
+          normalized.customer.district,
+        )
+      : null;
+    const extractedThana = env.ADDRESS_QUALITY_ENABLED
+      ? extractThana(
+          normalized.customer.address,
+          normalized.customer.district,
+        )
+      : null;
+    // Single-line structured log. Aggregated yields completeness drift,
+    // missing-thana rate, hint distribution. Bounded — no raw address
+    // characters, no buyer fields. Latency is captured even though pure-
+    // function calls are typically < 1ms — gives us a regression alarm if
+    // a future change accidentally adds a sync DB call into the pipeline.
+    if (env.ADDRESS_QUALITY_ENABLED) {
+      console.log(
+        JSON.stringify({
+          evt: "address.scored",
+          merchantId: String(opts.merchantId),
+          completeness: addressQuality?.completeness ?? "no_input",
+          score: addressQuality?.score ?? null,
+          tokenCount: addressQuality?.tokenCount ?? 0,
+          landmarkCount: addressQuality?.landmarks?.length ?? 0,
+          missingHintCount: addressQuality?.missingHints?.length ?? 0,
+          scriptMix: addressQuality?.scriptMix ?? null,
+          thanaExtracted: extractedThana !== null,
+          totalMs: Date.now() - addressStartedAtMs,
+        }),
+      );
+    }
+
     // Race-safe insert. Two workers can each pass the findOne dedup above
     // (rapid-fire order.created + order.updated webhooks for the same WC
     // order do this all the time) and reach the create in parallel. The
@@ -183,6 +227,7 @@ export async function ingestNormalizedOrder(
         phone: normalized.customer.phone,
         address: normalized.customer.address,
         district: normalized.customer.district,
+        ...(extractedThana ? { thana: extractedThana } : {}),
       },
       items: normalized.items,
       order: {
@@ -210,6 +255,13 @@ export async function ingestNormalizedOrder(
         customerEmail: normalized.customer.email ?? undefined,
         placedAt: normalized.placedAt,
       },
+      // Address Intelligence v1 — only set when computed. Mongoose's
+      // `default: undefined` on the subdoc means an absent field is stored
+      // as nothing at all (not `{}`), so legacy reads + analytics partial
+      // indexes stay clean.
+      ...(addressQuality
+        ? { address: { quality: addressQuality } }
+        : {}),
       });
     } catch (err: unknown) {
       // Mongo's duplicate-key error code. The most common cause is the
@@ -311,13 +363,33 @@ export async function ingestNormalizedOrder(
 
     await invalidate(`dashboard:${String(opts.merchantId)}`);
 
-    // Identity-resolution best-effort — links prior anon sessions.
-    void resolveIdentityForOrder({
-      merchantId: opts.merchantId,
-      orderId: orderDoc._id,
-      phone: normalized.customer.phone,
-      email: normalized.customer.email,
-    }).catch((err) => console.error("[ingest] identity resolution failed", err));
+    // Identity-resolution best-effort — links prior anon sessions. Then,
+    // chained on the same fire-and-forget, Intent Intelligence v1 scores
+    // the just-stitched sessions. Each step has its own try/catch so an
+    // identity-resolution failure doesn't suppress intent and vice versa
+    // — neither path can throw back into the request.
+    void (async () => {
+      try {
+        await resolveIdentityForOrder({
+          merchantId: opts.merchantId,
+          orderId: orderDoc._id as Types.ObjectId,
+          phone: normalized.customer.phone,
+          email: normalized.customer.email,
+        });
+      } catch (err) {
+        console.error("[ingest] identity resolution failed", err);
+      }
+      if (env.INTENT_SCORING_ENABLED) {
+        try {
+          await scoreIntentForOrder({
+            merchantId: opts.merchantId,
+            orderId: orderDoc._id as Types.ObjectId,
+          });
+        } catch (err) {
+          console.error("[ingest] intent scoring failed", err);
+        }
+      }
+    })();
 
     return {
       ok: true,

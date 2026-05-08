@@ -10,6 +10,7 @@ import {
   type NormalizedOrder,
 } from "./types.js";
 import { safeFetch } from "./safe-fetch.js";
+import { loadBrandingFromStore } from "../branding-store.js";
 
 /**
  * WooCommerce REST API connector.
@@ -245,7 +246,13 @@ export async function registerWooWebhooks(args: {
             Accept: "application/json",
           },
           body: JSON.stringify({
-            name: `Logistics ${topic}`,
+            // Webhook display name — visible to merchants in
+            // WooCommerce → Settings → Advanced → Webhooks. Reads from
+            // centralized branding so a rebrand only touches one place.
+            // Existing webhooks keep their old name until the dedicated
+            // migration runs (see BRANDING_ARCHITECTURE.md § 4.5); the
+            // delivery_url + secret are unchanged so events never miss.
+            name: `${(await loadBrandingFromStore()).operational.woocommerceWebhookPrefix} ${topic}`,
             topic,
             delivery_url: args.callbackUrl,
             secret: args.webhookSecret,

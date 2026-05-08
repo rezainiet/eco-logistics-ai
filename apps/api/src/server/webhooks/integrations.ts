@@ -69,6 +69,10 @@ integrationsWebhookRouter.post(
   "/:provider/:integrationId",
   express.raw({ type: "*/*", limit: "2mb" }),
   async (req: Request, res: Response) => {
+    // Wall-time anchor for the ACK-latency observability log emitted
+    // on every accepted delivery below. The webhook receiver promises
+    // sub-50ms ACK; this lets us prove (or disprove) it in production.
+    const ackStartedAtMs = Date.now();
     const { provider, integrationId } = req.params;
     if (!provider || !integrationId) {
       return res.status(400).json({ ok: false, error: "missing route params" });
@@ -151,6 +155,19 @@ integrationsWebhookRouter.post(
           $inc: { "webhookStatus.failures": 1 },
           $set: { "webhookStatus.lastError": "signature mismatch" },
         },
+      );
+      // Structured signal for the security ops feed. A burst of these
+      // for one integration usually means rotated-but-not-redeployed
+      // secret; a burst across many integrations means a probe.
+      console.warn(
+        JSON.stringify({
+          evt: "webhook.signature_invalid",
+          provider,
+          integrationId: String(integration._id),
+          merchantId: String(integration.merchantId),
+          payloadBytes: rawBody.byteLength,
+          hasSecret: secret !== undefined,
+        }),
       );
       return res.status(401).json({ ok: false, error: "invalid signature" });
     }
@@ -257,14 +274,71 @@ integrationsWebhookRouter.post(
     }
 
     // Bookkeeping that doesn't gate the ACK — fire-and-forget.
-    void Integration.updateOne(
-      { _id: integration._id },
-      { $set: { "webhookStatus.lastEventAt": new Date() } },
-    ).catch((e) =>
-      console.error("[webhook] integration touch failed", (e as Error).message),
-    );
+    //
+    // Funnel signal: the first verified webhook per integration is the
+    // single best activation moment we can observe server-side. We claim
+    // it atomically by updating only when `lastEventAt` is unset; the
+    // second `updateOne` always bumps the timestamp for downstream
+    // observability. If the claim succeeds, write a one-time audit row
+    // (`integration.first_event`) so ops can answer "what % of connect
+    // events ever produced traffic?" without inferring from order
+    // counts.
+    void (async () => {
+      try {
+        const claimed = await Integration.findOneAndUpdate(
+          {
+            _id: integration._id,
+            $or: [
+              { "webhookStatus.lastEventAt": { $exists: false } },
+              { "webhookStatus.lastEventAt": null },
+            ],
+          },
+          { $set: { "webhookStatus.lastEventAt": new Date() } },
+          { new: false },
+        ).lean();
+        if (claimed) {
+          void writeAudit({
+            merchantId: integration.merchantId,
+            actorId: integration.merchantId,
+            actorType: "system",
+            action: "integration.first_event",
+            subjectType: "integration",
+            subjectId: integration._id,
+            meta: {
+              provider: integration.provider,
+              accountKey: integration.accountKey,
+              elapsedMsSinceConnect: integration.connectedAt
+                ? Date.now() - new Date(integration.connectedAt).getTime()
+                : null,
+            },
+          });
+        } else {
+          // Subsequent event — just bump the timestamp.
+          await Integration.updateOne(
+            { _id: integration._id },
+            { $set: { "webhookStatus.lastEventAt": new Date() } },
+          );
+        }
+      } catch (e) {
+        console.error("[webhook] integration touch failed", (e as Error).message);
+      }
+    })();
 
     if (stamped.duplicate) {
+      // Structured ack-latency log — same shape as the queued path so a
+      // single grep returns both. P95 over `ackMs` is the headline
+      // SLO ("ACK in <50ms") number.
+      console.log(
+        JSON.stringify({
+          evt: "webhook.acked",
+          outcome: "duplicate",
+          provider,
+          integrationId: String(integration._id),
+          merchantId: String(integration.merchantId),
+          payloadBytes: rawBody.byteLength,
+          ackMs: Date.now() - ackStartedAtMs,
+        }),
+      );
       // Already processed (or in-flight). Echo the prior order id when known.
       return res.status(202).json({
         ok: true,
@@ -289,6 +363,18 @@ integrationsWebhookRouter.post(
         merchantId: String(integration.merchantId),
         description: `${provider} webhook ingest`,
       },
+    );
+
+    console.log(
+      JSON.stringify({
+        evt: "webhook.acked",
+        outcome: "queued",
+        provider,
+        integrationId: String(integration._id),
+        merchantId: String(integration.merchantId),
+        payloadBytes: rawBody.byteLength,
+        ackMs: Date.now() - ackStartedAtMs,
+      }),
     );
 
     return res.status(202).json({ ok: true, queued: true });
