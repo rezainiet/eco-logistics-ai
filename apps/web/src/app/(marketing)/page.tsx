@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { getServerSession } from "next-auth";
 import { getBrandingSync } from "@ecom/branding";
+import { authOptions } from "@/lib/auth";
 import styles from "./landing.module.css";
 import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
@@ -214,7 +216,15 @@ const JSON_LD_FAQ_PAGE = {
   })),
 };
 
-export default function HomePage() {
+export default async function HomePage() {
+  // Server-side session check. Runs on the server only — no
+  // SessionProvider, no /api/auth/session client roundtrip, nothing
+  // adds to the (marketing) bundle. Authenticated visitors get a
+  // single "Open dashboard" affordance in place of the
+  // Sign in / Start free trial CTAs scattered across the page.
+  const session = await getServerSession(authOptions);
+  const signedIn = !!session;
+
   return (
     <>
       {/* JSON-LD structured data — Organization, SoftwareApplication,
@@ -247,12 +257,20 @@ export default function HomePage() {
               <a href="#pricing">Pricing</a>
             </div>
             <div className="nav-cta">
-              <Link href="/login" className="btn btn-ghost">
-                Sign in
-              </Link>
-              <Link href="/signup" className="btn btn-primary">
-                Start free trial
-              </Link>
+              {signedIn ? (
+                <Link href="/dashboard" className="btn btn-primary">
+                  Open dashboard
+                </Link>
+              ) : (
+                <>
+                  <Link href="/login" className="btn btn-ghost">
+                    Sign in
+                  </Link>
+                  <Link href="/signup" className="btn btn-primary">
+                    Start free trial
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </nav>
@@ -281,9 +299,15 @@ export default function HomePage() {
                 <a href="#calculator" className="btn btn-primary btn-lg">
                   Calculate my ৳ loss <span className="arrow">→</span>
                 </a>
-                <Link href="/signup" className="btn btn-secondary btn-lg">
-                  Start 14-day trial
-                </Link>
+                {signedIn ? (
+                  <Link href="/dashboard" className="btn btn-secondary btn-lg">
+                    Open dashboard <span className="arrow">→</span>
+                  </Link>
+                ) : (
+                  <Link href="/signup" className="btn btn-secondary btn-lg">
+                    Start 14-day trial
+                  </Link>
+                )}
               </div>
               <div className="hero-meta">
                 <span><span className="check">✓</span> 14-day trial · no card</span>
@@ -996,7 +1020,11 @@ export default function HomePage() {
                   <li>1 courier integration</li>
                   <li>Email support</li>
                 </ul>
-                <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
+                {signedIn ? (
+                  <Link href="/dashboard" className="btn btn-secondary">Open dashboard</Link>
+                ) : (
+                  <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
+                )}
               </div>
 
               <div className="price-card featured" data-plan="Growth">
@@ -1012,9 +1040,15 @@ export default function HomePage() {
                   <li>Cross-merchant fraud network</li>
                   <li>Cart recovery worker</li>
                 </ul>
-                <Link href="/signup" className="btn btn-primary">
-                  Start saving today <span className="arrow">→</span>
-                </Link>
+                {signedIn ? (
+                  <Link href="/dashboard" className="btn btn-primary">
+                    Open dashboard <span className="arrow">→</span>
+                  </Link>
+                ) : (
+                  <Link href="/signup" className="btn btn-primary">
+                    Start saving today <span className="arrow">→</span>
+                  </Link>
+                )}
               </div>
 
               <div className="price-card" data-plan="Scale">
@@ -1030,7 +1064,11 @@ export default function HomePage() {
                   <li>Custom fraud rules + tuning</li>
                   <li>Priority queue + Slack support</li>
                 </ul>
-                <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
+                {signedIn ? (
+                  <Link href="/dashboard" className="btn btn-secondary">Open dashboard</Link>
+                ) : (
+                  <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
+                )}
               </div>
 
               <div className="price-card" data-plan="Enterprise">
@@ -1145,9 +1183,15 @@ export default function HomePage() {
                 Cordon merchant pays back the subscription in week one.
               </p>
               <div className="ctas">
-                <Link href="/signup" className="btn btn-primary btn-lg">
-                  Start saving in 10 minutes <span className="arrow">→</span>
-                </Link>
+                {signedIn ? (
+                  <Link href="/dashboard" className="btn btn-primary btn-lg">
+                    Open dashboard <span className="arrow">→</span>
+                  </Link>
+                ) : (
+                  <Link href="/signup" className="btn btn-primary btn-lg">
+                    Start saving in 10 minutes <span className="arrow">→</span>
+                  </Link>
+                )}
                 <a
                   href={`mailto:${SAAS_BRANDING.helloEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} — request a walkthrough`)}&body=${encodeURIComponent(
                     "Hi Cordon,\n\nI'd like a 15-minute walkthrough of how Cordon would work for my store.\n\nStore name:\nPlatform (Shopify / WooCommerce):\nMonthly order volume:\nCouriers we use:\nBest time + timezone for a call:\n\nThanks,",
@@ -1175,9 +1219,15 @@ export default function HomePage() {
           <a href="#calculator" className="btn btn-secondary mobile-cta-secondary">
             See my loss
           </a>
-          <Link href="/signup" className="btn btn-primary mobile-cta-primary">
-            Stop the bleed <span className="arrow">→</span>
-          </Link>
+          {signedIn ? (
+            <Link href="/dashboard" className="btn btn-primary mobile-cta-primary">
+              Open dashboard <span className="arrow">→</span>
+            </Link>
+          ) : (
+            <Link href="/signup" className="btn btn-primary mobile-cta-primary">
+              Stop the bleed <span className="arrow">→</span>
+            </Link>
+          )}
         </div>
 
         {/* Floating loss indicator — appears after first calculator
@@ -1199,8 +1249,14 @@ export default function HomePage() {
               <a href="#fraud">Fraud network</a>
               <a href="#pricing">Pricing</a>
               <a href={`mailto:${SAAS_BRANDING.helloEmail}`}>{SAAS_BRANDING.helloEmail}</a>
-              <Link href="/login">Sign in</Link>
-              <Link href="/signup">Sign up</Link>
+              {signedIn ? (
+                <Link href="/dashboard">Dashboard</Link>
+              ) : (
+                <>
+                  <Link href="/login">Sign in</Link>
+                  <Link href="/signup">Sign up</Link>
+                </>
+              )}
             </div>
             <div>
               © {new Date().getFullYear()} {SAAS_BRANDING.name}. Built in
