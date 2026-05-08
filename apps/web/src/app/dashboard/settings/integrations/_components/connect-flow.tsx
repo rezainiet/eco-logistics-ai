@@ -72,7 +72,7 @@ const PROVIDERS: Array<{
     hint: "Self-hosted WordPress.",
     icon: Store,
     description:
-      "REST API + signed webhooks. Paste your store URL plus a consumer key/secret — Cordon takes it from there.",
+      "REST API + signed webhooks. Paste your store URL plus a consumer key/secret — ConfirmX takes it from there.",
   },
   {
     key: "custom_api",
@@ -80,7 +80,7 @@ const PROVIDERS: Array<{
     hint: "Anything else.",
     icon: Code2,
     description:
-      "Push orders from any storefront via signed webhook. Cordon issues the URL + secret; you paste them into your stack.",
+      "Push orders from any storefront via signed webhook. ConfirmX issues the URL + secret; you paste them into your stack.",
   },
 ];
 
@@ -107,9 +107,10 @@ export function ConnectFlow({
           Connect the store you sell on.
         </h1>
         <p className="max-w-xl text-sm text-fg-muted">
-          Cordon needs read access to your orders to score risk and book
-          couriers. We never touch payouts and never write to your
-          storefront. Most merchants are connected in under 2 minutes.
+          ConfirmX needs read access to your orders to surface verification
+          signals and book couriers. We never touch payouts and never write
+          to your storefront. Most merchants are connected in under 2
+          minutes.
         </p>
       </header>
 

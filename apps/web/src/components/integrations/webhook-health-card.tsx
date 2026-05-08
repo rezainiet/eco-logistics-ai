@@ -114,7 +114,7 @@ export function WebhookHealthCard() {
             {isCold ? (
               <>
                 No deliveries in the last 24h. If you&apos;re expecting orders,
-                check that your storefront is sending webhooks — Cordon
+                check that your storefront is sending webhooks — ConfirmX
                 replays anything that lands within the retry window.
               </>
             ) : (

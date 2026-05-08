@@ -474,7 +474,7 @@ export default function ApiPage() {
       <SettingsSection
         icon={RefreshCw}
         title="Recent deliveries"
-        description="Last 25 webhook events. Cordon retries failures with exponential backoff before dead-lettering — see the attempts column."
+        description="Last 25 webhook events. ConfirmX retries failures with exponential backoff before dead-lettering — see the attempts column."
         actions={
           <Button
             type="button"

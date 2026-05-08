@@ -215,7 +215,7 @@ export function computeIntentScore(
           key: "no_session_data",
           weight: 0,
           detail:
-            "No storefront session matched this order. Likely placed via dashboard, CSV import, or a storefront where the Cordon SDK is not installed.",
+            "No storefront session matched this order. Likely placed via dashboard, CSV import, or a storefront where the ConfirmX SDK is not installed.",
         },
       ],
       sessionsConsidered: 0,

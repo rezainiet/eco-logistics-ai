@@ -60,7 +60,7 @@ export default function LoginPage() {
           <span className="cordon-serif">saving.</span>
         </h1>
         <p className="text-sm text-fg-subtle">
-          Sign in to your Cordon merchant workspace.
+          Sign in to your ConfirmX merchant workspace.
         </p>
       </div>
       {/*
@@ -168,7 +168,7 @@ export default function LoginPage() {
         </Button>
       </form>
       <p className="mt-6 text-center text-sm text-fg-subtle">
-        New to Cordon?{" "}
+        New to ConfirmX?{" "}
         <Link
           href="/signup"
           className="font-medium text-brand underline-offset-4 hover:underline"

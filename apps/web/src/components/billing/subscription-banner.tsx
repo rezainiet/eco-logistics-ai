@@ -93,7 +93,7 @@ export function SubscriptionBanner() {
         <Link href="/dashboard/billing" className="underline">
           Choose a plan
         </Link>{" "}
-        to keep using Cordon.
+        to keep using ConfirmX.
       </Banner>
     );
   }

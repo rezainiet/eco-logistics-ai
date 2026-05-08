@@ -80,7 +80,7 @@ export function TrialSavingsBanner() {
           {hasSavings ? (
             <>
               {" · "}
-              Cordon has saved you{" "}
+              ConfirmX has saved you{" "}
               <strong className={expiringSoon ? "text-warning" : "text-fg"}>
                 {formatBDT(codSaved)}
               </strong>{" "}
@@ -106,7 +106,7 @@ export function TrialSavingsBanner() {
         <span className="hidden w-full items-center gap-1.5 text-2xs text-fg-faint md:flex">
           <Sparkles className="h-3 w-3 text-brand" aria-hidden />
           Based on flagged orders we&apos;ve already blocked from being booked.
-          Real number; updates as more orders run through Cordon.
+          Real number; updates as more orders run through ConfirmX.
         </span>
       ) : null}
     </div>

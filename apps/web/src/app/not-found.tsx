@@ -37,7 +37,7 @@ export default function NotFound() {
             href="/"
             className="inline-flex h-10 items-center justify-center gap-1.5 rounded-md border border-stroke/30 px-4 text-sm font-medium text-fg-muted hover:bg-surface-raised hover:text-fg"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Cordon
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to ConfirmX
           </Link>
           <Link
             href="/dashboard"

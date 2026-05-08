@@ -32,8 +32,12 @@
  *   - Hard cap of 200 buffered events to bound memory on long sessions.
  */
 (function (window, document) {
-  // Re-entry guard. Either global already-loaded blocks a second init —
-  // they alias the same object, so checking either is sufficient.
+  // Re-entry guard. Any of the three globals already-loaded blocks a
+  // second init — they alias the same object, so checking any is
+  // sufficient. ConfirmXTracker is the post-rebrand primary;
+  // CordonTracker + LogisticsTracker are deprecated aliases kept for
+  // back-compat with storefronts installed pre-rebrand.
+  if (window.ConfirmXTracker && window.ConfirmXTracker.__loaded) return;
   if (window.CordonTracker && window.CordonTracker.__loaded) return;
   if (window.LogisticsTracker && window.LogisticsTracker.__loaded) return;
 
@@ -416,21 +420,24 @@
   };
 
   // Primary global for the post-rebrand SDK.
-  window.CordonTracker = api;
+  window.ConfirmXTracker = api;
 
-  // Backwards-compat alias for storefronts installed pre-rebrand. Both
-  // globals reference the same object, so a merchant calling
-  // `window.LogisticsTracker.track(...)` reaches the same code path as
-  // `window.CordonTracker.track(...)`. We log a one-time deprecation
-  // warning so merchants notice and migrate the snippet at their own
-  // pace; future major versions of the SDK will drop the alias.
+  // Backwards-compat aliases. All three globals reference the same
+  // object, so a merchant calling `window.CordonTracker.track(...)` or
+  // `window.LogisticsTracker.track(...)` still reaches the same code
+  // path as `window.ConfirmXTracker.track(...)`. We log a one-time
+  // deprecation warning per old name so merchants notice and migrate
+  // their storefront <script> at their own pace; future major versions
+  // of the SDK will drop the aliases.
+  window.CordonTracker = api;
   window.LogisticsTracker = api;
-  if (window.console && !window.__cordonSdkAliasWarned) {
-    window.__cordonSdkAliasWarned = true;
+  if (window.console && !window.__confirmxSdkAliasWarned) {
+    window.__confirmxSdkAliasWarned = true;
     console.warn(
-      "[cordon] window.LogisticsTracker is a deprecated alias for window.CordonTracker. " +
-        "Update your storefront <script> tag to reference CordonTracker. " +
-        "The alias will be removed in the next major release."
+      "[confirmx] window.CordonTracker and window.LogisticsTracker are " +
+        "deprecated aliases for window.ConfirmXTracker. Update your " +
+        "storefront <script> tag to reference ConfirmXTracker. The " +
+        "aliases will be removed in the next major release."
     );
   }
 })(window, document);

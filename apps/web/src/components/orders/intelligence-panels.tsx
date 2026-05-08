@@ -70,7 +70,7 @@ const INTENT_TIER_BADGE: Record<
     cls: "bg-[rgba(156,163,175,0.15)] text-[#D1D5DB]",
     icon: HelpCircle,
     description:
-      "This order was placed via dashboard, CSV, or a storefront where Cordon's SDK is not installed.",
+      "This order was placed via dashboard, CSV, or a storefront where ConfirmX's SDK is not installed.",
   },
 };
 

@@ -101,7 +101,7 @@ export default function ForgotPasswordPage() {
           Forgot password?
         </h1>
         <p className="text-sm text-fg-subtle">
-          Enter the email on your Cordon account. We&apos;ll send a reset link.
+          Enter the email on your ConfirmX account. We&apos;ll send a reset link.
         </p>
       </div>
       {/*

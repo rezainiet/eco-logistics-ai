@@ -86,7 +86,7 @@ function SignupForm() {
           <span className="cordon-serif">in 2 minutes.</span>
         </h1>
         <p className="text-sm text-fg-subtle">
-          Create your Cordon workspace. 14-day trial. No credit card.
+          Create your ConfirmX workspace. 14-day trial. No credit card.
         </p>
         {selectedPlan ? (
           <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-brand/30 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">

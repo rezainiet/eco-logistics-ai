@@ -48,7 +48,7 @@ const STEP_TIMES: Record<OnboardingStepKey, string> = {
 // why the step matters. Benefit-first reads cleaner on first-touch.
 const STEP_HINTS: Record<OnboardingStepKey, string> = {
   connect_store:
-    "So Cordon sees every order the moment it's placed (Shopify · WooCommerce)",
+    "So ConfirmX sees every order the moment it's placed (Shopify · WooCommerce)",
   import_orders:
     "Pulls your most recent orders so the dashboard isn't empty on day one",
   add_courier:

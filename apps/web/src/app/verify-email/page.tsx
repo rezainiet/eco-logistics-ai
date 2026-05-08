@@ -68,8 +68,8 @@ function VerifyEmailContent() {
             You&apos;re <span className="cordon-serif">verified.</span>
           </h1>
           <p className="max-w-sm text-sm text-fg-subtle">
-            The pipeline is now live on your workspace — Cordon will start
-            scoring orders the moment your first webhook lands.
+            The pipeline is now live on your workspace — ConfirmX will
+            start verifying orders the moment your first webhook lands.
           </p>
           <Link
             href="/dashboard"

@@ -817,7 +817,7 @@ export default function IntegrationsPage() {
       <PageHeader
         eyebrow="Connectivity"
         title="Integrations"
-        description="Connect Shopify, WooCommerce, your custom commerce stack, or fall back to CSV — orders, fraud scoring, and notifications are wired in automatically."
+        description="Connect Shopify, WooCommerce, your custom commerce stack, or fall back to CSV — orders, order verification, and notifications are wired in automatically."
         actions={
           <div className="flex items-center gap-2">
             {/* Direct route to the issues triage view — same data the

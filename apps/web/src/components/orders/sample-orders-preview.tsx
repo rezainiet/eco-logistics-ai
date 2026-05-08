@@ -59,10 +59,10 @@ export function SampleOrdersPreview() {
         </table>
       </div>
       <p className="mt-3 text-2xs text-fg-faint">
-        Cordon scores every incoming order, holds high-risk ones for review,
-        and books low-risk ones automatically. The numbers above are
-        illustrative — yours show up here the moment your store sends its
-        first webhook.
+        ConfirmX surfaces signals on every incoming order, routes high-risk
+        ones into the operator review queue, and books low-risk ones
+        automatically. The numbers above are illustrative — yours show up
+        here the moment your store sends its first webhook.
       </p>
     </div>
   );

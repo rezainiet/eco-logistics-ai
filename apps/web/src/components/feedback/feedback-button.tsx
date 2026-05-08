@@ -48,7 +48,7 @@ const KIND_OPTIONS: ReadonlyArray<{ value: FeedbackKind; label: string; hint: st
   {
     value: "feature_request",
     label: "Feature request",
-    hint: "Something Cordon should do that it doesn't yet.",
+    hint: "Something ConfirmX should do that it doesn't yet.",
   },
   {
     value: "general",

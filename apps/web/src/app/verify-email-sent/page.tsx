@@ -93,12 +93,12 @@ function VerifyEmailSentInner() {
             <>
               We sent a verification link to{" "}
               <strong className="text-fg">{email}</strong>. Click it and
-              Cordon starts scoring orders for you.
+              ConfirmX starts verifying orders for you.
             </>
           ) : (
             <>
-              We just emailed you a verification link. Click it and Cordon
-              starts scoring orders for you.
+              We just emailed you a verification link. Click it and
+              ConfirmX starts verifying orders for you.
             </>
           )}
         </p>

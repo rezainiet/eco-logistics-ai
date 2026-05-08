@@ -106,7 +106,7 @@ export function NotificationsDrawer({
         tone: "danger",
         icon: AlertCircle,
         title: "Trial has ended",
-        body: "Choose a plan to keep using Cordon.",
+        body: "Choose a plan to keep using ConfirmX.",
         href: "/dashboard/billing",
       });
     }

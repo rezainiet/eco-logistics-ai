@@ -101,8 +101,8 @@ export function ActivationToaster() {
     firedFirstOrderRef.current = true;
     writeStorage(STORAGE.firstOrderToast, new Date().toISOString());
     toast.success(
-      "First order is live in Cordon",
-      "Webhook delivery confirmed. Risk scoring is running.",
+      "First order is live in ConfirmX",
+      "Webhook delivery confirmed. Order verification is running.",
     );
   }, [orders.isLoading, orders.isError, orders.data]);
 
@@ -124,7 +124,7 @@ export function ActivationToaster() {
     }
     const codSaved = fraud.data?.window?.codSaved ?? 0;
     toast.success(
-      "Cordon caught its first risky order",
+      "ConfirmX flagged its first order for review",
       codSaved > 0
         ? `${formatBDT(codSaved)} protected from going on the road as COD.`
         : "It's queued for your review on the Fraud queue.",
@@ -198,8 +198,8 @@ export function FirstFlagBanner() {
           </span>
           <div className="min-w-0">
             <div className="text-sm font-semibold tracking-tight text-fg">
-              Cordon caught its first{" "}
-              <span className="cordon-serif">risky order.</span>
+              ConfirmX flagged its first{" "}
+              <span className="cordon-serif">order for review.</span>
             </div>
             <div className="mt-0.5 text-xs text-fg-muted">
               {risky} flagged in the last 30 days
