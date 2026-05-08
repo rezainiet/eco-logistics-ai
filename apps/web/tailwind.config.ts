@@ -82,11 +82,22 @@ const config: Config = {
           subtle: "hsl(var(--fg-subtle) / <alpha-value>)",
           faint: "hsl(var(--fg-faint) / <alpha-value>)",
         },
-        // Semantic strokes (new).
+        // Semantic strokes. The three tiers now resolve to ACTUALLY
+        // different alpha values — previously --stroke-subtle,
+        // --stroke-default, and --stroke-strong were all defined as
+        // the same HSL, so `border-stroke-subtle` and
+        // `border-stroke-strong` rendered identically. The named
+        // utilities are the preferred entry point going forward;
+        // the bare `stroke` (DEFAULT) keeps <alpha-value> so the
+        // existing `border-stroke/N` ad-hoc patterns continue to
+        // work without a mass migration. All three resolve through
+        // --stroke-default so .cordon-auth's scoped-token override
+        // (lime auth surface) keeps re-skinning every tier in one
+        // place. Audit § "Stroke-alpha sprawl" (2026-05-09).
         stroke: {
-          subtle: "hsl(var(--stroke-subtle) / <alpha-value>)",
+          subtle: "hsl(var(--stroke-default) / 0.08)",
           DEFAULT: "hsl(var(--stroke-default) / <alpha-value>)",
-          strong: "hsl(var(--stroke-strong) / <alpha-value>)",
+          strong: "hsl(var(--stroke-default) / 0.24)",
         },
         brand: {
           DEFAULT: "hsl(var(--brand) / <alpha-value>)",

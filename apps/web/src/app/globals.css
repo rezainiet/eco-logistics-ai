@@ -22,10 +22,17 @@
     --fg-subtle: 220 11% 64%;           /* #9CA3AF */
     --fg-faint: 220 9% 46%;             /* #6B7280 */
 
-    /* Semantic strokes (alpha-friendly) */
-    --stroke-subtle: 220 13% 85%;
+    /* Semantic strokes. Single source-of-truth hue. The three tiers
+     * (subtle / default / strong) used to each have their own HSL var,
+     * but all three were defined as the same value — leaving the named
+     * utilities (`border-stroke-subtle`, `border-stroke-strong`)
+     * indistinguishable from `border-stroke`. Tier differentiation now
+     * happens at the Tailwind utility layer (subtle = 0.08 alpha,
+     * strong = 0.24 alpha), with the bare `stroke` keeping
+     * <alpha-value> so the existing `border-stroke/N` ad-hoc patterns
+     * still work. .cordon-auth scopes --stroke-default to re-skin every
+     * tier on the auth surface in one place. */
     --stroke-default: 220 13% 85%;
-    --stroke-strong: 220 13% 85%;
 
     /* Brand — lime Cordon. Defaults match `@ecom/branding/defaults`
      * (DEFAULT_BRANDING.colors). The root layout server-renders an
