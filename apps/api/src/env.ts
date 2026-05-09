@@ -376,6 +376,23 @@ const schema = z
       .enum(["0", "1"])
       .default("0")
       .transform((v) => v === "1"),
+    /**
+     * Phase 4A.5 — surface the cross-merchant FraudSignal aggregate as
+     * merchant-facing operational evidence on the order detail
+     * response. When "0" (the default), `getOrder` does NOT call
+     * `lookupNetworkRisk`+`classifyNetworkEvidence` and the
+     * `networkEvidence` field is absent from the response.
+     *
+     * Independent of FRAUD_NETWORK_ENABLED so the cross-merchant
+     * lookup can stay on for risk-scoring even while the merchant
+     * surface remains hidden. Default OFF.
+     *
+     * Replay-safety: read-only surface. NEVER writes any aggregate.
+     */
+    NETWORK_EVIDENCE_SURFACE_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",

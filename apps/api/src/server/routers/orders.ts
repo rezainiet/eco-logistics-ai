@@ -60,6 +60,8 @@ import { FraudPrediction } from "@ecom/db";
 import { writeAudit } from "../../lib/audit.js";
 import { classifyOperationalHint } from "../../lib/operational-hints.js";
 import { loadDeliveryReliability } from "../../lib/delivery-reliability-read.js";
+import { classifyNetworkEvidence } from "../../lib/network-evidence.js";
+import { env } from "../../env.js";
 import {
   buildFraudRejectSnapshot,
   buildPreActionSnapshot,
@@ -1687,6 +1689,38 @@ export const ordersRouter = router({
           : null,
       }).catch(() => null);
 
+      // Phase 4A.5 — cross-merchant FraudSignal aggregate surfaced as
+      // merchant-facing operational evidence. Read-only; gated by
+      // NETWORK_EVIDENCE_SURFACE_ENABLED. Fails closed: any error
+      // returns null and the field is absent from the response.
+      //
+      // The k-anonymity floors live in two places:
+      //   1. lookupNetworkRisk() returns EMPTY when fewer than 2
+      //      OTHER merchants have observed the fingerprint.
+      //   2. classifyNetworkEvidence applies its own per-signal
+      //      floors (>= 2 merchants + observation thresholds).
+      //
+      // Both layers must hold; if either is bypassed in a refactor,
+      // the merchant should never see a single-merchant network
+      // verdict.
+      let networkEvidence: ReturnType<typeof classifyNetworkEvidence> | null =
+        null;
+      if (env.NETWORK_EVIDENCE_SURFACE_ENABLED) {
+        try {
+          const phoneHash = hashPhoneForNetwork(order.customer?.phone ?? null);
+          if (phoneHash) {
+            const aggregate = await lookupNetworkRisk({
+              phoneHash,
+              addressHash: order.source?.addressHash ?? null,
+              merchantId,
+            });
+            networkEvidence = classifyNetworkEvidence(aggregate);
+          }
+        } catch {
+          networkEvidence = null;
+        }
+      }
+
       return {
         id: String(order._id),
         orderNumber: order.orderNumber,
@@ -1746,6 +1780,13 @@ export const ordersRouter = router({
         // DELIVERY_RELIABILITY_READ_ENABLED flag is off (default) OR
         // when every aggregate read failed. Consumers MUST null-check.
         deliveryReliability,
+        // Phase 4A.5 — cross-merchant FraudSignal aggregate surfaced
+        // as operational evidence. `null` when
+        // NETWORK_EVIDENCE_SURFACE_ENABLED=0 (default) OR the
+        // upstream lookup returned no usable data. Consumers MUST
+        // null-check. Visibility-only — never feeds risk scoring or
+        // automation decisions.
+        networkEvidence,
         createdAt: order.createdAt,
       };
     }),
