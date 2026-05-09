@@ -22,3 +22,4 @@ export * from "./models/customerReliability.js";
 export * from "./models/addressReliability.js";
 export * from "./models/merchantFeedback.js";
 export * from "./models/brandingConfig.js";
+export * from "./models/geography.js";
