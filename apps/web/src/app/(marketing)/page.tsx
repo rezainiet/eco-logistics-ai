@@ -6,15 +6,10 @@ import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
 import { PricingHighlighter } from "./_components/pricing-highlighter";
 
-/**
- * Force the marketing route into dynamic rendering. Required because the
- * page reads cookies() to detect the signed-in CTA path, which already
- * opts the page out of static — declaring it explicitly stops Next 14.2
- * from leaving the page in a half-static state where the RSC client-
- * reference manifest can come back undefined at request time
- * ("Cannot read properties of undefined (reading 'clientModules')").
- */
-export const dynamic = "force-dynamic";
+// The cookies() call below opts this page out of static rendering
+// automatically. No explicit `export const dynamic = "force-dynamic"`
+// needed — Next 14 sees the cookies() read and routes the page to
+// dynamic SSR.
 
 /**
  * NextAuth v4 cookie names. Production uses the `__Secure-` prefix
