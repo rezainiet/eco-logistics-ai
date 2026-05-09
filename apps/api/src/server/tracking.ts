@@ -18,8 +18,13 @@ import {
   recordAddressOutcome,
   recordCustomerOutcome,
 } from "../lib/delivery-reliability-writers.js";
+import {
+  recordAreaOutcome,
+  recordCourierLaneOutcome,
+} from "../lib/courier-lane-writers.js";
 import { recordReliabilityOutcome } from "../lib/observability/delivery-reliability.js";
 import { isWriteEnabledForMerchant } from "../lib/delivery-reliability-rollout.js";
+import { env } from "../env.js";
 
 /**
  * Tracking lifecycle mapper — courier event → order.status. Only terminal
@@ -237,7 +242,11 @@ export async function applyTrackingEvents(
       );
 
       const full = await Order.findById(order._id)
-        .select("customer.phone customer.address customer.district createdAt logistics.shippedAt logistics.deliveredAt")
+        .select(
+          "customer.phone customer.address customer.district customer.thana " +
+            "createdAt logistics.shippedAt logistics.deliveredAt " +
+            "source.canonicalAddress automation.attemptedCouriers",
+        )
         .lean();
       const phone = (full as { customer?: { phone?: string } } | null)?.customer?.phone;
       const address = (full as { customer?: { address?: string } } | null)?.customer?.address;
@@ -369,6 +378,110 @@ export async function applyTrackingEvents(
           reason: "flag_off",
           meta: { transition: `${prevStatus}->${nextStatus}` },
         });
+      }
+
+      // Phase 3 lane + area fan-out — additive, gated, fire-and-forget.
+      // Sits at the very end of the terminal block AFTER all existing
+      // reliability writers. Reuses values already in scope; never reads
+      // Order again, never enqueues, never feeds fraud / automation.
+      //
+      // Replay-safety: the chokepoint's existing guards (status filter,
+      // dedupe-key $nin, `nextStatus !== prevStatus` gate) ensure these
+      // helpers are invoked AT MOST ONCE per real terminal transition.
+      // The writers themselves do NOT dedupe by orderId.
+      //
+      // Default OFF. Flip via LANE_INTELLIGENCE_WRITE_ENABLED=1 once
+      // ADDRESS_CANONICALIZATION_ENABLED has been on long enough that
+      // new orders carry source.canonicalAddress.thana.
+      if (env.LANE_INTELLIGENCE_WRITE_ENABLED) {
+        const canonical = (
+          full as { source?: { canonicalAddress?: {
+            thana?: string; district?: string; division?: string;
+          } } } | null
+        )?.source?.canonicalAddress;
+        // Prefer canonical thana (Phase 2 gazetteer-matched); fall back to
+        // the legacy single-best thana extractor stamped on customer.thana.
+        const thana =
+          canonical?.thana ??
+          (full as { customer?: { thana?: string } } | null)?.customer?.thana ??
+          null;
+        const division = canonical?.division ?? null;
+        // Use canonical district when available so the lane key matches the
+        // gazetteer-canonical form; fall back to the merchant-supplied raw
+        // (writer normalises via `normalizeDistrict`).
+        const laneDistrict = canonical?.district ?? district ?? null;
+
+        // Attempt index — 1-based count of couriers tried. Capped at 3 by
+        // the writer; the chokepoint just passes the actual length.
+        const attemptedList =
+          (full as { automation?: { attemptedCouriers?: string[] } } | null)
+            ?.automation?.attemptedCouriers ?? [];
+        const attemptIndex = (() => {
+          const n = Math.max(1, Math.min(3, attemptedList.length || 1));
+          return n as 1 | 2 | 3;
+        })();
+
+        if (orderCourier && laneDistrict && thana) {
+          // Reuse the deliveryHours computed for the legacy
+          // recordCourierOutcome call above so the two writers see
+          // identical numerics for delivered orders.
+          const fullOrderForHours = full as {
+            createdAt?: Date;
+            logistics?: { shippedAt?: Date; deliveredAt?: Date };
+          } | null;
+          const shippedAt = fullOrderForHours?.logistics?.shippedAt;
+          const deliveredAtTs =
+            fullOrderForHours?.logistics?.deliveredAt ?? new Date();
+          const baseStart = shippedAt ?? fullOrderForHours?.createdAt;
+          const deliveryHours =
+            nextStatus === "delivered" && baseStart
+              ? Math.max(
+                  0.1,
+                  (new Date(deliveredAtTs).getTime() -
+                    new Date(baseStart).getTime()) /
+                    3_600_000,
+                )
+              : undefined;
+          void recordCourierLaneOutcome({
+            merchantId: order.merchantId,
+            courier: orderCourier,
+            district: laneDistrict,
+            thana,
+            outcome: nextStatus as "delivered" | "rto" | "cancelled",
+            deliveryHours,
+            attemptIndex,
+            now: terminalNow,
+          }).catch((err) =>
+            console.error(
+              "[lane-intelligence] courier-lane chokepoint failed",
+              (err as Error).message,
+            ),
+          );
+        }
+
+        if (laneDistrict && thana) {
+          // Division falls back to district when canonical didn't resolve a
+          // division — better to write SOME area row than skip; the writer
+          // requires all three fields, so we mirror district→division when
+          // unknown. This produces stable groupings even on legacy orders
+          // and the canonical re-canonicalisation in Phase 4 can correct
+          // the division retroactively without changing the keying triple
+          // for existing rows.
+          const areaDivision = division ?? laneDistrict;
+          void recordAreaOutcome({
+            merchantId: order.merchantId,
+            division: areaDivision,
+            district: laneDistrict,
+            thana,
+            outcome: nextStatus as "delivered" | "rto" | "cancelled",
+            now: terminalNow,
+          }).catch((err) =>
+            console.error(
+              "[lane-intelligence] area chokepoint failed",
+              (err as Error).message,
+            ),
+          );
+        }
       }
     }
   } else if (

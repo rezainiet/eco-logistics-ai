@@ -294,6 +294,39 @@ const schema = z
       .enum(["0", "1"])
       .default("0")
       .transform((v) => v === "1"),
+    /**
+     * Phase 3 master flag for the courier-lane + area-reliability
+     * chokepoint fan-out. When "0" (the default), `applyTrackingEvents`
+     * does NOT call `recordCourierLaneOutcome` / `recordAreaOutcome`;
+     * the new collections (CourierLane, AreaReliability) remain empty.
+     * The legacy CourierPerformance / CustomerReliability /
+     * AddressReliability writers continue to fire unchanged on either
+     * side of the flip.
+     *
+     * Default OFF. Flip to "1" once Phase 2 canonicalAddress.thana is
+     * landing on new orders in production (i.e. after
+     * ADDRESS_CANONICALIZATION_ENABLED=1).
+     *
+     * Replay-safety: this flag controls a pure ADDITIVE write. Existing
+     * aggregates are unaffected on either side of the flip.
+     */
+    LANE_INTELLIGENCE_WRITE_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /**
+     * Phase 3 master flag for the read-side thana → district → global
+     * fallback ladder in `selectBestCourier`. When "0" (the default),
+     * the existing district + _GLOBAL_ ladder is preserved exactly.
+     * Independent of LANE_INTELLIGENCE_WRITE_ENABLED so writes can
+     * accumulate evidence days before the read surface flips on.
+     *
+     * Default OFF.
+     */
+    LANE_INTELLIGENCE_READ_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",
