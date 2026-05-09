@@ -1,0 +1,42 @@
+[
+  {
+    "phone": "01712345678",
+    "label": "strong_delivery_known"
+  },
+  {
+    "phone": "01711000001",
+    "label": "high_return_known"
+  },
+  {
+    "phone": "01711000002",
+    "label": "sparse_history_new_buyer"
+  },
+  {
+    "phone": "01711000003",
+    "label": "shared_phone_family_household"
+  },
+  {
+    "phone": "01711000004",
+    "label": "reseller_high_volume"
+  },
+  {
+    "phone": "01711000005",
+    "label": "rural_cod_agent"
+  },
+  {
+    "phone": "01711000006",
+    "label": "marketplace_business_phone"
+  },
+  {
+    "phone": "01711000007",
+    "label": "older_dormant_customer"
+  },
+  {
+    "phone": "01711000008",
+    "label": "newly_active_customer"
+  },
+  {
+    "phone": "01711000009",
+    "label": "merchant_cancellation_inflated"
+  }
+]
