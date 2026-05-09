@@ -25,3 +25,4 @@ export * from "./models/brandingConfig.js";
 export * from "./models/geography.js";
 export * from "./models/courierLane.js";
 export * from "./models/areaReliability.js";
+export * from "./models/externalDeliveryProfile.js";
