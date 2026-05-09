@@ -377,6 +377,46 @@ const schema = z
       .default("0")
       .transform((v) => v === "1"),
     /**
+     * BDCourier provider — real customer-history-aggregator HTTP
+     * adapter. Independent of the per-merchant courier credentials
+     * (Pathao/Steadfast/RedX) because BDCourier is a platform service
+     * with a single API key.
+     *
+     * Default OFF. Flip to "1" only after `BDCOURIER_API_KEY` is
+     * configured AND payload validation has been verified against
+     * real production responses.
+     */
+    BDCOURIER_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /**
+     * BDCourier API key. Treated as a secret. NEVER committed to git;
+     * NEVER logged. The adapter passes it via the Authorization
+     * header on each request and the boundedFetch wrapper strips
+     * raw error detail so the key cannot leak through error logs.
+     *
+     * If unset (the default), the adapter reports
+     * isConfigured()=false and the orchestrator excludes BDCourier
+     * from the fan-out cleanly — same posture as the stub adapters.
+     */
+    BDCOURIER_API_KEY: z.string().optional(),
+    /** Per-call timeout in milliseconds. Bounded by the orchestrator's
+     *  default but configurable per-provider for BDCourier-specific
+     *  latency. Default 5000ms. */
+    BDCOURIER_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(500)
+      .max(30_000)
+      .default(5000),
+    /** Base URL for the BDCourier API. Configurable so we can swap
+     *  staging / production endpoints without code changes. */
+    BDCOURIER_BASE_URL: z
+      .string()
+      .url()
+      .default("https://bdcourier.com/api"),
+    /**
      * Phase 4A.5 — surface the cross-merchant FraudSignal aggregate as
      * merchant-facing operational evidence on the order detail
      * response. When "0" (the default), `getOrder` does NOT call
