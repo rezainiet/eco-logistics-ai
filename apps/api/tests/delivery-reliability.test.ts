@@ -272,7 +272,11 @@ describe("classifyDeliveryReliability — signal composition", () => {
           deliveredCount: 0,
           rtoCount: 5,
           cancelledCount: 0,
-          distinctPhoneCount: 4,
+          // Phase 1: address_multi_buyer threshold is 5 distinct phones AND
+          // requires delivered < distinctPhones (otherwise the sustained-
+          // success suppression kicks in). 6 phones / 0 delivered exercises
+          // the genuinely-shared-bad-address case the test author meant.
+          distinctPhoneCount: 6,
           lastOutcomeAt: recentDate(5),
         },
         courierStats: {
