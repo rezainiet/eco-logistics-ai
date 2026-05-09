@@ -42,13 +42,16 @@ const WEIGHTS = {
   unreachableHistory: 20,
   ipVelocity: 16,
   duplicateAddress: 22,
-  // Rapid-fire orders from a single phone inside the velocity window are
-  // a textbook fraud pattern (one buyer fanning out multiple deliveries
-  // before a courier rejects any of them). Weight is set above the
-  // medium/high boundary (69) so a single occurrence auto-lands HIGH on
-  // its own, matching the merchant-facing "this should be reviewed"
-  // expectation. Tunable per-merchant via `velocityThreshold`.
-  velocityBreach: 75,
+  // Multiple orders from one phone inside the velocity window. Common BD
+  // patterns that LOOK like velocity but aren't fraud:
+  //   - retries from a flaky network (one buyer, three submits)
+  //   - resellers batching downstream orders to different addresses
+  //   - shared/family phones placing orders for different households
+  // Weight is set BELOW the medium/high boundary (69) so a single velocity
+  // burst lands MEDIUM on its own, requiring an additional signal
+  // (extreme_cod, prior_returns, garbage_phone, …) to escalate to HIGH.
+  // Tunable per-merchant via `velocityThreshold`.
+  velocityBreach: 35,
   // Garbage phones (all-same-digit, wrong country/format) are flagged on their
   // own — they're never legitimate. Heavy enough that combined with any one
   // other signal the order tips into HIGH.
@@ -86,7 +89,11 @@ const DUP_PHONE_WARN = 3;
 const DUP_PHONE_HEAVY = 6;
 const IP_VELOCITY_WINDOW_MS = 10 * 60 * 1000;
 const IP_VELOCITY_THRESHOLD = 5;
-const ADDRESS_REUSE_THRESHOLD = 3; // distinct phones on the same address
+// Distinct phones on the same address. Bumped from 3→5 in Phase 1 to match
+// Bangladesh shared-address reality (extended families, dorms, apartment
+// buildings indexed only by building name). The trust-layer mirror lives in
+// `lib/delivery-reliability.ts:address_multi_buyer`.
+const ADDRESS_REUSE_THRESHOLD = 5;
 const DEFAULT_HISTORY_HALF_LIFE_DAYS = 30;
 /** History window cap — don't scan beyond this many days regardless of decay. */
 const HISTORY_LOOKBACK_DAYS = 365;
@@ -272,6 +279,10 @@ export interface RiskHistory {
   phoneVelocityCount: number;
   addressDistinctPhones: number;
   addressReturnedCount: number;
+  /** Decay-weighted delivered orders at this address. Optional — older callers
+   *  that don't supply it continue to work; the suppression logic falls back
+   *  to "0 prior delivered" which preserves pre-Phase-1 behaviour. */
+  addressDeliveredCount?: number;
   /** Decayed delivered count — optional so existing callers stay source-compat. */
   phoneDeliveredCount?: number;
   /** Raw (un-decayed) totals — for reputation reporting in the agent UI. */
@@ -393,12 +404,27 @@ export function classifyCustomerTier(history: RiskHistory): CustomerTier {
   return "standard";
 }
 
-/** Soft signals a Gold-tier buyer is allowed to bypass. */
+/**
+ * Soft signals a Gold-tier buyer (≥5 deliveries, >85% success) is allowed
+ * to bypass. Hard blocks (`garbage_phone`, `blocked_phone`, `blocked_address`,
+ * COMBO `extreme_cod_in_suspicious_district`) are NEVER bypassed — they go
+ * through `hardBlockCauses` which is built outside this filter.
+ *
+ * Phase 1 additions:
+ *   - `low_success_rate` — a buyer with 5+ deliveries at >85% success
+ *     who picks up a few cancellations on a fresh merchant shouldn't
+ *     trip a permanent low-success penalty.
+ *   - `prior_cancelled` — same logic; merchant-side cancellations
+ *     (out of stock) and buyer-life events shouldn't compound on a
+ *     trusted buyer.
+ */
 const GOLD_TIER_BYPASS_KEYS = new Set<string>([
   "velocity_breach",
   "fake_name_pattern",
   "duplicate_phone",
   "duplicate_phone_heavy",
+  "low_success_rate",
+  "prior_cancelled",
 ]);
 
 /**
@@ -533,7 +559,7 @@ export function computeRisk(
       detail: `${history.phoneOrdersCount.toFixed(1)} weighted prior orders from this phone`,
     });
     reasons.push(
-      `Same phone used in ${Math.round(history.phoneOrdersCount)} previous orders`,
+      `Phone has placed ${Math.round(history.phoneOrdersCount)} previous orders — verify if this is a returning buyer or a reseller pattern.`,
     );
   } else if (
     history.phoneOrdersCount >= DUP_PHONE_WARN &&
@@ -545,7 +571,7 @@ export function computeRisk(
       detail: `${history.phoneOrdersCount.toFixed(1)} weighted prior orders from this phone`,
     });
     reasons.push(
-      `Same phone used in ${Math.round(history.phoneOrdersCount)} previous orders`,
+      `Phone has placed ${Math.round(history.phoneOrdersCount)} previous orders — likely a returning buyer.`,
     );
   }
 
@@ -562,14 +588,14 @@ export function computeRisk(
     );
   }
 
-  if (history.phoneCancelledCount >= 2) {
+  if (history.phoneCancelledCount >= 2 && !isBypassed("prior_cancelled")) {
     signals.push({
       key: "prior_cancelled",
       weight: weightFor("priorCancelled"),
       detail: `${history.phoneCancelledCount.toFixed(1)} weighted prior cancellations`,
     });
     reasons.push(
-      `Customer cancelled ${Math.round(history.phoneCancelledCount)} previous orders`,
+      `${Math.round(history.phoneCancelledCount)} previous orders cancelled — could be merchant-side (out of stock) or buyer-side; review history.`,
     );
   }
 
@@ -582,7 +608,7 @@ export function computeRisk(
   const returnedRaw = history.phoneReturnedRaw ?? 0;
   const cancelledRaw = history.phoneCancelledRaw ?? 0;
   const priorResolved = deliveredRaw + returnedRaw + cancelledRaw;
-  if (priorResolved >= 3) {
+  if (priorResolved >= 3 && !isBypassed("low_success_rate")) {
     const successRate = deliveredRaw / priorResolved;
     if (successRate < 0.4) {
       const weight =
@@ -668,39 +694,81 @@ export function computeRisk(
   // opts.velocityThreshold to a different positive number to override, or to
   // a negative number (e.g. -1) to disable on a per-merchant basis.
   const velocityThreshold = opts.velocityThreshold ?? 3;
+  let velocityFired = false;
   if (
     velocityThreshold > 0 &&
     history.phoneVelocityCount >= velocityThreshold &&
     !isBypassed("velocity_breach")
   ) {
+    velocityFired = true;
+    // Length-of-history dampening. Phones with proven delivery history are
+    // far more likely to be retries / resellers / shared family phones than
+    // velocity-fraud. Halve the weight for `phoneDeliveredRaw >= 2` so the
+    // signal stays informational without forcing escalation.
+    const proven = (history.phoneDeliveredRaw ?? 0) >= 2;
+    const baseWeight = weightFor("velocityBreach");
+    const weight = proven ? Math.round(baseWeight / 2) : baseWeight;
     signals.push({
       key: "velocity_breach",
-      weight: weightFor("velocityBreach"),
-      detail: `${history.phoneVelocityCount} orders from this phone inside window`,
+      weight,
+      detail: proven
+        ? `${history.phoneVelocityCount} rapid orders from this phone — buyer has prior delivered history (likely retry / reseller / shared phone).`
+        : `${history.phoneVelocityCount} rapid orders from this phone inside window.`,
     });
     reasons.push(
-      `${history.phoneVelocityCount} orders from this phone in the last few minutes`,
+      proven
+        ? `Multiple rapid orders detected (${history.phoneVelocityCount}) — buyer has prior successful deliveries; review for retry, reseller, or shared-phone pattern.`
+        : `Multiple rapid orders detected: ${history.phoneVelocityCount} from this phone in the last few minutes.`,
+    );
+  }
+
+  // Velocity + extreme COD combo. Either alone is moderate; together they
+  // are the canonical "fan-out before any rejection lands" fraud shape. The
+  // additive weight (extreme_cod 40 + velocity 35) already places the order
+  // in HIGH; we surface an explicit operator-readable combo reason so the
+  // merchant sees WHY the score escalated rather than guessing from two
+  // separate signals.
+  if (velocityFired && extremeCodHit) {
+    reasons.push(
+      "Multiple rapid high-value orders — review carefully before booking.",
     );
   }
 
   // --- Address reuse -----------------------------------------------------
-  if (history.addressDistinctPhones >= ADDRESS_REUSE_THRESHOLD) {
+  // Sustained-success suppression: an address that has more delivered
+  // outcomes than distinct phones is almost certainly a legitimate shared
+  // location (apartment, dorm, family compound, workplace). Don't penalise
+  // these — the address has demonstrated it's reachable.
+  const addressDeliveredCount = history.addressDeliveredCount ?? 0;
+  const addressLooksTrusted =
+    history.addressDistinctPhones > 0 &&
+    addressDeliveredCount >= history.addressDistinctPhones;
+
+  if (
+    history.addressDistinctPhones >= ADDRESS_REUSE_THRESHOLD &&
+    !addressLooksTrusted
+  ) {
     signals.push({
       key: "duplicate_address",
       weight: weightFor("duplicateAddress"),
-      detail: `${history.addressDistinctPhones} different phones shipped to this address`,
+      detail: `${history.addressDistinctPhones} different phones have shipped to this address`,
     });
     reasons.push(
-      `Same address used by ${history.addressDistinctPhones} different phone numbers`,
+      `Address used by ${history.addressDistinctPhones} different phones — could be apartment, family, or workplace; verify recipient before booking.`,
     );
-  } else if (history.addressReturnedCount > 0) {
-    // Address has a prior RTO even if not widely reused — still a yellow flag.
+  } else if (
+    history.addressReturnedCount > 0 &&
+    // Halve-weight branch: an address with one stray RTO but a track record
+    // of successful deliveries (delivered ≥ 2× returned) is almost never
+    // a shared-fraud address. Suppress entirely.
+    !(addressDeliveredCount >= history.addressReturnedCount * 2)
+  ) {
     signals.push({
       key: "duplicate_address",
-      weight: weightFor("duplicateAddress") / 2,
+      weight: Math.round(weightFor("duplicateAddress") / 2),
       detail: `${history.addressReturnedCount.toFixed(1)} prior return(s) at this address`,
     });
-    reasons.push(`Previous failed delivery at this address`);
+    reasons.push(`Previous failed delivery at this address.`);
   }
 
   const raw = signals.reduce((sum, s) => sum + s.weight, 0);
@@ -894,12 +962,15 @@ export async function collectRiskHistory(
   }
 
   let addressReturnedCount = 0;
+  let addressDeliveredCount = 0;
   const distinctPhones = new Set<string>();
   for (const row of addressOrders) {
     if (row.customer?.phone) distinctPhones.add(row.customer.phone);
-    if (row.order?.status === "rto" && row.createdAt) {
+    if (row.createdAt) {
       const age = Math.max(0, (now - row.createdAt.getTime()) / 86400_000);
-      addressReturnedCount += decayWeight(age, halfLifeDays);
+      const w = decayWeight(age, halfLifeDays);
+      if (row.order?.status === "rto") addressReturnedCount += w;
+      else if (row.order?.status === "delivered") addressDeliveredCount += w;
     }
   }
   // Current phone shouldn't count toward "distinct phones on this address".
@@ -923,6 +994,7 @@ export async function collectRiskHistory(
     phoneVelocityCount: phoneVelocity,
     addressDistinctPhones: distinctPhones.size,
     addressReturnedCount,
+    addressDeliveredCount,
     phoneTotalRaw,
     phoneDeliveredRaw,
     phoneReturnedRaw,
@@ -947,7 +1019,14 @@ export async function collectRiskHistoryBatch(args: {
     phoneCancelledCount: number;
     phoneUnreachableCount: number;
   }>;
-  byAddress: Map<string, { addressDistinctPhones: number; addressReturnedCount: number }>;
+  byAddress: Map<
+    string,
+    {
+      addressDistinctPhones: number;
+      addressReturnedCount: number;
+      addressDeliveredCount: number;
+    }
+  >;
 }> {
   const halfLifeDays = args.halfLifeDays ?? DEFAULT_HISTORY_HALF_LIFE_DAYS;
   const now = Date.now();
@@ -976,10 +1055,18 @@ export async function collectRiskHistoryBatch(args: {
 
   const byAddress = new Map<
     string,
-    { addressDistinctPhones: number; addressReturnedCount: number }
+    {
+      addressDistinctPhones: number;
+      addressReturnedCount: number;
+      addressDeliveredCount: number;
+    }
   >();
   for (const a of uniqueAddresses) {
-    byAddress.set(a, { addressDistinctPhones: 0, addressReturnedCount: 0 });
+    byAddress.set(a, {
+      addressDistinctPhones: 0,
+      addressReturnedCount: 0,
+      addressDeliveredCount: 0,
+    });
   }
 
   if (uniquePhones.length > 0) {
@@ -1063,9 +1150,13 @@ export async function collectRiskHistoryBatch(args: {
         }
         set.add(row.customer.phone);
       }
-      if (row.order?.status === "rto" && row.createdAt) {
+      if (row.createdAt) {
         const age = Math.max(0, (now - row.createdAt.getTime()) / 86400_000);
-        bucket.addressReturnedCount += decayWeight(age, halfLifeDays);
+        const w = decayWeight(age, halfLifeDays);
+        if (row.order?.status === "rto") bucket.addressReturnedCount += w;
+        else if (row.order?.status === "delivered") {
+          bucket.addressDeliveredCount += w;
+        }
       }
     }
     for (const [h, set] of phoneByAddr) {
