@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { Types } from "mongoose";
 import {
+  AreaReliability,
   AuditLog,
+  CourierLane,
+  CourierPerformance,
   FEEDBACK_KINDS,
   FEEDBACK_STATUSES,
   Integration,
@@ -22,6 +25,20 @@ import {
 import { snapshotReliabilityCounters } from "../../lib/observability/delivery-reliability.js";
 import { reconcileSlice } from "../../lib/delivery-reliability-reconciliation.js";
 import { loadReliabilityHealthSnapshot } from "../../lib/delivery-reliability-analytics.js";
+import {
+  reconcileAreaReliabilitySlice,
+  reconcileCourierLaneSlice,
+  reconcileCourierPerformanceSlice,
+} from "../../lib/courier-reconciliation.js";
+import {
+  checkAreaReliabilityIntegrity,
+  checkCourierLaneIntegrity,
+  checkCourierPerformanceIntegrity,
+} from "../../lib/lane-integrity.js";
+import {
+  snapshotHotKeys,
+  snapshotLaneCounters,
+} from "../../lib/observability/lane-intelligence.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -611,5 +628,211 @@ export const adminObservabilityRouter = router({
         axis: input.axis,
         scanLimit: input.scanLimit,
       });
+    }),
+
+  /* ======================================================================
+   *                Phase 3.5 — lane intelligence diagnostics
+   * ====================================================================== */
+
+  /**
+   * Single-row integrity check for a CourierPerformance bucket. Pure
+   * function — no scan, no reconciler. Returns IntegrityReport.
+   */
+  courierPerformanceIntegrity: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        courier: z.string().min(1).max(60),
+        district: z.string().min(1).max(100),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      const row = await CourierPerformance.findOne({
+        merchantId: new Types.ObjectId(input.merchantId),
+        courier: input.courier.toLowerCase(),
+        district: input.district,
+      })
+        .lean()
+        .exec();
+      return {
+        exists: !!row,
+        report: checkCourierPerformanceIntegrity(row, { now: new Date() }),
+        sample: row
+          ? {
+              deliveredCount: row.deliveredCount,
+              rtoCount: row.rtoCount,
+              cancelledCount: row.cancelledCount,
+              totalDeliveryHours: row.totalDeliveryHours,
+              lastOutcomeAt: row.lastOutcomeAt,
+            }
+          : null,
+      };
+    }),
+
+  /**
+   * Single-row integrity check for a CourierLane bucket.
+   */
+  courierLaneIntegrity: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        courier: z.string().min(1).max(60),
+        district: z.string().min(1).max(100),
+        thana: z.string().min(1).max(100),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      const row = await CourierLane.findOne({
+        merchantId: new Types.ObjectId(input.merchantId),
+        courier: input.courier.toLowerCase(),
+        district: input.district.toLowerCase(),
+        thana: input.thana.toLowerCase(),
+      })
+        .lean()
+        .exec();
+      return {
+        exists: !!row,
+        report: checkCourierLaneIntegrity(row, { now: new Date() }),
+        sample: row
+          ? {
+              deliveredCount: row.deliveredCount,
+              rtoCount: row.rtoCount,
+              cancelledCount: row.cancelledCount,
+              totalDeliveryHours: row.totalDeliveryHours,
+              attempt1Delivered: row.attempt1Delivered,
+              attempt2Delivered: row.attempt2Delivered,
+              attempt3PlusDelivered: row.attempt3PlusDelivered,
+              firstOutcomeAt: row.firstOutcomeAt,
+              lastOutcomeAt: row.lastOutcomeAt,
+              pipelineVersion: row.pipelineVersion,
+            }
+          : null,
+      };
+    }),
+
+  /**
+   * Single-row integrity check for an AreaReliability bucket.
+   */
+  areaReliabilityIntegrity: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        division: z.string().min(1).max(100),
+        district: z.string().min(1).max(100),
+        thana: z.string().min(1).max(100),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      const row = await AreaReliability.findOne({
+        merchantId: new Types.ObjectId(input.merchantId),
+        division: input.division.toLowerCase(),
+        district: input.district.toLowerCase(),
+        thana: input.thana.toLowerCase(),
+      })
+        .lean()
+        .exec();
+      return {
+        exists: !!row,
+        report: checkAreaReliabilityIntegrity(row, { now: new Date() }),
+        sample: row
+          ? {
+              deliveredCount: row.deliveredCount,
+              rtoCount: row.rtoCount,
+              cancelledCount: row.cancelledCount,
+              unreachableCount: row.unreachableCount,
+              recent7dDelivered: row.recent7dDelivered,
+              recent7dRto: row.recent7dRto,
+              recent7dCancelled: row.recent7dCancelled,
+              recent7dWindowStartedAt: row.recent7dWindowStartedAt,
+              firstOutcomeAt: row.firstOutcomeAt,
+              lastOutcomeAt: row.lastOutcomeAt,
+              pipelineVersion: row.pipelineVersion,
+            }
+          : null,
+      };
+    }),
+
+  /**
+   * Bounded reconciliation slice for CourierPerformance. Per-merchant,
+   * optional courier filter. Read-only; never repairs.
+   */
+  courierPerformanceDriftSample: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        courier: z.string().max(60).optional(),
+        scanLimit: z.number().int().min(1).max(10_000).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      return reconcileCourierPerformanceSlice({
+        merchantId: new Types.ObjectId(input.merchantId),
+        courier: input.courier,
+        scanLimit: input.scanLimit,
+      });
+    }),
+
+  /**
+   * Bounded reconciliation slice for CourierLane.
+   */
+  courierLaneDriftSample: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        courier: z.string().max(60).optional(),
+        scanLimit: z.number().int().min(1).max(10_000).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      return reconcileCourierLaneSlice({
+        merchantId: new Types.ObjectId(input.merchantId),
+        courier: input.courier,
+        scanLimit: input.scanLimit,
+      });
+    }),
+
+  /**
+   * Bounded reconciliation slice for AreaReliability.
+   */
+  areaReliabilityDriftSample: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        scanLimit: z.number().int().min(1).max(10_000).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) return null;
+      return reconcileAreaReliabilitySlice({
+        merchantId: new Types.ObjectId(input.merchantId),
+        scanLimit: input.scanLimit,
+      });
+    }),
+
+  /**
+   * Per-process snapshot of the lane intelligence counters + hot-key
+   * top-N. Per-pod view; aggregating across pods is left to the log
+   * aggregator (every event is structured-logged).
+   */
+  laneObservabilitySnapshot: adminProcedure
+    .input(
+      z
+        .object({
+          topN: z.number().int().min(1).max(100).optional(),
+        })
+        .optional()
+        .default({}),
+    )
+    .query(({ input }) => {
+      return {
+        counters: snapshotLaneCounters(),
+        hotKeys: snapshotHotKeys(input?.topN ?? 20),
+        generatedAt: new Date(),
+      };
     }),
 });
