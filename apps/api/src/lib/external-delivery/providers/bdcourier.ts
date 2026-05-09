@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { env } from "../../../env.js";
+import { safeFetch } from "../../integrations/safe-fetch.js";
+import { IntegrationError } from "../../integrations/types.js";
 import { boundedFetch } from "./bounded.js";
 import type {
   ExternalProviderAdapter,
@@ -263,6 +265,11 @@ export const bdcourierAdapter: ExternalProviderAdapter = {
       classifyError: (err) => {
         if (err instanceof BdCourierBadPayloadError) return "bad_payload";
         if (err instanceof BdCourierHttpError) return "http_error";
+        // SSRF guard rejected the request — loud-by-design: the
+        // configured BDCOURIER_BASE_URL resolved to a private/
+        // loopback host. Almost certainly a deploy misconfiguration
+        // (e.g. someone set the staging URL to an internal IP).
+        if (err instanceof IntegrationError) return "ssrf_blocked";
         if (err instanceof TypeError) return "http_error"; // fetch network errors
         return "unexpected";
       },
@@ -271,7 +278,12 @@ export const bdcourierAdapter: ExternalProviderAdapter = {
         // querystring along with the API key. The API key is sent
         // ONLY in the Authorization header.
         const url = `${baseUrl}/courier-check/${encodeURIComponent(phone)}`;
-        const res = await fetch(url, {
+        // Route through safeFetch so the SSRF guard
+        // (assertPublicHost) refuses requests whose hostname
+        // resolves to a private/loopback range in production.
+        // Closes the same DNS-rebinding-style risk Shopify /
+        // WooCommerce calls already mitigate.
+        const res = await safeFetch(url, {
           method: "GET",
           headers: {
             Authorization: `Bearer ${apiKey}`,

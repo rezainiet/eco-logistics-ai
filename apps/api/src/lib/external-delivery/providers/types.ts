@@ -52,14 +52,19 @@ export interface ProviderFetchOk {
 export interface ProviderFetchErr {
   ok: false;
   /** Stable error code: "stub_unconfigured" / "timeout" / "http_error" /
-   *  "bad_payload" / "aborted" / "unexpected". The adapter's contract
-   *  is that this enumerates the set of routable failure modes. */
+   *  "bad_payload" / "aborted" / "ssrf_blocked" / "unexpected". The
+   *  adapter's contract is that this enumerates the set of routable
+   *  failure modes. ssrf_blocked surfaces when the SSRF guard
+   *  (lib/integrations/safe-fetch.ts) refused the request because the
+   *  configured URL resolved to a private/loopback host — a deploy
+   *  misconfiguration; loud by design so ops can triage. */
   error:
     | "stub_unconfigured"
     | "timeout"
     | "http_error"
     | "bad_payload"
     | "aborted"
+    | "ssrf_blocked"
     | "unexpected";
   /** Truncated free-form detail. Never raw stack traces. */
   detail?: string;
