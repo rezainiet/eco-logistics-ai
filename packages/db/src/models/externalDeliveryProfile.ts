@@ -133,7 +133,7 @@ const externalDeliveryProfileSchema = new Schema(
      * Phase 1 `hashPhoneForNetwork` shape. The collection is keyed
      * SOLELY on this field — global scope, no merchantId.
      */
-    phoneHash: { type: String, required: true, trim: true, maxlength: 64, unique: true },
+    phoneHash: { type: String, required: true, trim: true, maxlength: 64 },
     /**
      * Canonical normalised phone (e.g. "8801712345678"). Stored for
      * admin-tooling readability; never used as the lookup key. The
