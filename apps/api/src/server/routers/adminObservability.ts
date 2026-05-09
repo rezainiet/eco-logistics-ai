@@ -5,6 +5,8 @@ import {
   AuditLog,
   CourierLane,
   CourierPerformance,
+  EXTERNAL_DELIVERY_PROVIDERS,
+  ExternalDeliveryProfile,
   FEEDBACK_KINDS,
   FEEDBACK_STATUSES,
   Integration,
@@ -39,6 +41,20 @@ import {
   snapshotHotKeys,
   snapshotLaneCounters,
 } from "../../lib/observability/lane-intelligence.js";
+import {
+  getOrFetchExternalProfile,
+  getInflightSize,
+} from "../../lib/external-delivery/fetch-profile.js";
+import {
+  snapshotExternalDeliveryCounters,
+  snapshotProviderLatency,
+} from "../../lib/observability/external-delivery.js";
+import {
+  DEFAULT_EXTERNAL_PROVIDERS,
+  type ExternalProviderAdapter,
+} from "../../lib/external-delivery/providers/index.js";
+import { parseBdCourierResponse } from "../../lib/external-delivery/providers/bdcourier.js";
+import { hashPhoneForNetwork } from "../../lib/fraud-network.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -835,4 +851,281 @@ export const adminObservabilityRouter = router({
         generatedAt: new Date(),
       };
     }),
+
+  /* ======================================================================
+   *          Phase 4A admin tooling — external-delivery diagnostics
+   * ====================================================================== */
+
+  /**
+   * Inspect a single (merchantId, phone) external profile. Returns
+   * the full canonical shape — provider snapshots, aggregate, signals,
+   * freshness, source path. NEVER exposes raw provider payloads or
+   * API keys (parser already discards reports[] and per-courier
+   * breakdowns at write time).
+   *
+   * `forceFetch=true` bypasses cache + Mongo freshness and triggers
+   * a fresh provider fan-out — intended for staging verification.
+   */
+  externalProfileLookup: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().min(1),
+        phone: z.string().min(1).max(64),
+        forceFetch: z.boolean().optional().default(false),
+      }),
+    )
+    .query(async ({ input }) => {
+      if (!Types.ObjectId.isValid(input.merchantId)) {
+        return { ok: false as const, error: "invalid_merchant_id" };
+      }
+      const profile = await getOrFetchExternalProfile({
+        merchantId: input.merchantId,
+        phone: input.phone,
+        forceFetch: input.forceFetch,
+      });
+      if (!profile) {
+        return {
+          ok: true as const,
+          exists: false,
+          profile: null,
+          diagnostic: {
+            forceFetchUsed: input.forceFetch,
+          },
+        };
+      }
+      const failedProvidersCount = Object.values(profile.providers).filter(
+        (p) => p.configured && !p.ok,
+      ).length;
+      return {
+        ok: true as const,
+        exists: true,
+        profile,
+        diagnostic: {
+          source: profile.source,
+          isFresh: !profile.freshness.stale,
+          contributingProvidersCount:
+            profile.aggregate.contributingProviders.length,
+          failedProvidersCount,
+          forceFetchUsed: input.forceFetch,
+        },
+      };
+    }),
+
+  /**
+   * List profiles for a given signal flag. Bounded; admin-only.
+   * Optionally scope to a single merchant. Output is intentionally
+   * minimal (phoneHash + counters + signals) — never raw phone,
+   * never order ids, never raw provider payloads.
+   */
+  externalProfileCohort: adminProcedure
+    .input(
+      z.object({
+        merchantId: z.string().optional(),
+        signal: z.enum([
+          "strong_delivery_history",
+          "elevated_return_pattern",
+          "sparse_history",
+          "mixed_delivery_history",
+        ]),
+        limit: z.number().int().min(1).max(100).optional().default(25),
+      }),
+    )
+    .query(async ({ input }) => {
+      const filter: Record<string, unknown> = {
+        [`signals.${input.signal}`]: true,
+      };
+      if (input.merchantId) {
+        if (!Types.ObjectId.isValid(input.merchantId)) {
+          return { rows: [], truncated: false };
+        }
+        filter.merchantId = new Types.ObjectId(input.merchantId);
+      }
+      const limit = Math.max(1, Math.min(100, input.limit));
+      const rows = (await ExternalDeliveryProfile.find(filter)
+        .select(
+          "merchantId phoneHash aggregate signals freshness pipelineVersion updatedAt",
+        )
+        .sort({ updatedAt: -1 })
+        .limit(limit + 1)
+        .lean()
+        .exec()) as Array<{
+        merchantId: { toString(): string };
+        phoneHash: string;
+        aggregate?: {
+          total?: number;
+          delivered?: number;
+          rto?: number;
+          cancelled?: number;
+          successRate?: number | null;
+          contributingProviders?: string[];
+        };
+        signals?: Record<string, boolean | undefined>;
+        freshness?: { fetchedAt?: Date; expiresAt?: Date; stale?: boolean };
+        pipelineVersion?: string;
+        updatedAt?: Date;
+      }>;
+      const truncated = rows.length > limit;
+      const trimmed = truncated ? rows.slice(0, limit) : rows;
+      return {
+        rows: trimmed.map((r) => ({
+          merchantId: String(r.merchantId),
+          // phoneHash is admin-readable but NOT a phone number; the raw
+          // phone never appears in the cohort output.
+          phoneHash: r.phoneHash,
+          aggregate: {
+            total: r.aggregate?.total ?? 0,
+            delivered: r.aggregate?.delivered ?? 0,
+            rto: r.aggregate?.rto ?? 0,
+            cancelled: r.aggregate?.cancelled ?? 0,
+            successRate: r.aggregate?.successRate ?? null,
+            contributingProviders: r.aggregate?.contributingProviders ?? [],
+          },
+          signals: {
+            strong_delivery_history:
+              r.signals?.strong_delivery_history ?? false,
+            elevated_return_pattern:
+              r.signals?.elevated_return_pattern ?? false,
+            sparse_history: r.signals?.sparse_history ?? true,
+            mixed_delivery_history:
+              r.signals?.mixed_delivery_history ?? false,
+          },
+          freshness: {
+            fetchedAt: r.freshness?.fetchedAt ?? null,
+            expiresAt: r.freshness?.expiresAt ?? null,
+            stale: !!r.freshness?.stale,
+          },
+          pipelineVersion: r.pipelineVersion,
+          updatedAt: r.updatedAt,
+        })),
+        truncated,
+      };
+    }),
+
+  /**
+   * Run the canonical parser against a pasted JSON payload. Pure
+   * function — no I/O, never persists. Used for malformed-payload
+   * replay during staging verification: ops captures a real
+   * BDCourier response from logs and verifies the parser handles it
+   * (or surfaces a parser gap).
+   */
+  externalProviderParserDryRun: adminProcedure
+    .input(
+      z.object({
+        provider: z.enum(["bdcourier"]),
+        payload: z.unknown(),
+      }),
+    )
+    .query(({ input }) => {
+      // Bound payload size defensively — admin tools shouldn't paste
+      // multi-megabyte responses through tRPC.
+      const serialized = (() => {
+        try {
+          return JSON.stringify(input.payload);
+        } catch {
+          return null;
+        }
+      })();
+      if (!serialized || serialized.length > 64_000) {
+        return {
+          ok: false as const,
+          error: "payload_too_large_or_unserialisable",
+        };
+      }
+      if (input.provider === "bdcourier") {
+        const r = parseBdCourierResponse(input.payload);
+        return r;
+      }
+      return { ok: false as const, error: "unknown_provider" as const };
+    }),
+
+  /**
+   * Aggregate counts + observability counter snapshot for the
+   * external-delivery subsystem. Bounded; admin-only.
+   */
+  externalProfileStats: adminProcedure.query(async () => {
+    const totalProfiles = await ExternalDeliveryProfile.estimatedDocumentCount();
+    const [strong, elevated, sparse, mixed, stale] = await Promise.all([
+      ExternalDeliveryProfile.countDocuments({
+        "signals.strong_delivery_history": true,
+      }),
+      ExternalDeliveryProfile.countDocuments({
+        "signals.elevated_return_pattern": true,
+      }),
+      ExternalDeliveryProfile.countDocuments({
+        "signals.sparse_history": true,
+      }),
+      ExternalDeliveryProfile.countDocuments({
+        "signals.mixed_delivery_history": true,
+      }),
+      ExternalDeliveryProfile.countDocuments({
+        "freshness.expiresAt": { $lt: new Date() },
+      }),
+    ]);
+    return {
+      totalProfiles,
+      profilesWithSignal: {
+        strong_delivery_history: strong,
+        elevated_return_pattern: elevated,
+        sparse_history: sparse,
+        mixed_delivery_history: mixed,
+      },
+      staleProfiles: stale,
+      observabilityCounters: snapshotExternalDeliveryCounters(),
+      generatedAt: new Date(),
+    };
+  }),
+
+  /**
+   * Per-provider configured state + latency / timeout / failure
+   * statistics. Returns NEVER the API key, NEVER the URL with a key,
+   * NEVER raw error bodies — only bounded summary metrics.
+   */
+  externalProviderHealth: adminProcedure.query(() => {
+    const latencyByProvider = new Map(
+      snapshotProviderLatency().map((p) => [p.provider, p]),
+    );
+    const adapters: ExternalProviderAdapter[] = DEFAULT_EXTERNAL_PROVIDERS.slice();
+    const providers = adapters.map((a) => {
+      const latency = latencyByProvider.get(a.name) ?? {
+        provider: a.name,
+        count: 0,
+        meanMs: 0,
+        maxMs: 0,
+        timeoutCount: 0,
+        failureCount: 0,
+      };
+      return {
+        name: a.name,
+        configured: a.isConfigured(),
+        sourceVersion: a.sourceVersion,
+        latency: {
+          count: latency.count,
+          meanMs: Math.round(latency.meanMs),
+          maxMs: Math.round(latency.maxMs),
+          timeoutCount: latency.timeoutCount,
+          failureCount: latency.failureCount,
+        },
+      };
+    });
+    return {
+      providers,
+      catalogue: [...EXTERNAL_DELIVERY_PROVIDERS],
+      generatedAt: new Date(),
+    };
+  }),
+
+  /**
+   * Cache hit/miss ratio + in-flight dedupe size. Per-process; cross-
+   * pod aggregation lives at the log-aggregator layer.
+   */
+  externalCacheMetrics: adminProcedure.query(() => {
+    const counters = snapshotExternalDeliveryCounters();
+    return {
+      cacheHit: counters.cacheHit,
+      cacheMiss: counters.cacheMiss,
+      cacheHitRatio: counters.cacheHitRatio,
+      inflightDedupeSize: getInflightSize(),
+      generatedAt: new Date(),
+    };
+  }),
 });

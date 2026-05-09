@@ -112,7 +112,7 @@ const responseSchema = z
   })
   .passthrough();
 
-interface NormalisedCounters {
+export interface NormalisedCounters {
   total: number;
   delivered: number;
   rto: number;
