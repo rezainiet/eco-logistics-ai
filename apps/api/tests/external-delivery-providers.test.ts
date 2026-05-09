@@ -153,6 +153,7 @@ describe("external-delivery / provider stubs", () => {
   it("fetchHistory always resolves to stub_unconfigured for stubs", async () => {
     for (const a of DEFAULT_EXTERNAL_PROVIDERS) {
       const r = await a.fetchHistory({
+        merchantId: "507f1f77bcf86cd799439011",
         normalizedPhone: "8801712345678",
         timeoutMs: 1000,
       });
@@ -166,6 +167,7 @@ describe("external-delivery / provider stubs", () => {
     for (const a of DEFAULT_EXTERNAL_PROVIDERS) {
       await expect(
         a.fetchHistory({
+          merchantId: "",
           normalizedPhone: "",
           timeoutMs: 0,
         }),

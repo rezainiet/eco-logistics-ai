@@ -17,6 +17,13 @@
  */
 
 export interface ProviderFetchInput {
+  /**
+   * Owning merchant — the adapter looks up THIS merchant's
+   * `Merchant.couriers[<provider>].apiKey/apiSecret` to authenticate
+   * the call. The data returned is the merchant's own historical
+   * orders for the buyer phone (NOT a cross-merchant query).
+   */
+  merchantId: string;
   /** Canonical 13-digit BD phone ("8801XXXXXXXXX"). Already normalised. */
   normalizedPhone: string;
   /** Per-call timeout. The orchestrator passes a short value (5s default). */
