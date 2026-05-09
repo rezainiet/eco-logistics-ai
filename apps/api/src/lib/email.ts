@@ -24,7 +24,7 @@ import { env } from "../env.js";
  * provides defaults + ENV overrides so unit tests never need a DB.
  *
  * EMAIL_FROM env still takes precedence over the branded sender. That
- * lets staging deploys flag themselves as "Cordon · STAGING" without
+ * lets staging deploys flag themselves as "ConfirmX · STAGING" without
  * touching the DB.
  */
 

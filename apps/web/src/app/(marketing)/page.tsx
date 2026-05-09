@@ -609,7 +609,7 @@ export default function HomePage() {
                         textAnchor="middle"
                         style={{ fill: "#0A0A0B", fontWeight: 600 }}
                       >
-                        cordon
+                        confirmx
                       </text>
                     </svg>
                   </div>
@@ -627,7 +627,7 @@ export default function HomePage() {
               Three modes. <span className="serif">You decide how much to let go.</span>
             </h2>
             <p className="section-sub">
-              From cautious to fully autonomous. ConfirmX respects how you want to run your store
+              From cautious to fully automated. ConfirmX respects how you want to run your store
               — and lets you change your mind whenever.
             </p>
 
@@ -666,7 +666,7 @@ export default function HomePage() {
                   high-risk orders land on your desk.
                 </p>
                 <ul className="mode-list">
-                  <li>End-to-end pipeline, no human touch</li>
+                  <li>End-to-end pipeline, hands-off operations</li>
                   <li>Twilio confirmation for medium-risk</li>
                   <li>SLA-grade recovery on failures</li>
                 </ul>

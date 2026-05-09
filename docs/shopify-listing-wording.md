@@ -142,5 +142,165 @@ Search the codebase: `grep -r "TODO\[brand\]" packages apps`
 - `apps/web/src/app/legal/terms/page.tsx` — § 9 limitation-of-liability uses `_brand.legalName.toUpperCase()` (auto-tracks the registered entity once filled). Optional: add governing-law / jurisdiction clause if counsel wants one.
 
 Also pre-submit:
-- Replace logo asset files in `apps/web/public/brand/` (currently still Cordon artwork).
-- Verify `support@confirmx.ai` and `privacy@confirmx.ai` are working inboxes.
+- Drop logo + brand assets into `apps/web/public/brand/` (the
+  directory does NOT currently exist; six files are missing —
+  `logo.svg`, `logo-mono.svg`, `email-logo.png`, `og.png`,
+  `apple-touch-icon.png`, `favicon.ico`). See
+  `docs/audits/shopify-brand-consistency-audit.md §3` for the full
+  spec.
+- Verify `support@confirmx.ai` and `privacy@confirmx.ai` are
+  working inboxes; verify SPF/DKIM/DMARC on `confirmx.ai`. See
+  `docs/audits/shopify-legal-contact-readiness.md` for the full
+  external-infra checklist.
+
+---
+
+## Merchant value framing (one paragraph each)
+
+For copy that needs to lead with the merchant's actual problem, not
+ours:
+
+**The COD problem in Bangladesh.** Cash-on-delivery is 70%+ of
+Bangladesh's online retail volume — and 30%+ of those orders return
+to the merchant unsold (RTO). Every RTO is the merchant eating the
+courier round-trip cost. Most RTOs are preventable at confirmation
+time: wrong address, fake number, repeat returner, courier-area
+mismatch. ConfirmX is the operational layer that surfaces those
+signals before the package leaves the warehouse.
+
+**What ConfirmX actually does.** For each new order, route it into
+one of three buckets — auto-confirm (low risk, ship), confirmation
+call (operator dials the customer), or human review (operator
+decides). Every threshold is tunable; every action is audit-logged.
+Couriers (Pathao, Steadfast, RedX) get booked automatically once
+the order is confirmed, with tracking events flowing back to the
+dashboard.
+
+**What ConfirmX is NOT.** Not an autonomous fraud detector, not a
+black-box AI, not customer surveillance. We surface signals; the
+operator decides. No order is cancelled, blocked, or charged
+without a human action.
+
+**Who it's for.** BD-based Shopify merchants doing 50+ COD orders
+a day, where one operator can't manually verify each order before
+it ships.
+
+---
+
+## Onboarding screenshots needed (for App Store listed submission)
+
+Unlisted submission does NOT require screenshots. If/when we pursue
+App Store Listed (post-Unlisted approval), we'll need 5+ screenshots
+at 1600×1200 minimum:
+
+| # | Surface | Captures |
+|---|---|---|
+| 1 | `/dashboard/getting-started` | Onboarding hero + checklist after first install |
+| 2 | `/dashboard` | KPI cards + 7-day chart after 1+ week of data |
+| 3 | `/dashboard/orders` | Order list with risk-aware sample preview |
+| 4 | Order drawer (click row from #3) | Tracking timeline + intent panel + address quality |
+| 5 | `/dashboard/fraud-review` | Operator review queue with one flagged order open |
+| 6 | `/dashboard/settings/integrations` | Connected Shopify card with health badge |
+
+Capture against a demo store with seeded data. Use the staging
+environment's branding (post-asset-drop) to ensure logos render.
+
+---
+
+## FAQ — for Partner Dashboard listing (Listed submission)
+
+Reviewers and merchants both consult the FAQ. Answers stay short
+(2–3 lines each) and avoid AI / fraud / autonomous vocabulary.
+
+**Q: Does ConfirmX cancel orders automatically?**
+No. ConfirmX surfaces signals; the operator decides every action.
+The "Reject" action in our review queue is a human button click,
+not an autonomous rule. Cancellations are audit-logged with the
+operator's identity.
+
+**Q: How does ConfirmX use my customer data?**
+We act as a data processor for the personal data you push to us
+through Shopify. Customer phone is shown to operators on the
+review queue for the optional confirmation-call workflow; we never
+exfiltrate or retain customer data beyond what's needed for the
+active order. Full detail in our privacy policy.
+
+**Q: What happens to my data when I uninstall?**
+Within ~5 seconds, your integration row flips to "disconnected".
+48 hours later, Shopify sends `shop/redact` to our endpoint and we
+hard-delete every record tied to your shop in dependency order.
+This is real redaction (`apps/api/src/lib/gdpr/redaction.ts`),
+not a stub.
+
+**Q: Is ConfirmX an AI fraud detector?**
+No. ConfirmX is operator tooling for COD confirmation workflows.
+Every threshold the system uses is tunable by the merchant; every
+risk score is a deterministic computation, not a black-box model.
+The operational vocabulary is by design — we're an operations
+platform, not a fraud-screening platform.
+
+**Q: Which couriers does ConfirmX integrate with?**
+Pathao, Steadfast, RedX (the three primary BD couriers). Per-
+merchant credentials are AES-256-GCM-encrypted at rest; rotation
+is supported. Adding a courier is a settings-page action.
+
+**Q: How do I bill my merchants?**
+We bill the merchant directly via Stripe (USD or BDT) or via manual
+bKash/Nagad approval. Shopify Billing API is not used; no Shopify
+revenue share applies for off-platform billing on Public
+Distribution Unlisted.
+
+**Q: What region does ConfirmX serve?**
+Bangladesh-first by design — bKash/Nagad payment rails, BTRC-
+compliant SMS, BDT pricing, BD courier APIs, BD address gazetteer
+(thana → district resolution).
+
+**Q: How do I get help during a review or production issue?**
+Email `support@confirmx.ai` (24h response during review windows;
+~4h business-hours response for paying merchants). For privacy or
+data-handling questions, email `privacy@confirmx.ai`.
+
+**Q: Can I install ConfirmX on multiple stores?**
+Yes. Each store creates its own integration row with its own access
+token; merchants with multi-store accounts can operate them from
+the same ConfirmX dashboard.
+
+**Q: What if Shopify changes the GDPR webhook spec?**
+We monitor Shopify's deprecation notices and update the handler at
+`apps/api/src/server/webhooks/shopify-gdpr.ts`. Existing handlers
+remain replay-safe and HMAC-verified across spec revisions because
+the receiver is structured to accept any of the three current GDPR
+topics on either a single URL or per-topic URLs.
+
+---
+
+## Support copy for Partner Dashboard
+
+Two text fields most submissions need:
+
+**Support / contact details (for Partner Dashboard "Support" field):**
+
+> ConfirmX support is reachable at support@confirmx.ai. We respond
+> within 24 hours during review windows and within 4 business hours
+> for paying merchants. Privacy / data-handling questions:
+> privacy@confirmx.ai. Status updates and incident history:
+> status.confirmx.ai.
+
+**Reviewer-facing instructions (for Partner Dashboard "Reviewer
+notes" field):**
+
+> Demo store credentials and the suggested review path are in
+> docs/shopify-reviewer-test-flow.md (linked from our GitHub repo).
+> The five-step happy-path takes ~2 minutes:
+>
+> 1. Install via the link above
+> 2. Approve scopes (read_orders, write_orders, read_customers)
+> 3. Land on /dashboard/settings/integrations — verify connection
+> 4. Place a test order on the dev store — verify it appears in
+>    /dashboard/orders within 30 seconds
+> 5. Uninstall — verify the integration card flips to disconnected
+>    within 5 seconds
+>
+> Happy to drop write_orders on review request; the alternative is
+> to redirect operators into Shopify admin to perform cancel
+> actions manually (a click cost, not a feature loss).

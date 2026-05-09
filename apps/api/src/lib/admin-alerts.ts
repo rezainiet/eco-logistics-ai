@@ -222,7 +222,7 @@ export async function deliverAdminAlert(
         try {
           // SMS sender brand reads from centralized branding so a rebrand
           // (or future white-label) propagates to every alert channel
-          // without code changes. Default = "Cordon Ops" today.
+          // without code changes. Default = "ConfirmX Ops" today.
           const branding = await loadBrandingFromStore();
           const r = await sendCriticalAlertSms(
             admin.phone,

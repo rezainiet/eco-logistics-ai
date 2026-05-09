@@ -20,6 +20,8 @@ SHOPIFY_APP_API_KEY=<from Partner Dashboard → ConfirmX → Configuration → C
 SHOPIFY_APP_API_SECRET=<from same panel → Client secret — NEVER commit>
 NODE_ENV=production
 TRUSTED_PROXIES=<Railway proxy CIDR or "uniquelocal,linklocal">
+SENTRY_DSN=<from Sentry project settings — optional but recommended>
+SENTRY_RELEASE=<deploy commit SHA — optional, for filtering>
 ```
 
 Plus the production-required vars already documented in `.env.example`:
@@ -85,9 +87,13 @@ All must be resolved before flipping to Public Distribution.
 
 - [ ] Replace logo asset files in `apps/web/public/brand/`
   (`logo.svg`, `logo-mono.svg`, `email-logo.png`, `og.png`,
-  `apple-touch-icon.png`, `favicon.ico`). Branding package
-  references the URLs; the artwork at those URLs needs to be
-  ConfirmX, not Cordon.
+  `apple-touch-icon.png`, `favicon.ico`). The directory does NOT
+  currently exist — six files are missing entirely. Branding
+  package references the URLs; without the files, the dashboard
+  shows broken-image icons and transactional emails render
+  without the brand header. See
+  `docs/audits/shopify-brand-consistency-audit.md §3` for the
+  full spec + dimensions per file.
 - [ ] Verify `support@confirmx.ai` + `privacy@confirmx.ai` accept
   mail. Reviewers test delivery.
 - [ ] Spot-check the dashboard on `app.confirmx.ai` in an
@@ -97,6 +103,78 @@ All must be resolved before flipping to Public Distribution.
 - [ ] Run the OAuth flow end-to-end on a fresh Shopify dev store
   to confirm: install → callback → webhooks register → first
   order webhook arrives → operator review queue surfaces it.
+
+## 5b. Post-deploy verification (probes, workers, Sentry)
+
+Once the API + web services are live on `api.confirmx.ai` /
+`app.confirmx.ai`, walk through these BEFORE flipping distribution:
+
+### Liveness vs readiness
+
+- [ ] `curl https://api.confirmx.ai/health` → `200 {"ok":true}`
+- [ ] `curl https://api.confirmx.ai/ready` → `200 {"ok":true,"checks":{"mongo":{"ok":true},"redis":{"ok":true}}}`
+- [ ] Configure Railway's readiness probe to point at `/ready`
+      (not `/health`). `/health` stays as the liveness probe — a
+      transient Redis hiccup must NOT restart the pod, only remove
+      it from rotation. Anchor: `apps/api/src/index.ts` `/health`
+      vs `/ready` handlers.
+
+### Worker boot verification
+
+- [ ] In api logs, confirm the boot block contains all 16 workers:
+  ```
+  [boot] env=production port=4000 telemetry=on
+  [redis] ping ok
+  [boot/syncIndexes] Order ok in <Nms>
+  ... (5 more index-sync lines)
+  [boot] pending-job-replay armed (worker concurrency=1, sweep every 30s)
+  [boot] order-sync polling fallback armed (worker concurrency=1, sweep every 5m)
+  [api] listening on http://localhost:4000
+  ```
+- [ ] If `[boot/syncIndexes]` is missing for `CustomerReliability`
+      or `AddressReliability`, halt — the unique compound indexes
+      MUST exist before `DELIVERY_RELIABILITY_WRITE_ENABLED=1` can
+      be flipped (per `final-production-readiness-report.md §3.2`).
+      Anchor: `apps/api/src/index.ts:166`.
+
+### Sentry telemetry
+
+- [ ] Trigger a deliberate non-fatal error (e.g. POST to a
+      malformed admin endpoint with bad payload) and confirm the
+      event lands in the Sentry project. `[boot]
+      telemetry=on` log line confirms DSN is parsed; no event
+      arrives means DSN is wrong.
+- [ ] Confirm the web error boundaries also report — visit a
+      deliberately-broken route (e.g. `/dashboard/[bogus]`) and
+      verify the event arrives with `tags.boundary=app_root`.
+
+### Webhook surfaces
+
+- [ ] `POST` an unsigned probe to `/api/integrations/webhook/shopify/<bogus-id>`
+      → expect `401` and `webhook.signature_invalid` log line.
+- [ ] `POST` an unsigned probe to `/api/webhooks/shopify/gdpr/customers/redact`
+      → expect `401`.
+- [ ] In Partner Dashboard, use the "Test webhook" feature on each
+      GDPR topic with the platform secret — expect `200` plus an
+      audit row with `action: "shopify.gdpr_webhook"` followed by
+      a second row with `action: "shopify.gdpr_dispatch"`.
+
+### Cordon-residue final sweep
+
+- [ ] `grep -ri "[Cc]ordon" apps/web/public` → no hits (assets
+      directory must not contain legacy artwork).
+- [ ] In an authenticated browser session at
+      `https://app.confirmx.ai/dashboard`, use DevTools' "Find in
+      page" (Cmd-F / Ctrl-F) for "Cordon" — no rendered text hits.
+      Internal CSS class names on `.cordon-card` etc. are
+      intentionally left for post-approval rename (see
+      `docs/audits/shopify-brand-consistency-audit.md §2.1`).
+
+### TODO[brand] sweep
+
+- [ ] `grep -rn "TODO\[brand\]" packages apps` → only the
+      documented entries remain (legalName, optional physical
+      address, optional jurisdiction clause). No new entries.
 
 ## 6. Distribution flip
 
