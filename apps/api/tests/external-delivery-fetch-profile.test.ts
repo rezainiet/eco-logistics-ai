@@ -305,6 +305,56 @@ describe("external-delivery / fetch-profile — Mongo cache layer", () => {
   });
 });
 
+describe("external-delivery / fetch-profile — forceFetch", () => {
+  it("forceFetch=true bypasses Mongo freshness and re-runs providers", async () => {
+    let providerCalls = 0;
+    const adapter: ExternalProviderAdapter = {
+      name: "pathao",
+      sourceVersion: "fake-v1",
+      isConfigured: () => true,
+      fetchHistory: async () => {
+        providerCalls += 1;
+        return {
+          ok: true,
+          total: 7,
+          delivered: 7,
+          rto: 0,
+          cancelled: 0,
+          successRate: 1,
+          durationMs: 5,
+        };
+      },
+    };
+    // Warm the Mongo profile via a normal fetch.
+    const a = await getOrFetchExternalProfile({
+      merchantId: MERCHANT_A,
+      phone: PHONE,
+      providers: [adapter],
+    });
+    expect(a!.source).toBe("providers");
+    expect(providerCalls).toBe(1);
+
+    // forceFetch=false: would return source="mongo" without re-running.
+    const b = await getOrFetchExternalProfile({
+      merchantId: MERCHANT_A,
+      phone: PHONE,
+      providers: [adapter],
+    });
+    expect(b!.source).toBe("mongo");
+    expect(providerCalls).toBe(1);
+
+    // forceFetch=true: bypasses Mongo, re-runs providers, persists fresh.
+    const c = await getOrFetchExternalProfile({
+      merchantId: MERCHANT_A,
+      phone: PHONE,
+      providers: [adapter],
+      forceFetch: true,
+    });
+    expect(c!.source).toBe("providers");
+    expect(providerCalls).toBe(2);
+  });
+});
+
 describe("external-delivery / fetch-profile — in-flight dedupe", () => {
   it("two concurrent callers for same (merchant, phone) share a single fan-out", async () => {
     let pathaoCalls = 0;

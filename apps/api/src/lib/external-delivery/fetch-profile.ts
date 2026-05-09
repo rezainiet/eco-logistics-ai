@@ -105,6 +105,22 @@ export interface FetchProfileInput {
   providers?: ReadonlyArray<ExternalProviderAdapter>;
   /** Override default timeout (test injection). */
   timeoutMs?: number;
+  /**
+   * Bypass BOTH the Redis cache AND the Mongo freshness check —
+   * always trigger a fresh provider fan-out. Intended for admin
+   * staging-verification flows; never set on the merchant hot path.
+   *
+   * Default false. When true:
+   *   - Skip the Redis read (record cache_miss with reason="forced").
+   *   - Skip the Mongo `isFresh` short-circuit; use the row only as
+   *     a fallback if the provider fan-out fails.
+   *   - Always invoke providers, persist a fresh snapshot, refresh
+   *     the cache.
+   *
+   * Replay-safety unchanged: still uses atomic $set upsert; idempotent
+   * across concurrent forced-fetches via the in-flight dedupe.
+   */
+  forceFetch?: boolean;
 }
 
 /**
@@ -158,6 +174,7 @@ export async function getOrFetchExternalProfile(
     normalizedPhone,
     input.providers ?? DEFAULT_EXTERNAL_PROVIDERS,
     input.timeoutMs ?? env.EXTERNAL_DELIVERY_PROVIDER_TIMEOUT_MS,
+    input.forceFetch === true,
   );
   inFlight.set(key, promise);
   try {
@@ -178,47 +195,59 @@ async function runOnce(
   normalizedPhone: string,
   providers: ReadonlyArray<ExternalProviderAdapter>,
   timeoutMs: number,
+  forceFetch: boolean,
 ): Promise<ExternalProfileResult | null> {
   const cacheParts: CacheKeyParts = { merchantHex, phoneHash };
 
-  // Step 3 — Redis cache.
-  const cached = await getCachedProfile(cacheParts);
-  if (cached.hit && cached.payload) {
-    const payload = cached.payload.body as ExternalProfileResult | undefined;
-    if (payload && isFresh(payload.freshness)) {
-      recordExternalDeliveryObservability({
-        event: "external_profile_cache_hit",
-        merchantId: merchantHex,
-        phoneHash,
-      });
-      return { ...payload, source: "cache" };
-    }
-    // Stale-in-cache — fall through.
-  } else if (cached.warning === "parse_error") {
-    void invalidateCachedProfile(cacheParts);
+  if (forceFetch) {
+    // Skip BOTH cache layers; record the miss with a stable reason so
+    // ops can distinguish forced fetches from natural ones.
     recordExternalDeliveryObservability({
       event: "external_profile_cache_miss",
       merchantId: merchantHex,
       phoneHash,
-      reason: cached.warning,
+      reason: "forced",
     });
   } else {
-    recordExternalDeliveryObservability({
-      event: "external_profile_cache_miss",
-      merchantId: merchantHex,
-      phoneHash,
-      reason: cached.warning,
-    });
-  }
+    // Step 3 — Redis cache.
+    const cached = await getCachedProfile(cacheParts);
+    if (cached.hit && cached.payload) {
+      const payload = cached.payload.body as ExternalProfileResult | undefined;
+      if (payload && isFresh(payload.freshness)) {
+        recordExternalDeliveryObservability({
+          event: "external_profile_cache_hit",
+          merchantId: merchantHex,
+          phoneHash,
+        });
+        return { ...payload, source: "cache" };
+      }
+      // Stale-in-cache — fall through.
+    } else if (cached.warning === "parse_error") {
+      void invalidateCachedProfile(cacheParts);
+      recordExternalDeliveryObservability({
+        event: "external_profile_cache_miss",
+        merchantId: merchantHex,
+        phoneHash,
+        reason: cached.warning,
+      });
+    } else {
+      recordExternalDeliveryObservability({
+        event: "external_profile_cache_miss",
+        merchantId: merchantHex,
+        phoneHash,
+        reason: cached.warning,
+      });
+    }
 
-  // Step 4 — Mongo profile.
-  const stored = await readStoredProfile(merchantOid, merchantHex, phoneHash);
-  if (stored && isFresh(stored.freshness)) {
-    void setCachedProfile(cacheParts, {
-      body: stored,
-      fetchedAt: stored.freshness.fetchedAt.getTime(),
-    });
-    return { ...stored, source: "mongo" };
+    // Step 4 — Mongo profile.
+    const stored = await readStoredProfile(merchantOid, merchantHex, phoneHash);
+    if (stored && isFresh(stored.freshness)) {
+      void setCachedProfile(cacheParts, {
+        body: stored,
+        fetchedAt: stored.freshness.fetchedAt.getTime(),
+      });
+      return { ...stored, source: "mongo" };
+    }
   }
 
   // Step 5 — provider fan-out.
@@ -568,6 +597,19 @@ async function persistProfile(args: {
     { body: result, fetchedAt: now.getTime() },
   );
   return result;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Admin diagnostics                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Per-process count of currently-in-flight provider fan-outs. Surfaced
+ * via the admin `externalCacheMetrics` procedure to verify the
+ * dedupe registry is working as expected.
+ */
+export function getInflightSize(): number {
+  return inFlight.size;
 }
 
 /* -------------------------------------------------------------------------- */
