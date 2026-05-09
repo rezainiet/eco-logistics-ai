@@ -151,6 +151,21 @@ const IMPLICIT_THRESHOLD = 40;
 
 const MIN_OBSERVATIONS_FOR_SIGNAL = 3;
 const MIN_OBSERVATIONS_FOR_LANE_SIGNAL = 30;
+/**
+ * Floor on resolved customer outcomes before a low-success penalty fires.
+ * Phase 1: bumped from 3→5. Bangladesh COD reality is that early-life
+ * cancellations are commonly merchant-side (out of stock) or buyer-life
+ * events (changed mind, family conflict) rather than fraud — so a buyer
+ * with 0/1/2 (delivered/rto/cancelled) shouldn't carry a permanent penalty
+ * until the sample is large enough to be diagnostic.
+ */
+const MIN_OBSERVATIONS_FOR_LOW_SUCCESS = 5;
+/**
+ * Distinct phones on the same address before the trust-layer mirror of
+ * `duplicate_address` fires. Phase 1: bumped from 3→5 (matches the new
+ * `ADDRESS_REUSE_THRESHOLD` in `server/risk.ts`).
+ */
+const ADDRESS_MULTI_BUYER_THRESHOLD = 5;
 
 const STALE_DAYS = 180;
 const STALE_MS = STALE_DAYS * 24 * 60 * 60 * 1000;
@@ -281,8 +296,10 @@ function analyzeCustomerAxis(
   }
 
   // customer_low_success_rate — flat penalty when the buyer's resolved-order
-  // success rate sits below 40%.
-  if (deliveredRate < 0.4) {
+  // success rate sits below 40%. Requires a meaningful sample
+  // (`MIN_OBSERVATIONS_FOR_LOW_SUCCESS`) so a single bad burst on a brand-new
+  // buyer doesn't stick a permanent label.
+  if (samples >= MIN_OBSERVATIONS_FOR_LOW_SUCCESS && deliveredRate < 0.4) {
     signals.push({
       key: "customer_low_success_rate",
       weight: -WEIGHTS.customerLowSuccess,
@@ -334,13 +351,18 @@ function analyzeAddressAxis(
     });
   }
 
-  // address_multi_buyer — three or more distinct phones at the same address
-  // is the same threshold the existing `duplicate_address` fraud signal uses.
-  if (distinctPhones >= 3) {
+  // address_multi_buyer — five-or-more distinct phones at the same address
+  // (Phase 1: was three). Sustained-success suppression: an address with
+  // delivered ≥ distinctPhones is almost certainly a legitimate shared
+  // location (apartment, family, workplace) and gets no penalty.
+  if (
+    distinctPhones >= ADDRESS_MULTI_BUYER_THRESHOLD &&
+    !(distinctPhones > 0 && delivered >= distinctPhones)
+  ) {
     signals.push({
       key: "address_multi_buyer",
       weight: -WEIGHTS.addressMultiBuyer,
-      detail: `${distinctPhones} distinct buyers have shipped to this address.`,
+      detail: `${distinctPhones} distinct buyers have shipped to this address — could be a shared address (apartment / family / workplace).`,
     });
   }
 
@@ -539,6 +561,8 @@ export const __TEST = {
   IMPLICIT_THRESHOLD,
   MIN_OBSERVATIONS_FOR_SIGNAL,
   MIN_OBSERVATIONS_FOR_LANE_SIGNAL,
+  MIN_OBSERVATIONS_FOR_LOW_SUCCESS,
+  ADDRESS_MULTI_BUYER_THRESHOLD,
   STALE_DAYS,
   STALE_MS,
   WEIGHTS,
