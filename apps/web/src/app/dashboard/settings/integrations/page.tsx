@@ -687,7 +687,7 @@ export default function IntegrationsPage() {
         credential_decrypt_failed:
           "We couldn't read your stored credentials. Click Connect to try again.",
         hmac_mismatch:
-          "Your store address or API key is incorrect. Double-check and try again.",
+          "Shopify and ConfirmX could not agree on the install signature. This is on our side, not yours — please contact support so we can re-pair the app.",
         token_exchange_failed:
           "We couldn't connect right now. Please try again in a moment.",
         shopify_install_rejected:
@@ -1478,6 +1478,11 @@ function ConnectDialog({
                 id="shopify-domain"
                 placeholder="mystore.myshopify.com"
                 autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                data-form-type="other"
                 value={shopify.shopDomain}
                 onChange={(e) =>
                   setShopify({ ...shopify, shopDomain: e.target.value })
@@ -1520,44 +1525,100 @@ function ConnectDialog({
               {showAdvanced ? (
                 <div className="space-y-3 border-t border-stroke/12 px-3 py-3">
                   <p className="text-2xs text-fg-muted">
-                    Skip the one-click flow and paste credentials from a
-                    Shopify custom app you already created. Most merchants
-                    don't need this.
+                    Already created a Shopify custom app? Paste its credentials
+                    below to skip the one-click flow. Most merchants don't need
+                    this — use the store-address field above instead.
                   </p>
+                  <details className="rounded-md border border-stroke/12 bg-surface px-3 py-2 text-2xs text-fg-muted">
+                    <summary className="cursor-pointer font-medium text-fg-subtle hover:text-fg">
+                      Where do I get these?
+                    </summary>
+                    <ol className="mt-2 list-decimal space-y-1 pl-4 text-fg-faint">
+                      <li>
+                        In your Shopify admin: <span className="text-fg-muted">Settings → Apps and sales channels → Develop apps</span>.
+                      </li>
+                      <li>
+                        Click <span className="text-fg-muted">Allow custom app development</span> if it's your first time.
+                      </li>
+                      <li>
+                        <span className="text-fg-muted">Create an app</span> → name it (e.g. "ConfirmX") → set scopes <span className="text-fg-muted">read_orders</span> + <span className="text-fg-muted">read_customers</span>.
+                      </li>
+                      <li>
+                        Click <span className="text-fg-muted">Install app</span>, then open the <span className="text-fg-muted">API credentials</span> tab. Copy the values from there.
+                      </li>
+                    </ol>
+                    <p className="mt-2">
+                      Full guide:{" "}
+                      <a
+                        href="https://help.shopify.com/manual/apps/app-types/custom-apps"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-brand underline"
+                      >
+                        Shopify custom-app docs
+                      </a>
+                      .
+                    </p>
+                  </details>
                   <div className="space-y-1.5">
                     <Label>API key</Label>
                     <Input
-                      placeholder="From Shopify admin → Develop apps → API credentials"
+                      placeholder="Starts with the same prefix as the merchant's app, e.g. 1a2b3c..."
+                      autoComplete="off"
+                      spellCheck={false}
+                      data-1p-ignore="true"
+                      data-lpignore="true"
+                      data-form-type="other"
                       value={shopify.apiKey}
                       onChange={(e) =>
                         setShopify({ ...shopify, apiKey: e.target.value })
                       }
                     />
+                    <p className="text-2xs text-fg-faint">
+                      Shopify admin → Settings → Apps and sales channels →
+                      Develop apps → your app → API credentials → "API key".
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <Label>API secret key</Label>
                     <Input
                       type="password"
-                      placeholder="Paste the secret from Shopify"
+                      placeholder="Paste the secret from your custom app"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      data-1p-ignore="true"
+                      data-lpignore="true"
+                      data-form-type="other"
                       value={shopify.apiSecret}
                       onChange={(e) =>
                         setShopify({ ...shopify, apiSecret: e.target.value })
                       }
                     />
+                    <p className="text-2xs text-fg-faint">
+                      Same screen, "API secret key" — click the eye icon in
+                      Shopify to reveal it before copying.
+                    </p>
                   </div>
                   <div className="space-y-1.5">
                     <Label>Admin API access token (optional)</Label>
                     <Input
                       type="password"
-                      placeholder="Paste only if you already installed the app"
+                      placeholder="shpat_… — only if you already clicked Install in Shopify"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      data-1p-ignore="true"
+                      data-lpignore="true"
+                      data-form-type="other"
                       value={shopify.accessToken}
                       onChange={(e) =>
                         setShopify({ ...shopify, accessToken: e.target.value })
                       }
                     />
                     <p className="text-2xs text-fg-faint">
-                      With a token, we skip OAuth and connect immediately.
-                      Otherwise we'll send you to Shopify to approve.
+                      Found in the same "API credentials" tab after you click
+                      Install. Shopify reveals it once — copy it then or you'll
+                      have to rotate. With a token, we skip OAuth and connect
+                      immediately. Otherwise we'll send you to Shopify to approve.
                     </p>
                   </div>
                 </div>
@@ -1606,6 +1667,11 @@ function ConnectDialog({
               <Label>Site URL</Label>
               <Input
                 placeholder="https://my-store.com"
+                autoComplete="off"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                data-form-type="other"
                 value={woo.siteUrl}
                 onChange={(e) => setWoo({ ...woo, siteUrl: e.target.value })}
               />
@@ -1613,6 +1679,11 @@ function ConnectDialog({
             <div>
               <Label>Consumer key</Label>
               <Input
+                autoComplete="off"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                data-form-type="other"
                 value={woo.consumerKey}
                 onChange={(e) => setWoo({ ...woo, consumerKey: e.target.value })}
               />
@@ -1621,6 +1692,11 @@ function ConnectDialog({
               <Label>Consumer secret</Label>
               <Input
                 type="password"
+                autoComplete="new-password"
+                spellCheck={false}
+                data-1p-ignore="true"
+                data-lpignore="true"
+                data-form-type="other"
                 value={woo.consumerSecret}
                 onChange={(e) => setWoo({ ...woo, consumerSecret: e.target.value })}
               />

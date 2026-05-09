@@ -488,9 +488,39 @@ shopifyOauthRouter.get(
     const queryForHmac = req.query as Record<string, string | string[] | undefined>;
     if (platformSecret) {
       if (!verifyShopifyOAuthHmac(queryForHmac, platformSecret)) {
+        // Diagnostic logging — surface the client_id Shopify signed the
+        // callback with, so the operator can compare it against
+        // env.SHOPIFY_APP_API_KEY at a glance. The most common cause of
+        // this error is "Railway has the secret of a different app than
+        // the install URL was minted against" (e.g. an old rotation, or
+        // creds copied from the wrong Partner org). Without the
+        // client_id in the log, the only way to tell was to manually
+        // diff every secret in every org. We also emit the HMAC prefix
+        // so a follow-up replay test can confirm whether it's our
+        // verification logic or Shopify itself that is off.
+        const seenClientId = typeof req.query.client_id === "string"
+          ? req.query.client_id.slice(0, 12) + "..."
+          : null;
+        const expectedClientId = env.SHOPIFY_APP_API_KEY
+          ? env.SHOPIFY_APP_API_KEY.slice(0, 12) + "..."
+          : null;
+        const seenHmac = typeof req.query.hmac === "string"
+          ? req.query.hmac.slice(0, 8) + "..."
+          : null;
+        const platformSecretPrefix = platformSecret.slice(0, 8) + "...";
         console.warn("[shopify-oauth] hmac_mismatch (platform-secret check)", {
           rawShop: shop,
           normalizedShop,
+          seenClientId,
+          expectedClientId,
+          clientIdMatches: seenClientId === expectedClientId,
+          seenHmac,
+          platformSecretPrefix,
+          // Likely cause hint for the operator scanning logs:
+          likely_cause:
+            seenClientId === expectedClientId
+              ? "client_id matches; SHOPIFY_APP_API_SECRET on Railway is wrong or stale (try the New secret in Dev Dashboard, or rotate)"
+              : "client_id MISMATCH — Railway env points at a different Shopify app than the install URL was minted against",
         });
         return fail("hmac_mismatch");
       }
