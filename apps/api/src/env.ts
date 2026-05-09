@@ -66,7 +66,22 @@ const schema = z
       .enum(["0", "1"])
       .optional()
       .transform((v) => v === "1"),
-    // --- Transactional email (Resend) ---
+    // --- Public-facing canonical URLs ---
+    /**
+     * Canonical API origin (no trailing slash). Used in webhook
+     * callback URLs we register with Shopify / Pathao / etc., in
+     * the storefront tracker bootstrap, and in OAuth redirect URIs.
+     *
+     * Optional in dev (callsites fall back to http://localhost:4000)
+     * but PRODUCTION-REQUIRED — see refine() at the bottom of this
+     * schema. Booting in production with this unset previously
+     * registered webhook URLs as `localhost:4000`, which Shopify
+     * accepts and silently drops on first delivery: cause of a real
+     * outage shape we now refuse to ship.
+     */
+    PUBLIC_API_URL: z.string().url().optional(),
+    /** Canonical merchant-facing frontend origin (no trailing slash).
+     *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),
     EMAIL_FROM: z.string().optional(),
     PUBLIC_WEB_URL: z.string().url().optional(),
@@ -441,6 +456,20 @@ const schema = z
   .refine((e) => e.NODE_ENV !== "production" || !!e.ADMIN_SECRET, {
     message: "ADMIN_SECRET is required when NODE_ENV=production",
     path: ["ADMIN_SECRET"],
+  })
+  .refine((e) => e.NODE_ENV !== "production" || !!e.PUBLIC_API_URL, {
+    message:
+      "PUBLIC_API_URL is required when NODE_ENV=production — webhook " +
+      "callbacks and OAuth redirects must point at the real API origin, " +
+      "not the localhost fallback.",
+    path: ["PUBLIC_API_URL"],
+  })
+  .refine((e) => e.NODE_ENV !== "production" || !!e.PUBLIC_WEB_URL, {
+    message:
+      "PUBLIC_WEB_URL is required when NODE_ENV=production — email " +
+      "links, dashboard redirects, and embedded SDK URLs must point " +
+      "at the real merchant frontend origin, not localhost.",
+    path: ["PUBLIC_WEB_URL"],
   });
 
 export type Env = z.infer<typeof schema>;
