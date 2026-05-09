@@ -7,35 +7,10 @@ import {
 } from "@ecom/db";
 import { ADDRESS_PIPELINE_VERSION } from "./address-canonical.js";
 import { normalizeDistrict } from "./district.js";
-import { env } from "../env.js";
-
-/* -------------------------------------------------------------------------- */
-/* Observability — lightweight structured-log emit for the new writers.       */
-/* The reliability-observability counter store has a closed enum we don't     */
-/* extend in this phase; lane/area events log with a stable shape so the      */
-/* admin observability surface can adopt them later without breaking          */
-/* schema parity.                                                              */
-/* -------------------------------------------------------------------------- */
-
-type LaneObsEvent =
-  | "lane_updated"
-  | "area_updated"
-  | "lane_write_failed"
-  | "area_write_failed";
-
-function emitLaneObs(event: LaneObsEvent, payload: Record<string, unknown>): void {
-  if (!env.DELIVERY_RELIABILITY_OBSERVABILITY_ENABLED) return;
-  try {
-    const line = JSON.stringify({ msg: "lane_intelligence", event, ...payload });
-    if (event === "lane_write_failed" || event === "area_write_failed") {
-      console.error(line);
-    } else {
-      console.log(line);
-    }
-  } catch {
-    /* defence-in-depth — never throw back into a chokepoint fan-out */
-  }
-}
+import {
+  recordHotKeyHit,
+  recordLaneObservability,
+} from "./observability/lane-intelligence.js";
 
 /**
  * Phase 3 — courier-lane + area-reliability writers.
@@ -222,28 +197,32 @@ export async function recordCourierLaneOutcome(
       },
       { upsert: true },
     );
-    emitLaneObs("lane_updated", {
-      merchantId: merchantOid.toHexString(),
-      reason: outcome,
-      durationMs: Date.now() - startedAt,
+    const merchantHex = merchantOid.toHexString();
+    recordLaneObservability({
+      event: "lane_updated",
+      merchantId: merchantHex,
       courier,
       district,
       thana,
-      attempt,
+      reason: outcome,
+      durationMs: Date.now() - startedAt,
+      meta: { attempt },
     });
+    recordHotKeyHit(`${merchantHex}|lane|${courier}|${district}|${thana}`);
   } catch (err) {
     console.error(
       "[courier-lane] outcome write failed:",
       (err as Error)?.message ?? err,
     );
-    emitLaneObs("lane_write_failed", {
+    recordLaneObservability({
+      event: "lane_write_failed",
       merchantId: merchantOid.toHexString(),
-      reason: outcome,
-      durationMs: Date.now() - startedAt,
-      error: (err as Error)?.message?.slice(0, 200),
       courier,
       district,
       thana,
+      reason: outcome,
+      durationMs: Date.now() - startedAt,
+      error: (err as Error)?.message?.slice(0, 200),
     });
   }
 }
@@ -346,24 +325,27 @@ export async function recordAreaOutcome(
       { upsert: true },
     );
 
-    emitLaneObs("area_updated", {
-      merchantId: merchantOid.toHexString(),
-      reason: outcome,
-      durationMs: Date.now() - startedAt,
-      division,
+    const merchantHex = merchantOid.toHexString();
+    recordLaneObservability({
+      event: "area_updated",
+      merchantId: merchantHex,
       district,
       thana,
-      unreachable: input.unreachable === true,
+      reason: outcome,
+      durationMs: Date.now() - startedAt,
+      meta: { division, unreachable: input.unreachable === true },
     });
+    recordHotKeyHit(`${merchantHex}|area|${division}|${district}|${thana}`);
   } catch (err) {
-    emitLaneObs("area_write_failed", {
+    recordLaneObservability({
+      event: "area_write_failed",
       merchantId: merchantOid.toHexString(),
+      district,
+      thana,
       reason: outcome,
       durationMs: Date.now() - startedAt,
       error: (err as Error)?.message?.slice(0, 200),
-      division,
-      district,
-      thana,
+      meta: { division },
     });
   }
 }
