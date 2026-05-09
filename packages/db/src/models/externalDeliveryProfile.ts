@@ -59,6 +59,20 @@ export type ExternalDeliveryProvider = (typeof EXTERNAL_DELIVERY_PROVIDERS)[numb
 /* Per-provider snapshot subdoc                                               */
 /* -------------------------------------------------------------------------- */
 
+/** Optional self-reported provider freshness label. Future adapters
+ *  whose upstream exposes a "data updated at" timestamp can map it
+ *  into one of these stable buckets so the merchant UI can render
+ *  "Pathao data updated within the last week" without leaking exact
+ *  timestamps. Current adapters do NOT populate this — left undefined. */
+export const PROVIDER_FRESHNESS_QUALITIES = [
+  "fresh",
+  "weeks_old",
+  "months_old",
+  "stale",
+] as const;
+export type ProviderFreshnessQuality =
+  (typeof PROVIDER_FRESHNESS_QUALITIES)[number];
+
 const providerSnapshotSchema = new Schema(
   {
     /** False when the provider is not enabled or has no API access for
@@ -80,6 +94,26 @@ const providerSnapshotSchema = new Schema(
     sourceVersion: { type: String, trim: true, maxlength: 32 },
     /** Truncated error message when ok=false; never raw stack traces. */
     error: { type: String, trim: true, maxlength: 200 },
+    /**
+     * Optional future-proofing fields. Default undefined; current
+     * adapters do not populate them. Future adapters whose upstream
+     * exposes richer metadata can drop these in without a schema
+     * migration. The signal classifier and the orchestrator handle
+     * absence cleanly.
+     */
+    /** 0..1 — how much we trust THIS provider's data for THIS phone.
+     *  Future use: weight the per-provider variance computation by
+     *  confidence so a low-confidence provider doesn't trigger
+     *  `mixed_delivery_history` on its own. */
+    providerConfidence: { type: Number, min: 0, max: 1 },
+    /** Approximate days of history this snapshot covers. Some
+     *  providers expose "we have N days of records for this phone";
+     *  others don't. Surfaced to admin diagnostics so operators can
+     *  judge whether sparse_history is an artifact of provider
+     *  coverage gaps vs genuinely-new buyer. */
+    dataCoverageDepth: { type: Number, min: 0 },
+    /** Provider's own assertion of how fresh THEIR data is. */
+    freshnessQuality: { type: String, enum: PROVIDER_FRESHNESS_QUALITIES },
   },
   { _id: false },
 );
