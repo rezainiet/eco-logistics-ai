@@ -225,6 +225,55 @@ const orderCallSchema = new Schema(
 );
 
 /**
+ * Bangladesh address canonicalisation v1 — Phase 2 additive subdoc.
+ *
+ * Stamped at ingest by `apps/api/src/lib/address-canonical.ts` against the
+ * in-memory gazetteer (`apps/api/src/lib/gazetteer.ts`). Read-only on the
+ * Order document; the canonicaliser is a pure function and the writer is
+ * the ingest path. Absent on legacy orders and on ingests where the flag
+ * `ADDRESS_CANONICALIZATION_ENABLED` is off.
+ *
+ * Replay-safety contract:
+ *   - ADDITIVE ONLY. The sibling `addressHash` field is NOT replaced or
+ *     re-derived; existing reliability/network aggregates keyed on
+ *     `addressHash` remain valid.
+ *   - `pipelineVersion` pins this row to the canonicaliser shape that
+ *     produced it. Future v2 writes never mutate v1 rows in place.
+ *   - `buildingKey` and `unitKey` are SHA-256[:32] hex strings — same
+ *     replay-safe fingerprint shape as `addressHash`.
+ */
+const canonicalAddressSchema = new Schema(
+  {
+    pipelineVersion: { type: String, trim: true, maxlength: 16 },
+    division: { type: String, trim: true, lowercase: true, maxlength: 100 },
+    district: { type: String, trim: true, lowercase: true, maxlength: 100 },
+    thana: { type: String, trim: true, lowercase: true, maxlength: 100 },
+    area: { type: String, trim: true, lowercase: true, maxlength: 100 },
+    road: { type: String, trim: true, lowercase: true, maxlength: 60 },
+    house: { type: String, trim: true, lowercase: true, maxlength: 60 },
+    block: { type: String, trim: true, lowercase: true, maxlength: 60 },
+    flat: { type: String, trim: true, lowercase: true, maxlength: 60 },
+    /** Sorted + deduped residual token cloud. Bounded at 40 to cap document
+     *  size — addresses long enough to need more tokens are degenerate. */
+    tokens: {
+      type: [String],
+      default: undefined,
+      validate: {
+        validator: (arr: unknown) =>
+          arr === undefined || (Array.isArray(arr) && arr.length <= 40),
+        message: "tokens cannot exceed 40 entries",
+      },
+    },
+    buildingKey: { type: String, trim: true, maxlength: 64 },
+    unitKey: { type: String, trim: true, maxlength: 64 },
+    confidence: { type: String, enum: ["high", "medium", "low"] },
+    matchedOn: { type: [String], default: undefined },
+    computedAt: { type: Date },
+  },
+  { _id: false },
+);
+
+/**
  * Where the order originated from. Populated best-effort — `ip` is captured
  * from the tRPC request context (respecting `trust proxy`) and normalized to
  * a single address. `addressHash` is a stable fingerprint of the delivery
@@ -235,6 +284,11 @@ const sourceSchema = new Schema(
     ip: { type: String, trim: true, maxlength: 64 },
     userAgent: { type: String, trim: true, maxlength: 500 },
     addressHash: { type: String, trim: true, maxlength: 64, index: true },
+    /**
+     * Phase 2 canonical address. Additive — the legacy `addressHash` above
+     * is unchanged. See `canonicalAddressSchema` for the contract.
+     */
+    canonicalAddress: { type: canonicalAddressSchema, default: undefined },
     channel: {
       type: String,
       enum: ["dashboard", "bulk_upload", "api", "webhook", "system"],
