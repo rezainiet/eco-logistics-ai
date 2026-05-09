@@ -47,7 +47,12 @@ export type ExternalDeliveryPipelineVersion =
 
 /** Provider-name catalogue. New providers (e.g. "ecourier", "sundarban")
  *  drop in by extending this list and shipping a matching adapter. */
-export const EXTERNAL_DELIVERY_PROVIDERS = ["pathao", "steadfast", "redx"] as const;
+export const EXTERNAL_DELIVERY_PROVIDERS = [
+  "bdcourier",
+  "pathao",
+  "steadfast",
+  "redx",
+] as const;
 export type ExternalDeliveryProvider = (typeof EXTERNAL_DELIVERY_PROVIDERS)[number];
 
 /* -------------------------------------------------------------------------- */

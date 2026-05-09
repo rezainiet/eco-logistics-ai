@@ -115,8 +115,9 @@ describe("external-delivery / boundedFetch", () => {
 /* -------------------------------------------------------------------------- */
 
 describe("external-delivery / provider stubs", () => {
-  it("DEFAULT_EXTERNAL_PROVIDERS lists pathao, steadfast, redx in that order", () => {
+  it("DEFAULT_EXTERNAL_PROVIDERS lists bdcourier first (real adapter), then per-merchant stubs", () => {
     expect(DEFAULT_EXTERNAL_PROVIDERS.map((p) => p.name)).toEqual([
+      "bdcourier",
       "pathao",
       "steadfast",
       "redx",
@@ -128,7 +129,9 @@ describe("external-delivery / provider stubs", () => {
       expect(typeof a.name).toBe("string");
       expect(a.name.length).toBeGreaterThan(0);
       expect(typeof a.sourceVersion).toBe("string");
-      expect(a.sourceVersion).toMatch(/-stub-v\d+$/);
+      // bdcourier is a real adapter; pathao/steadfast/redx are stubs.
+      // Both shapes match a versioned label.
+      expect(a.sourceVersion).toMatch(/-(stub-)?v\d+$/);
     }
   });
 
