@@ -202,10 +202,9 @@ function SignupForm() {
       <div className="mt-5 flex items-center justify-center gap-2 text-center text-2xs text-fg-faint">
         <span className="cordon-pulse" aria-hidden />
         <span>
-          Used by{" "}
-          <strong className="font-semibold text-fg-muted">200+ BD merchants</strong>
+          <strong className="font-semibold text-fg-muted">Built for BD COD merchants</strong>
           {" · "}
-          <strong className="font-semibold text-fg-muted">৳45 Cr+</strong> RTO prevented
+          Prevent RTO at the confirmation stage
         </span>
       </div>
 

@@ -207,16 +207,16 @@ function ValueColumn() {
         </h2>
         <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl border border-stroke/30 bg-surface/60 p-2.5 text-center">
           <div>
-            <div className="font-mono text-xs font-semibold text-fg">200+</div>
-            <div className="text-2xs text-fg-faint">BD merchants</div>
+            <div className="text-2xs font-medium uppercase tracking-wide text-fg">Built for BD</div>
+            <div className="text-2xs text-fg-faint">COD merchants</div>
           </div>
           <div className="border-x border-stroke/30">
-            <div className="font-mono text-xs font-semibold text-fg">৳45 Cr+</div>
-            <div className="text-2xs text-fg-faint">RTO prevented</div>
+            <div className="text-2xs font-medium uppercase tracking-wide text-fg">Prevent RTO</div>
+            <div className="text-2xs text-fg-faint">at confirmation</div>
           </div>
           <div>
-            <div className="font-mono text-xs font-semibold text-fg">99.9%</div>
-            <div className="text-2xs text-fg-faint">webhook uptime</div>
+            <div className="text-2xs font-medium uppercase tracking-wide text-fg">Replay-safe</div>
+            <div className="text-2xs text-fg-faint">webhooks</div>
           </div>
         </div>
       </div>
@@ -278,15 +278,15 @@ function ValueColumn() {
         {/* Hard trust band — mirrors the landing's proof-band stats. */}
         <div className="mt-2 grid grid-cols-3 gap-3 rounded-xl border border-stroke/30 bg-surface/60 p-3 text-center">
           <div>
-            <div className="font-mono text-sm font-semibold text-fg">200+</div>
-            <div className="text-2xs text-fg-faint">BD merchants</div>
+            <div className="text-xs font-medium uppercase tracking-wide text-fg">Built for BD</div>
+            <div className="text-2xs text-fg-faint">COD merchants</div>
           </div>
           <div className="border-x border-stroke/30">
-            <div className="font-mono text-sm font-semibold text-fg">৳45 Cr+</div>
-            <div className="text-2xs text-fg-faint">RTO prevented</div>
+            <div className="text-xs font-medium uppercase tracking-wide text-fg">Prevent RTO</div>
+            <div className="text-2xs text-fg-faint">at confirmation</div>
           </div>
           <div>
-            <div className="font-mono text-sm font-semibold text-fg">99.9%</div>
+            <div className="text-xs font-medium uppercase tracking-wide text-fg">Replay-safe</div>
             <div className="text-2xs text-fg-faint">webhook delivery</div>
           </div>
         </div>
