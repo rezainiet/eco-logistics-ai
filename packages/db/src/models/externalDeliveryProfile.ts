@@ -105,10 +105,17 @@ const aggregateSchema = new Schema(
 
 const signalsSchema = new Schema(
   {
-    high_rto_customer: { type: Boolean, default: false },
+    /** Cumulative delivery history is strong relative to volume. */
     strong_delivery_history: { type: Boolean, default: false },
+    /** Return rate is elevated. Operational evidence — NOT a fraud
+     *  verdict. May reflect buyer-side OR merchant-side cancellations,
+     *  RTOs, or upstream-data ambiguity. */
+    elevated_return_pattern: { type: Boolean, default: false },
+    /** Insufficient observations to draw any conclusion. */
     sparse_history: { type: Boolean, default: true },
-    mixed_provider_reputation: { type: Boolean, default: false },
+    /** Provider-to-provider success rates disagree materially —
+     *  operational evidence, NOT a verdict. */
+    mixed_delivery_history: { type: Boolean, default: false },
   },
   { _id: false },
 );

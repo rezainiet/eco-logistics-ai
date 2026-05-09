@@ -22,22 +22,29 @@ import {
 /* -------------------------------------------------------------------------- */
 
 export interface ExternalDeliverySignals {
-  /** rtoRate >= 0.25 AND total >= 10. */
-  high_rto_customer: boolean;
-  /** successRate >= 0.90 AND total >= 15. */
+  /** successRate >= 0.90 AND total >= 15. Strong cumulative delivery
+   *  history relative to volume. */
   strong_delivery_history: boolean;
-  /** total < 5. */
+  /** (rto + cancelled) / total >= 0.25 AND total >= 10. Operational
+   *  evidence that returns are elevated; NOT a fraud verdict. May
+   *  reflect buyer-side or merchant-side cancellations, RTOs, or
+   *  upstream-data ambiguity (some providers conflate the categories). */
+  elevated_return_pattern: boolean;
+  /** total < 5 — too few observations to draw a conclusion. */
   sparse_history: boolean;
-  /** Per-provider successRate σ > 0.20 across ≥2 contributing providers. */
-  mixed_provider_reputation: boolean;
+  /** Per-provider successRate σ > 0.20 across ≥2 contributing
+   *  providers. Operational evidence — different providers see
+   *  materially different histories, which may indicate provider
+   *  data-quality variance OR a phone reassignment. NOT a verdict. */
+  mixed_delivery_history: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
 /* Tunables                                                                   */
 /* -------------------------------------------------------------------------- */
 
-const HIGH_RTO_RATE = 0.25;
-const HIGH_RTO_MIN_OBSERVATIONS = 10;
+const ELEVATED_RETURN_RATE = 0.25;
+const ELEVATED_RETURN_MIN_OBSERVATIONS = 10;
 const STRONG_SUCCESS_RATE = 0.9;
 const STRONG_MIN_OBSERVATIONS = 15;
 const SPARSE_HISTORY_THRESHOLD = 5;
@@ -62,31 +69,37 @@ export function classifyExternalDeliverySignals(
   const total = aggregate.total ?? 0;
   const delivered = aggregate.delivered ?? 0;
   const rto = aggregate.rto ?? 0;
-  const decided = delivered + rto;
-  const rtoRate = decided > 0 ? rto / decided : 0;
+  const cancelled = aggregate.cancelled ?? 0;
   const successRate = aggregate.successRate ?? 0;
 
+  // Elevated-return-rate uses (rto + cancelled) / total. Some providers
+  // (notably BDCourier-style aggregators) lump RTOs into cancelled
+  // counters; this denominator captures the worst-case interpretation
+  // honestly without exaggerating either category.
+  const returnish = rto + cancelled;
+  const elevatedRate = total > 0 ? returnish / total : 0;
+
   const sparse_history = total < SPARSE_HISTORY_THRESHOLD;
-  // sparse history short-circuits the positive/negative classifications —
-  // we don't have enough data to make a verdict.
-  const high_rto_customer =
+  // Sparse history short-circuits both positive AND negative
+  // classifications — we don't have enough data to draw conclusions.
+  const elevated_return_pattern =
     !sparse_history &&
-    total >= HIGH_RTO_MIN_OBSERVATIONS &&
-    rtoRate >= HIGH_RTO_RATE;
+    total >= ELEVATED_RETURN_MIN_OBSERVATIONS &&
+    elevatedRate >= ELEVATED_RETURN_RATE;
   const strong_delivery_history =
     !sparse_history &&
     total >= STRONG_MIN_OBSERVATIONS &&
     successRate >= STRONG_SUCCESS_RATE;
 
   const variance = providerSuccessRateVariance(providers);
-  const mixed_provider_reputation =
+  const mixed_delivery_history =
     variance > MIXED_REPUTATION_VARIANCE_THRESHOLD;
 
   return {
-    high_rto_customer,
     strong_delivery_history,
+    elevated_return_pattern,
     sparse_history,
-    mixed_provider_reputation,
+    mixed_delivery_history,
   };
 }
 
@@ -95,8 +108,8 @@ export function classifyExternalDeliverySignals(
 /* -------------------------------------------------------------------------- */
 
 export const __TEST = {
-  HIGH_RTO_RATE,
-  HIGH_RTO_MIN_OBSERVATIONS,
+  ELEVATED_RETURN_RATE,
+  ELEVATED_RETURN_MIN_OBSERVATIONS,
   STRONG_SUCCESS_RATE,
   STRONG_MIN_OBSERVATIONS,
   SPARSE_HISTORY_THRESHOLD,

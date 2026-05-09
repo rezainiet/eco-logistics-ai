@@ -170,32 +170,43 @@ describe("external-delivery / classifyExternalDeliverySignals", () => {
       [],
     );
     expect(r).toEqual({
-      high_rto_customer: false,
       strong_delivery_history: false,
+      elevated_return_pattern: false,
       sparse_history: true,
-      mixed_provider_reputation: false,
+      mixed_delivery_history: false,
     });
   });
 
   it("sparse_history=true short-circuits both positive AND negative verdicts", () => {
-    // Below SPARSE_HISTORY_THRESHOLD (5) — even with 100% RTO we won't
-    // call the buyer high-rto.
+    // Below SPARSE_HISTORY_THRESHOLD (5) — even with 100% returns we won't
+    // call the buyer elevated-return.
     const r = classifyExternalDeliverySignals(
       { total: 4, delivered: 0, rto: 4, cancelled: 0, successRate: 0, contributingProviders: ["pathao"] },
       [provider("pathao", { total: 4, delivered: 0, rto: 4 })],
     );
     expect(r.sparse_history).toBe(true);
-    expect(r.high_rto_customer).toBe(false);
+    expect(r.elevated_return_pattern).toBe(false);
   });
 
-  it("high_rto_customer fires at rtoRate >= 0.25 with >= 10 observations", () => {
+  it("elevated_return_pattern fires at (rto+cancelled)/total >= 0.25 with >= 10 obs", () => {
     const r = classifyExternalDeliverySignals(
       { total: 20, delivered: 14, rto: 6, cancelled: 0, successRate: 14 / 20, contributingProviders: ["pathao"] },
       [provider("pathao", { total: 20, delivered: 14, rto: 6, successRate: 14 / 20 })],
     );
-    // 6/20 = 30% RTO → high_rto fires
-    expect(r.high_rto_customer).toBe(true);
+    // 6/20 = 30% returnish → elevated fires
+    expect(r.elevated_return_pattern).toBe(true);
     expect(r.sparse_history).toBe(false);
+  });
+
+  it("elevated_return_pattern uses (rto + cancelled) — covers providers that conflate the two", () => {
+    // BDCourier-style: the upstream lumps RTOs into cancelled, so we
+    // see rto=0 cancelled=5 on 15 total. The signal must still fire.
+    const r = classifyExternalDeliverySignals(
+      { total: 15, delivered: 10, rto: 0, cancelled: 5, successRate: 1, contributingProviders: ["bdcourier"] },
+      [provider("bdcourier", { total: 15, delivered: 10, rto: 0, cancelled: 5, successRate: 1 })],
+    );
+    // 5/15 = 33% returnish via cancelled → elevated still fires
+    expect(r.elevated_return_pattern).toBe(true);
   });
 
   it("strong_delivery_history fires at successRate >= 0.9 with >= 15 observations", () => {
@@ -214,7 +225,7 @@ describe("external-delivery / classifyExternalDeliverySignals", () => {
     expect(r.strong_delivery_history).toBe(false);
   });
 
-  it("mixed_provider_reputation fires when per-provider variance > threshold", () => {
+  it("mixed_delivery_history fires when per-provider variance > threshold", () => {
     const r = classifyExternalDeliverySignals(
       { total: 30, delivered: 20, rto: 10, cancelled: 0, successRate: 20 / 30, contributingProviders: ["pathao", "redx"] },
       [
@@ -222,12 +233,12 @@ describe("external-delivery / classifyExternalDeliverySignals", () => {
         provider("redx", { total: 15, delivered: 6, rto: 9 }),     // 40%
       ],
     );
-    expect(r.mixed_provider_reputation).toBe(true);
+    expect(r.mixed_delivery_history).toBe(true);
   });
 
   it("__TEST tunables are exported for downstream test calibration", () => {
     expect(__TEST.SPARSE_HISTORY_THRESHOLD).toBe(5);
-    expect(__TEST.HIGH_RTO_MIN_OBSERVATIONS).toBe(10);
+    expect(__TEST.ELEVATED_RETURN_MIN_OBSERVATIONS).toBe(10);
     expect(__TEST.STRONG_MIN_OBSERVATIONS).toBe(15);
   });
 });

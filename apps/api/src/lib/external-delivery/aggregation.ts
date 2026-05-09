@@ -85,7 +85,7 @@ export function aggregateProviders(
 
 /**
  * Compute the per-provider success-rate variance for the
- * mixed_provider_reputation signal. Returns 0 when fewer than 2
+ * mixed_delivery_history signal. Returns 0 when fewer than 2
  * providers contributed (no comparison possible).
  *
  * Variance uses delivered/(delivered+rto) per provider, ignoring

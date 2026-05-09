@@ -356,10 +356,10 @@ function rowToResult(row: RowShape, merchantHex: string): ExternalProfileResult 
     contributingProviders: row.aggregate?.contributingProviders ?? [],
   };
   const signals = {
-    high_rto_customer: row.signals?.high_rto_customer ?? false,
     strong_delivery_history: row.signals?.strong_delivery_history ?? false,
+    elevated_return_pattern: row.signals?.elevated_return_pattern ?? false,
     sparse_history: row.signals?.sparse_history ?? true,
-    mixed_provider_reputation: row.signals?.mixed_provider_reputation ?? false,
+    mixed_delivery_history: row.signals?.mixed_delivery_history ?? false,
   };
   const fetchedAt = row.freshness?.fetchedAt ?? new Date(0);
   const expiresAt = row.freshness?.expiresAt ?? new Date(0);
