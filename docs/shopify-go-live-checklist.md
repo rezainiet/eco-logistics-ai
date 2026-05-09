@@ -51,7 +51,7 @@ In `partners.shopify.com` → Apps → ConfirmX → Configuration:
 
 | Field | Value |
 |---|---|
-| App URL | `https://app.confirmx.ai/dashboard/integrations` |
+| App URL | `https://app.confirmx.ai/dashboard/settings/integrations` |
 | Allowed redirection URL(s) | `https://api.confirmx.ai/api/integrations/oauth/shopify/callback` |
 | Privacy policy URL | `https://app.confirmx.ai/legal/privacy` |
 | Terms of service URL | `https://app.confirmx.ai/legal/terms` |

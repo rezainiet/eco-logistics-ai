@@ -30,7 +30,13 @@ handle = "confirmx"
 # Where the merchant lands AFTER OAuth approves. The connect flow
 # expects `?connected=shopify&shop=...` and parses optional `warning=`
 # query params — see apps/api/src/server/webhooks/integrations.ts.
-application_url = "https://app.confirmx.ai/dashboard/integrations"
+#
+# We point at the canonical settings path directly to skip a client-
+# side redirect hop on every install. The legacy `/dashboard/integrations`
+# route still exists as a query-string-preserving redirect for any
+# external links pinned to the old URL (apps/web/src/app/dashboard/
+# integrations/page.tsx).
+application_url = "https://app.confirmx.ai/dashboard/settings/integrations"
 
 # External (non-embedded) app — we render in our own dashboard, not
 # inside Shopify admin's iframe. App Bridge integration is deferred;

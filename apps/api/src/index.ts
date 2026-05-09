@@ -3,13 +3,14 @@ import cors from "cors";
 import helmet from "helmet";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { env } from "./env.js";
+import mongoose from "mongoose";
 import { connectDb, disconnectDb } from "./lib/db.js";
 import {
   captureException,
   installProcessHooks,
   isTelemetryEnabled,
 } from "./lib/telemetry.js";
-import { assertRedisOrExit } from "./lib/redis.js";
+import { assertRedisOrExit, getRedis } from "./lib/redis.js";
 import { initQueues, shutdownQueues } from "./lib/queue.js";
 import { appRouter } from "./server/routers/index.js";
 import { createContext } from "./server/trpc.js";
@@ -280,7 +281,60 @@ async function main() {
   app.use("/api/webhooks/shopify/gdpr", webhookLimiter, shopifyGdprWebhookRouter);
   app.use(express.json({ limit: "1mb" }));
 
+  // Liveness — process is up and the event loop is responsive. Cheap
+  // check used by Railway's container probe; never depends on Mongo
+  // or Redis (a transient blip there must not restart the pod).
   app.get("/health", (_req, res) => res.json({ ok: true }));
+
+  // Readiness — process is healthy AND its critical dependencies are
+  // reachable. Use this for the Railway readiness probe and for any
+  // load-balancer-managed cutover. Returns 200 with per-dependency
+  // state on green, 503 on red. Pings only — never holds connections.
+  // Failure here NEVER restarts the pod (that's `/health`'s job); it
+  // just removes the pod from rotation until deps recover.
+  app.get("/ready", async (_req, res) => {
+    const checks: Record<string, { ok: boolean; detail?: string }> = {};
+    let allOk = true;
+
+    // Mongo: readyState===1 means connected. We avoid a round-trip
+    // ping because Mongoose already reports an authoritative state
+    // from the driver. A stale-but-connected handle still counts as
+    // ready; if it's truly broken the next request would surface it.
+    const mongoState = mongoose.connection.readyState;
+    const mongoOk = mongoState === 1;
+    checks.mongo = mongoOk
+      ? { ok: true }
+      : { ok: false, detail: `readyState=${mongoState}` };
+    if (!mongoOk) allOk = false;
+
+    // Redis: PING with a short hard timeout. ioredis's
+    // `maxRetriesPerRequest=3` means a fully-down Redis would still
+    // resolve fast (rejected after retries). The race here exists in
+    // case the client is mid-reconnect and the promise hangs; we'd
+    // rather report 503 than block the probe.
+    if (env.REDIS_URL) {
+      try {
+        const client = getRedis();
+        const pingResult = await Promise.race([
+          client.ping(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("redis_ping_timeout")), 1500),
+          ),
+        ]);
+        checks.redis = { ok: pingResult === "PONG" };
+        if (pingResult !== "PONG") allOk = false;
+      } catch (err) {
+        checks.redis = { ok: false, detail: (err as Error).message.slice(0, 80) };
+        allOk = false;
+      }
+    } else {
+      // Dev-only path — Redis is optional. Reflect that honestly so a
+      // local probe doesn't mistake "not configured" for "unhealthy".
+      checks.redis = { ok: true, detail: "not configured (dev)" };
+    }
+
+    res.status(allOk ? 200 : 503).json({ ok: allOk, checks });
+  });
   app.use("/auth", authRouter);
   app.use("/admin", adminRouter);
   // Stripe webhook MUST mount before any JSON parser — verifyStripeWebhook

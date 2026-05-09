@@ -402,7 +402,13 @@ export const shopifyOauthRouter = express.Router();
 shopifyOauthRouter.get(
   "/oauth/shopify/callback",
   async (req: Request, res: Response) => {
-    const dashboard = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3001"}/dashboard/integrations`;
+    // Land directly on the canonical settings path. The legacy
+    // `/dashboard/integrations` route still redirects (preserving
+    // query strings) for external links pinned to the old URL, but
+    // skipping the redirect on every install removes one hop from
+    // the merchant's first-impression flow. Must stay in lock-step
+    // with `application_url` in shopify.app.toml.
+    const dashboard = `${process.env.PUBLIC_WEB_URL ?? "http://localhost:3001"}/dashboard/settings/integrations`;
     const fail = (errorCode: string) =>
       res.redirect(`${dashboard}?error=${encodeURIComponent(errorCode)}`);
 
