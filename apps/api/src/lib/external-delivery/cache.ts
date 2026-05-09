@@ -7,8 +7,10 @@ import { getRedis } from "../redis.js";
  * Hard rules (binding):
  *   - NEVER throws back to the caller. Any Redis outage degrades the
  *     get to a miss and the set to a no-op.
- *   - Versioned key prefix. A future Phase 4B schema bump can drop
- *     the prefix to invalidate cleanly without rewriting rows.
+ *   - Versioned + merchant-scoped key prefix. Each (merchantId,
+ *     phoneHash) lives at its own key — no cross-merchant cache
+ *     collisions, no leak risk if one merchant's profile is
+ *     accidentally serialised back to another.
  *   - JSON-serialised payloads. Provider snapshots must not contain
  *     functions / cyclic refs (the model schema enforces this).
  *   - TTL driven by `EXTERNAL_DELIVERY_TTL_HOURS`; clamped at the env
@@ -28,8 +30,14 @@ export interface ExternalProfileCachePayload {
   fetchedAt: number;
 }
 
-function cacheKey(phoneHash: string): string {
-  return `${KEY_PREFIX}${phoneHash}`;
+export interface CacheKeyParts {
+  /** Merchant-id hex — already toHexString'd by the caller. */
+  merchantHex: string;
+  phoneHash: string;
+}
+
+function cacheKey(parts: CacheKeyParts): string {
+  return `${KEY_PREFIX}${parts.merchantHex}:${parts.phoneHash}`;
 }
 
 function ttlSeconds(): number {
@@ -49,18 +57,28 @@ export interface CacheGetResult {
   warning?: "redis_unavailable" | "parse_error";
 }
 
-/** Read a cached profile payload by phoneHash. Returns hit=false on
- *  any cache miss, parse failure, or Redis outage — the caller is
- *  expected to fall through to the Mongo profile read. */
+function isValidParts(parts: CacheKeyParts | null | undefined): parts is CacheKeyParts {
+  return !!(
+    parts &&
+    typeof parts.merchantHex === "string" &&
+    parts.merchantHex.length > 0 &&
+    typeof parts.phoneHash === "string" &&
+    parts.phoneHash.length > 0
+  );
+}
+
+/** Read a cached profile payload by (merchantId, phoneHash). Returns
+ *  hit=false on any cache miss, parse failure, or Redis outage — the
+ *  caller is expected to fall through to the Mongo profile read. */
 export async function getCachedProfile(
-  phoneHash: string,
+  parts: CacheKeyParts,
 ): Promise<CacheGetResult> {
-  if (!phoneHash || typeof phoneHash !== "string") {
+  if (!isValidParts(parts)) {
     return { hit: false, payload: null };
   }
   let raw: string | null = null;
   try {
-    raw = await getRedis().get(cacheKey(phoneHash));
+    raw = await getRedis().get(cacheKey(parts));
   } catch {
     return { hit: false, payload: null, warning: "redis_unavailable" };
   }
@@ -84,10 +102,10 @@ export async function getCachedProfile(
  *  ok=false on Redis outage; the orchestrator continues without
  *  blocking. */
 export async function setCachedProfile(
-  phoneHash: string,
+  parts: CacheKeyParts,
   payload: ExternalProfileCachePayload,
 ): Promise<{ ok: boolean }> {
-  if (!phoneHash || typeof phoneHash !== "string") return { ok: false };
+  if (!isValidParts(parts)) return { ok: false };
   const serialized = (() => {
     try {
       return JSON.stringify(payload);
@@ -97,7 +115,7 @@ export async function setCachedProfile(
   })();
   if (!serialized) return { ok: false };
   try {
-    await getRedis().set(cacheKey(phoneHash), serialized, "EX", ttlSeconds());
+    await getRedis().set(cacheKey(parts), serialized, "EX", ttlSeconds());
     return { ok: true };
   } catch {
     return { ok: false };
@@ -107,11 +125,11 @@ export async function setCachedProfile(
 /** Invalidate a cached profile — used by admin tooling and by the
  *  orchestrator when it detects a parse_error on read. */
 export async function invalidateCachedProfile(
-  phoneHash: string,
+  parts: CacheKeyParts,
 ): Promise<{ ok: boolean }> {
-  if (!phoneHash || typeof phoneHash !== "string") return { ok: false };
+  if (!isValidParts(parts)) return { ok: false };
   try {
-    await getRedis().del(cacheKey(phoneHash));
+    await getRedis().del(cacheKey(parts));
     return { ok: true };
   } catch {
     return { ok: false };

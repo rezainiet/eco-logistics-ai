@@ -15,16 +15,23 @@ describe("external-delivery / cache key contract", () => {
     expect(__TEST.KEY_PREFIX).toBe("extdp:v1:");
   });
 
-  it("cacheKey produces stable shape", () => {
-    const k = __TEST.cacheKey("a".repeat(32));
-    expect(k).toBe(`extdp:v1:${"a".repeat(32)}`);
+  it("cacheKey is keyed (merchantHex, phoneHash) — merchant scope baked in", () => {
+    const k = __TEST.cacheKey({
+      merchantHex: "507f1f77bcf86cd799439011",
+      phoneHash: "a".repeat(32),
+    });
+    expect(k).toBe(`extdp:v1:507f1f77bcf86cd799439011:${"a".repeat(32)}`);
   });
 
-  it("cacheKey passes any phoneHash form (no normalisation here)", () => {
-    // The key prefix is the only stability guarantee. Hash normalisation
-    // happens upstream in lib/external-delivery/normalization.ts.
-    const a = __TEST.cacheKey("foo");
-    const b = __TEST.cacheKey("FOO");
+  it("two merchants observing the same phone produce DIFFERENT cache keys", () => {
+    const a = __TEST.cacheKey({
+      merchantHex: "507f1f77bcf86cd799439011",
+      phoneHash: "phone1",
+    });
+    const b = __TEST.cacheKey({
+      merchantHex: "507f1f77bcf86cd799439022",
+      phoneHash: "phone1",
+    });
     expect(a).not.toBe(b);
   });
 
