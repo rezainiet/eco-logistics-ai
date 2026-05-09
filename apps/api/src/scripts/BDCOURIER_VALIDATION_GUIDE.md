@@ -35,7 +35,40 @@ Copy `bdcourier-cohort-template.json` and replace each `phone` with a REAL Bangl
 | `newly_active_customer` | Customer active for <3 months |
 | `merchant_cancellation_inflated` | Buyer where the merchant cancels often (out-of-stock); risk of false `elevated_return_pattern` |
 
-## Run
+## Run — three modes, run in this order
+
+### 1. Pre-flight (env + provider + cohort sanity, no upstream calls)
+
+Before burning provider quota, verify your environment and cohort first. This makes zero provider calls and catches misconfig early:
+
+```bash
+npx tsx apps/api/src/scripts/validateBdCourier.ts \
+  --merchantId 507f1f77bcf86cd799439011 \
+  --cohort ./my-staging-cohort.json \
+  --preflight
+```
+
+The script reports `BLOCK` / `WARN` / `PASS` lines. **Fix every `BLOCK` before continuing.** Common blockers:
+- `EXTERNAL_DELIVERY_ENABLED=0` — set to 1 in staging.
+- `BDCOURIER_API_KEY is unset` — set in deploy env, never commit.
+- `Cohort size N below minimum 10` — extend the cohort.
+- `Refusing to run in NODE_ENV=production` — pre-flight is staging-only; pass `--allow-production` only if you genuinely need to run in prod (you usually don't).
+
+### 2. Dry-run (fake providers, end-to-end pipeline test)
+
+Validates the harness wiring is correct without making real provider calls. Produces a real-shaped report against synthetic data — **NOT real validation**, but proves the pipeline works:
+
+```bash
+npx tsx apps/api/src/scripts/validateBdCourier.ts \
+  --merchantId 507f1f77bcf86cd799439011 \
+  --cohort ./my-staging-cohort.json \
+  --output ./dry-run-report.json \
+  --dry-run
+```
+
+If this errors out, the harness has a bug. If it produces a report, you're ready for the real run.
+
+### 3. Real run (BDCourier upstream against your cohort)
 
 ```bash
 npx tsx apps/api/src/scripts/validateBdCourier.ts \
