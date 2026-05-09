@@ -1,0 +1,9 @@
+{
+  "name": "ConfirmX",
+  "short_name": "ConfirmX",
+  "description": "COD order confirmation infrastructure for Bangladesh stores.",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0c0c0e",
+  "theme_color": "#0c0c0e"
+}

@@ -71,10 +71,21 @@ function SignupForm() {
       router.push("/login");
       return;
     }
-    // Land on the welcome surface, not the (empty) orders list. New
-    // merchants need the onboarding checklist + KPI tiles to orient
-    // themselves; an empty table is a trust killer on the first screen.
-    router.push("/dashboard");
+    // Honour `?next=` when it is a same-origin path. Used by the public
+    // Shopify install flow (`/install/shopify/complete`) to land the
+    // merchant back on the claim page after creating their workspace.
+    // We accept ONLY paths starting with a single `/` and not `//` —
+    // anything else (absolute URL, scheme-relative, query-injected) is
+    // ignored to dodge open-redirect abuse.
+    const nextRaw = params.get("next");
+    const nextSafe =
+      nextRaw && nextRaw.startsWith("/") && !nextRaw.startsWith("//")
+        ? nextRaw
+        : null;
+    // Land on the welcome surface (or the explicit `next` target) rather
+    // than the empty orders list. New merchants need the onboarding
+    // checklist + KPI tiles to orient themselves.
+    router.push(nextSafe ?? "/dashboard");
     router.refresh();
   }
 
@@ -82,7 +93,7 @@ function SignupForm() {
     <div className="cordon-card animate-slide-up border border-stroke/30 bg-surface p-7 shadow-elevated">
       <div className="mb-6 space-y-2 text-center">
         <h1 className="text-[1.6rem] font-semibold leading-[1.1] tracking-tight text-fg">
-          Start blocking fake orders{" "}
+          Confirm every COD order{" "}
           <span className="cordon-serif">in 2 minutes.</span>
         </h1>
         <p className="text-sm text-fg-subtle">

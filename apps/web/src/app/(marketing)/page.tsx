@@ -94,12 +94,11 @@ const PAGE_SCRIPT = `
  *   - twitter.title / .description for the same reason
  *   - alternates.canonical so search engines treat "/" as the home URL
  */
-const PAGE_TITLE = `${SAAS_BRANDING.name} — Bangladesh COD order confirmation infrastructure`;
+const PAGE_TITLE = `${SAAS_BRANDING.name} — Confirm every COD order before it ships`;
 const PAGE_DESCRIPTION =
-  `COD order confirmation infrastructure for Bangladesh merchants. ` +
-  `Real-time order verification, automated courier booking on Pathao, ` +
-  `Steadfast & RedX, and idempotent webhook delivery for Shopify and ` +
-  `WooCommerce.`;
+  `Confirm COD orders before they ship. Reach customers, book ` +
+  `Pathao / Steadfast / RedX, and stay in sync with Shopify and ` +
+  `WooCommerce — built for Bangladesh merchants.`;
 
 export const metadata = {
   title: PAGE_TITLE,
@@ -283,7 +282,7 @@ export default function HomePage() {
             </Link>
             <div className="nav-links">
               <a href="#how">How it works</a>
-              <a href="#fraud">Fraud network</a>
+              <a href="#fraud">Delivery signals</a>
               <a href="#automation">Automation</a>
               <a href="#pricing">Pricing</a>
             </div>
@@ -320,15 +319,14 @@ export default function HomePage() {
                 <span className="serif">Confirm</span> every COD order before it ships.
               </h1>
               <p className="hero-sub">
-                COD order confirmation infrastructure for Bangladesh stores.
-                Real-time order verification, automated courier booking, and
-                idempotent webhook delivery — helping merchants reduce
-                avoidable RTO through operator-driven confirmation
-                workflows.
+                Built for Bangladesh stores: confirm COD orders before they
+                ship, book Pathao / Steadfast / RedX, and keep everything
+                in sync with Shopify and WooCommerce. Less RTO, less
+                guesswork.
               </p>
               <div className="hero-ctas">
                 <a href="#calculator" className="btn btn-primary btn-lg">
-                  Calculate my ৳ loss <span className="arrow">→</span>
+                  See what RTO is costing you <span className="arrow">→</span>
                 </a>
                 {signedIn ? (
                   <Link href="/dashboard" className="btn btn-secondary btn-lg">
@@ -352,13 +350,13 @@ export default function HomePage() {
         {/* PROBLEM */}
         <section id="problem">
           <div className="container">
-            <div className="section-eyebrow">01 / The bleed</div>
+            <div className="section-eyebrow">01 / The cost</div>
             <h2 className="section-title">
-              The math <span className="serif">no one wants to do.</span>
+              The math <span className="serif">most teams skip.</span>
             </h2>
             <p className="section-sub">
-              A fake COD order doesn&apos;t just fail. It costs you four times — and most teams
-              stop counting after the first.
+              An unconfirmed COD order costs you four ways. Most ops teams only
+              count the first one.
             </p>
 
             <div className="problem-grid">
@@ -374,14 +372,14 @@ export default function HomePage() {
                 <div className="problem-num">02 — Locked inventory</div>
                 <h3>Three to seven days, gone.</h3>
                 <p>
-                  Stock travels nowhere while a fake parcel orbits the courier network. You
-                  can&apos;t sell what you don&apos;t have, and you don&apos;t have it because
-                  someone wasn&apos;t real.
+                  Stock sits in transit while an unconfirmed parcel makes its
+                  way through the courier network. You can&apos;t sell what you
+                  don&apos;t have on the shelf.
                 </p>
               </div>
               <div className="problem-card">
                 <div className="problem-num">03 — Team time</div>
-                <h3>12+ minutes per fake order.</h3>
+                <h3>12+ minutes per unconfirmed order.</h3>
                 <p>
                   Confirmation calls, reconciliation, dispute logging, courier follow-up. Your
                   ops team is on the phone instead of growing the brand.
@@ -400,9 +398,9 @@ export default function HomePage() {
             <div className="problem-bottom">
               <div className="big">৳5,40,000+</div>
               <div className="label">
-                <strong>The monthly bleed.</strong> 1,000 orders a month, ৳1,200 average value,
-                18% RTO. Before you&apos;ve paid yourself, before tax, before anything else.
-                That&apos;s what&apos;s quietly leaving your business.
+                <strong>That&apos;s the monthly cost.</strong> 1,000 orders a month,
+                ৳1,200 average value, 18% RTO. Before salaries, tax, or anything
+                else — money that&apos;s leaving the business in the background.
               </div>
             </div>
           </div>
@@ -1280,7 +1278,7 @@ export default function HomePage() {
             </Link>
             <div className="footer-links">
               <a href="#how">How it works</a>
-              <a href="#fraud">Fraud network</a>
+              <a href="#fraud">Delivery signals</a>
               <a href="#pricing">Pricing</a>
               <a href={`mailto:${SAAS_BRANDING.helloEmail}`}>{SAAS_BRANDING.helloEmail}</a>
               {signedIn ? (

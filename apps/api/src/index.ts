@@ -21,6 +21,7 @@ import {
   integrationsWebhookRouter,
   shopifyOauthRouter,
 } from "./server/webhooks/integrations.js";
+import { shopifyInstallRouter } from "./server/webhooks/shopify-install.js";
 import { shopifyGdprWebhookRouter } from "./server/webhooks/shopify-gdpr.js";
 import { stripeWebhookRouter } from "./server/webhooks/stripe.js";
 import { courierWebhookRouter } from "./server/webhooks/courier.js";
@@ -261,6 +262,23 @@ async function main() {
         "X-Forwarded-For is honoured.",
     );
   }
+  // Soft warn when Shopify platform credentials are missing in production.
+  // The /api/shopify/install handler refuses to redirect without them, and
+  // the GDPR webhooks would fail HMAC verification - both are hard
+  // blockers for App Store / Public Distribution review. Non-fatal so a
+  // custom-app-only deployment can still boot.
+  if (
+    env.NODE_ENV === "production" &&
+    (!env.SHOPIFY_APP_API_KEY || !env.SHOPIFY_APP_API_SECRET)
+  ) {
+    console.warn(
+      "[boot] SHOPIFY_APP_API_KEY/SHOPIFY_APP_API_SECRET are not set - " +
+        "the /api/shopify/install entry-point will refuse to redirect, " +
+        "Shopify GDPR webhooks will fail HMAC verification, and Public " +
+        "Distribution review WILL reject the listing. Set both on the " +
+        "Railway prod env if this deployment is the public one.",
+    );
+  }
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   // Courier webhooks must mount BEFORE the global JSON parser so HMAC
@@ -345,6 +363,13 @@ async function main() {
   // `integrations.connect({provider:"shopify"})` redirect here. GET-only,
   // so it can sit after express.json without harm.
   app.use("/api/integrations", shopifyOauthRouter);
+  // Public Shopify install entry-point. Mounted at `/api/shopify/install`
+  // so Shopify (App Store, Partners test-install, referral links) and
+  // direct-to-storefront merchants have a stable URL that kicks off OAuth
+  // without requiring a ConfirmX login first. Completion lands on
+  // `/api/integrations/oauth/shopify/callback` (above) which has been
+  // extended to recognise public install nonces stored in Redis.
+  app.use("/api/shopify/install", shopifyInstallRouter);
   // Behavior tracker collector. CORS is wide-open so storefronts on any
   // origin can post events; they prove ownership via the merchant's
   // public tracking key.

@@ -30,7 +30,7 @@ import { Button } from "@/components/ui/button";
 const METRIC_LABELS: Record<string, string> = {
   ordersCreated: "Orders processed",
   shipmentsBooked: "Shipments booked",
-  fraudReviewsUsed: "Fraud reviews",
+  fraudReviewsUsed: "Order verifications",
   callsInitiated: "Calls initiated",
   callMinutesUsed: "Call minutes used",
 };

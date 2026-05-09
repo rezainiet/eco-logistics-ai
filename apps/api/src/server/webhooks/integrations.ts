@@ -15,6 +15,33 @@ import {
 import { writeAudit } from "../../lib/audit.js";
 import { safeStringEqual } from "../../lib/crypto.js";
 import { env } from "../../env.js";
+import { randomBytes } from "node:crypto";
+import { getRedis } from "../../lib/redis.js";
+import {
+  PENDING_INSTALL_REDIS_PREFIX,
+  type PendingShopifyInstall,
+} from "./shopify-install.js";
+
+/**
+ * Redis key prefix for one-time claim tokens issued by the OAuth callback to
+ * a public-install merchant. The token carries the just-issued Shopify
+ * access token + scopes, indexed by an opaque random string the web claim
+ * page exchanges (via integrations.completeShopifyInstall) for a real
+ * Integration row tied to the now-authenticated merchant.
+ *
+ * TTL: 15 minutes - enough for sign-up + email verification, short enough
+ * that a stolen token has a tight blast radius.
+ */
+export const SHOPIFY_INSTALL_CLAIM_REDIS_PREFIX = "shopify:install:claim:";
+const SHOPIFY_INSTALL_CLAIM_TTL_SEC = 15 * 60;
+
+export interface ShopifyInstallClaim {
+  shop: string;
+  accessToken: string;
+  scopes: string[];
+  installedFrom: "public_install";
+  createdAt: number;
+}
 
 /**
  * Maximum age (ms) of an inbound webhook before we reject it as stale. The
@@ -466,6 +493,107 @@ shopifyOauthRouter.get(
           normalizedShop,
         });
         return fail("hmac_mismatch");
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Public install branch (NEW).
+    //
+    // Before falling through to the legacy per-merchant Integration
+    // lookup, see if `state` matches a pending public install minted
+    // by `/api/shopify/install`. That router stores {shop, scopes, ...}
+    // in Redis under `shopify:install:pending:<state>` with a 10-min
+    // TTL - the merchant who hit it does not have a ConfirmX account
+    // yet, so there is no Integration document to update.
+    //
+    // If we find a match here, we:
+    //   1. Exchange the code for an access token using the platform
+    //      env credentials (the only ones available pre-login).
+    //   2. Generate an opaque one-time claim token.
+    //   3. Stash {shop, accessToken, scopes} in Redis under
+    //      `shopify:install:claim:<claimToken>` (15-min TTL).
+    //   4. Delete the pending-install record (single-use nonce).
+    //   5. Redirect the merchant to /install/shopify/complete.
+    //
+    // If `state` does not match a pending public install, we fall
+    // through to the existing per-merchant flow unchanged.
+    // ---------------------------------------------------------------
+    if (platformSecret && env.SHOPIFY_APP_API_KEY) {
+      let pendingRaw: string | null = null;
+      let redisHandle;
+      try {
+        redisHandle = getRedis();
+        pendingRaw = await redisHandle.get(`${PENDING_INSTALL_REDIS_PREFIX}${state}`);
+      } catch (err) {
+        console.warn("[shopify-oauth] redis_lookup_failed (public-install)", {
+          err: (err as Error).message,
+        });
+      }
+      if (pendingRaw && redisHandle) {
+        let pending: PendingShopifyInstall;
+        try {
+          pending = JSON.parse(pendingRaw) as PendingShopifyInstall;
+        } catch {
+          console.warn("[shopify-oauth] pending_install_parse_failed");
+          return fail("integration_not_found");
+        }
+        if (
+          pending.shop !== normalizedShop &&
+          pending.shop !== shop.toLowerCase()
+        ) {
+          console.warn("[shopify-oauth] public_install_shop_mismatch", {
+            pendingShop: pending.shop,
+            callbackShop: normalizedShop,
+          });
+          return fail("state_mismatch");
+        }
+        let exchange;
+        try {
+          exchange = await exchangeShopifyCode({
+            shopDomain: normalizedShop,
+            apiKey: env.SHOPIFY_APP_API_KEY,
+            apiSecret: platformSecret,
+            code,
+          });
+        } catch (err) {
+          console.warn("[shopify-oauth] public_install_exchange_failed", {
+            shop: normalizedShop,
+            err: (err as Error).message.slice(0, 200),
+          });
+          return fail("token_exchange_failed");
+        }
+        const claimToken = randomBytes(32).toString("base64url");
+        const claim: ShopifyInstallClaim = {
+          shop: normalizedShop,
+          accessToken: exchange.accessToken,
+          scopes: exchange.scope
+            ? exchange.scope.split(",").map((s) => s.trim()).filter(Boolean)
+            : [...pending.scopes],
+          installedFrom: "public_install",
+          createdAt: Date.now(),
+        };
+        try {
+          await redisHandle.set(
+            `${SHOPIFY_INSTALL_CLAIM_REDIS_PREFIX}${claimToken}`,
+            JSON.stringify(claim),
+            "EX",
+            SHOPIFY_INSTALL_CLAIM_TTL_SEC,
+          );
+          await redisHandle.del(`${PENDING_INSTALL_REDIS_PREFIX}${state}`);
+        } catch (err) {
+          console.error("[shopify-oauth] public_install_redis_write_failed", {
+            err: (err as Error).message,
+          });
+          return fail("install_storage_failed");
+        }
+        const completeBase = `${env.PUBLIC_WEB_URL ?? "http://localhost:3001"}/install/shopify/complete`;
+        const completeUrl = `${completeBase}?token=${encodeURIComponent(claimToken)}&shop=${encodeURIComponent(normalizedShop)}`;
+        console.log("[shopify-oauth] public_install_token_issued", {
+          shop: normalizedShop,
+          claimPrefix: claimToken.slice(0, 6) + "...",
+          scopes: claim.scopes,
+        });
+        return res.redirect(302, completeUrl);
       }
     }
 

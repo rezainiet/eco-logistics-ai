@@ -19,7 +19,7 @@ import {
 export const metadata = {
   title: "Pricing — ConfirmX",
   description:
-    "Simple, predictable pricing for Bangladesh COD merchants. ConfirmX helps reduce avoidable RTO through operator-driven order confirmation workflows. 14-day free trial on every plan, no card.",
+    "Simple pricing for Bangladesh COD merchants. Confirm orders, book couriers, and keep returns down. 14-day free trial on every plan, no card.",
 };
 
 const ICON: Record<PlanTier, typeof Sparkles> = {
@@ -105,10 +105,10 @@ function buildPlanBullets(p: ReturnType<typeof listPlans>[number]): string[] {
 
   const fraudLine =
     f.fraudReviewQuota === null
-      ? "Unlimited fraud reviews"
+      ? "Unlimited order verifications"
       : f.fraudReviewQuota === 0
-        ? "Fraud review not included (upgrade to enable)"
-        : `${f.fraudReviewQuota.toLocaleString()} fraud reviews / month`;
+        ? "Order verification not included (upgrade to enable)"
+        : `${f.fraudReviewQuota.toLocaleString()} order verifications / month`;
 
   return [
     `${f.orderQuota.toLocaleString()} orders / month`,
@@ -169,7 +169,7 @@ export default function PricingPage() {
           Pricing built for Bangladesh.
         </h1>
         <p className="mt-4 text-balance text-base leading-relaxed text-fg-subtle md:text-lg">
-          One workspace for orders, fraud review, courier sync and behavior analytics — at a price
+          One workspace for orders, verification, courier sync, and behavior analytics — at a price
           your COD margin can carry.
         </p>
       </section>
@@ -313,7 +313,7 @@ export default function PricingPage() {
                   )}
                 />
                 <ComparisonRow
-                  label="Fraud review"
+                  label="Order verification"
                   values={plans.map((p) =>
                     p.features.fraudReviewQuota === null
                       ? "Unlimited"

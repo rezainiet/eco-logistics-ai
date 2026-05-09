@@ -127,7 +127,7 @@ export default function FraudReviewPage() {
 
   const verify = trpc.fraud.markVerified.useMutation({
     onSuccess: async () => {
-      toast.success("Order verified", "Customer confirmed identity");
+      toast.success("Order verified", "Customer confirmed the order.");
       setSelectedId(null);
       await invalidateAll();
     },
@@ -161,7 +161,7 @@ export default function FraudReviewPage() {
 
   const restore = trpc.orders.restoreOrder.useMutation({
     onSuccess: async () => {
-      toast.success("Order restored", "Back in your review queue.");
+      toast.success("Order restored", "Back in your verification queue.");
       setLastRejected(null);
       await invalidateAll();
     },
@@ -215,12 +215,23 @@ export default function FraudReviewPage() {
   const total = queue.data?.total ?? 0;
   const today = stats.data?.today ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
 
+  // Plan-gate: order verification is on Growth and above. The API
+  // correctly throws FORBIDDEN with "fraud review is not available on
+  // the <plan> plan", but rendering empty stats (0/0/0) was
+  // indistinguishable from a clean Starter dashboard. Detect the
+  // FORBIDDEN result up front and render the same upsell pattern as
+  // /dashboard/recovery and /dashboard/analytics/behavior.
+  const queueErrorCode = queue.error?.data?.code;
+  if (queueErrorCode === "FORBIDDEN") {
+    return <OrderVerificationUpsell />;
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Risk operations"
-        title="Fraud review queue"
-        description="Call risky customers to verify COD orders before booking shipment."
+        eyebrow="Operations"
+        title="Order verification queue"
+        description="Confirm COD orders that need a quick check before booking the courier."
       />
 
       {lastRejected ? (
@@ -261,7 +272,7 @@ export default function FraudReviewPage() {
         </div>
       ) : null}
 
-      <KpiGrid ariaLabel="Fraud review metrics">
+      <KpiGrid ariaLabel="Order verification metrics">
         <StatCard label="In queue" value={total.toLocaleString()} icon={ShieldAlert} tone="danger" />
         <StatCard
           label="Verified today"
@@ -662,6 +673,35 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       <span className={`text-right text-sm text-fg ${mono ? "font-mono" : ""}`}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function OrderVerificationUpsell() {
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        eyebrow="Operations"
+        title="Order verification"
+      />
+      <Card className="border-warning-border bg-warning-subtle/40">
+        <CardContent className="flex flex-col items-center gap-4 py-12 text-center">
+          <ShieldCheck className="h-10 w-10 text-warning" aria-hidden />
+          <div className="max-w-md space-y-1">
+            <h3 className="text-base font-semibold text-fg">
+              Order verification is on Growth and above
+            </h3>
+            <p className="text-xs text-fg-subtle">
+              You are on the Starter plan. Upgrade to see COD orders
+              that need a quick call before they ship, and confirm or
+              cancel them right here.
+            </p>
+          </div>
+          <Button asChild>
+            <a href="/dashboard/settings/billing">Upgrade to Growth</a>
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

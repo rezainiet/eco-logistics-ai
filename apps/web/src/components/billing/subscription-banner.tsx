@@ -21,8 +21,8 @@ import { trpc } from "@/lib/trpc";
  */
 
 const METRIC_LABELS: Record<string, string> = {
-  fraudReviewsUsed: "fraud reviews this month",
-  fraudReviews: "fraud reviews this month",
+  fraudReviewsUsed: "order verifications this month",
+  fraudReviews: "order verifications this month",
   smsSent: "SMS messages this month",
   smsUsed: "SMS messages this month",
   ordersIngested: "orders this month",

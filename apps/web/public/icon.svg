@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="ConfirmX mark">
+  <title>ConfirmX</title>
+  <rect width="256" height="256" rx="56" fill="#0D1117"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- The X strokes (muted gray) -->
+    <path d="M72 72 L184 184" stroke="#2E343F" stroke-width="22"/>
+    <path d="M184 72 L72 184" stroke="#2E343F" stroke-width="22"/>
+    <!-- The lime check sitting on top -->
+    <path d="M88 132 L120 164 L184 76" stroke="#A4E83E" stroke-width="26"/>
+  </g>
+</svg>

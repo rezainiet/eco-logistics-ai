@@ -2375,6 +2375,176 @@ export const integrationsRouter = router({
       });
       return { ok: true, resolved: res.modifiedCount ?? 0 };
     }),
+
+  /**
+   * Finalize a public-install Shopify connection.
+   *
+   * Pre-condition: the visitor hit /api/shopify/install, completed
+   * Shopify's OAuth approval screen, and our callback (shopifyOauthRouter)
+   * exchanged the code for an access token, stashed
+   * { shop, accessToken, scopes } in Redis under
+   * shopify:install:claim:<token>, and bounced them to
+   * /install/shopify/complete?token=<token>&shop=... on the web app.
+   *
+   * The web app gets them through sign-up / sign-in (or recognises an
+   * existing session), then calls THIS mutation with the claim token.
+   *
+   * What this mutation does:
+   *   1. Reads & deletes the claim from Redis (single-use token).
+   *   2. Refuses to clobber another already-connected Shopify store on the
+   *      same merchant (same one-shop-only rule the regular connect
+   *      mutation enforces).
+   *   3. Upserts the Integration row with the access token, marks
+   *      connected, and writes the audit log entry the public install
+   *      endpoint deliberately deferred (it had no merchantId yet).
+   *
+   * Errors are mapped to short codes the web claim page can humanise:
+   *   - claim_not_found_or_expired (15-min TTL elapsed, or already used).
+   *   - claim_storage_unavailable (Redis is sick).
+   *   - another_shop_already_connected:<existing> (merchant already has
+   *     a different .myshopify.com connected).
+   */
+  completeShopifyInstall: billableProcedure
+    .input(z.object({ token: z.string().min(8).max(256) }))
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+
+      const { getRedis } = await import("../../lib/redis.js");
+      const { SHOPIFY_INSTALL_CLAIM_REDIS_PREFIX } = await import(
+        "../webhooks/integrations.js"
+      );
+
+      let redis;
+      try {
+        redis = getRedis();
+      } catch {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "claim_storage_unavailable",
+        });
+      }
+
+      const key = `${SHOPIFY_INSTALL_CLAIM_REDIS_PREFIX}${input.token}`;
+      let raw: string | null;
+      try {
+        raw = await redis.get(key);
+      } catch {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "claim_storage_unavailable",
+        });
+      }
+      if (!raw) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "claim_not_found_or_expired",
+        });
+      }
+      try {
+        await redis.del(key);
+      } catch {
+        // non-fatal: TTL will reap it
+      }
+
+      type Claim = {
+        shop: string;
+        accessToken: string;
+        scopes: string[];
+        installedFrom: string;
+        createdAt: number;
+      };
+      let claim: Claim;
+      try {
+        claim = JSON.parse(raw) as Claim;
+      } catch {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "claim_corrupt",
+        });
+      }
+      const shop = claim.shop.toLowerCase().trim();
+      if (
+        !/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(shop) ||
+        !claim.accessToken
+      ) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "claim_corrupt",
+        });
+      }
+
+      const tier: PlanTier =
+        ((ctx.subscription as unknown as SubscriptionSnapshot | undefined)?.tier as PlanTier) ??
+        "starter";
+      assertIntegrationProvider(tier, "shopify");
+      await assertIntegrationCapacity(merchantId, tier, "shopify");
+
+      const conflicting = await Integration.findOne({
+        merchantId,
+        provider: "shopify",
+        status: { $in: ["connected", "pending"] },
+        accountKey: { $ne: shop },
+      })
+        .select("accountKey status")
+        .lean();
+      if (conflicting) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `another_shop_already_connected:${conflicting.accountKey}`,
+        });
+      }
+
+      const now = new Date();
+      const credentialsPayload: Record<string, string> = {
+        apiKey: encryptSecret(env.SHOPIFY_APP_API_KEY ?? ""),
+        apiSecret: encryptSecret(env.SHOPIFY_APP_API_SECRET ?? ""),
+        siteUrl: shop,
+        accessToken: encryptSecret(claim.accessToken),
+      };
+
+      const integration = await Integration.findOneAndUpdate(
+        { merchantId, provider: "shopify", accountKey: shop },
+        {
+          $set: {
+            label: `Shopify · ${shop}`,
+            status: "connected",
+            credentials: credentialsPayload,
+            permissions: claim.scopes,
+            connectedAt: now,
+            disconnectedAt: null,
+            health: { ok: true, lastCheckedAt: now },
+          },
+          $setOnInsert: {
+            merchantId,
+            provider: "shopify",
+            accountKey: shop,
+            createdAt: now,
+          },
+        },
+        { upsert: true, new: true },
+      );
+
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        actorType: "merchant",
+        action: "integration.shopify_oauth",
+        subjectType: "integration",
+        subjectId: integration._id,
+        meta: {
+          ok: true,
+          shop,
+          installedFrom: claim.installedFrom,
+          scopes: claim.scopes,
+        },
+      });
+
+      return {
+        ok: true as const,
+        integrationId: String(integration._id),
+        shop,
+      };
+    }),
 });
 
 export const ALL_INTEGRATION_PROVIDERS = INTEGRATION_PROVIDERS;

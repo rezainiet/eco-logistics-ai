@@ -139,7 +139,7 @@ function CommandPaletteDialog({
       {
         id: "nav:fraud",
         group: "Navigate",
-        label: "Go to Fraud review",
+        label: "Go to Order verification",
         icon: ShieldAlert,
         shortcut: "G F",
         onSelect: () => {

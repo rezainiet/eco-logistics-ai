@@ -650,6 +650,25 @@ export const fraudRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
+      // Plan gate: keep the sidebar badge from advertising work the
+      // merchant cannot action. listPendingReviews already throws
+      // FORBIDDEN for Starter; mirror that here by returning a clean
+      // zero shape instead of real counts. Avoids the "16 in queue"
+      // badge on a tier that cannot open the queue.
+      if (ctx.user.role !== "admin") {
+        const m = await Merchant.findById(merchantId)
+          .select("subscription.tier")
+          .lean();
+        const plan = getPlan(m?.subscription?.tier);
+        if (!plan.features.fraudReview) {
+          return {
+            days: input.days,
+            today: { risky: 0, verified: 0, rejected: 0, codSaved: 0 },
+            window: { risky: 0, verified: 0, rejected: 0, codSaved: 0 },
+            queue: { pending: 0, noAnswer: 0 },
+          };
+        }
+      }
       const since = new Date();
       since.setDate(since.getDate() - input.days);
       const today = startOfToday();

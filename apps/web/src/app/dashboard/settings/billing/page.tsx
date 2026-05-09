@@ -69,7 +69,7 @@ const PLAN_ICON = {
 const METRIC_LABEL: Record<string, string> = {
   ordersCreated: "Orders created",
   shipmentsBooked: "Shipments booked",
-  fraudReviewsUsed: "Fraud reviews",
+  fraudReviewsUsed: "Order verifications",
   callsInitiated: "Calls initiated",
   callMinutesUsed: "Call minutes used",
 };
@@ -325,7 +325,7 @@ export default function BillingPage() {
           <div className="text-sm">
             <div className="font-medium text-danger">Your trial has ended</div>
             <p className="text-fg-subtle">
-              Upgrade to continue creating orders, booking shipments, and running fraud reviews.
+              Upgrade to continue creating orders, booking shipments, and running order verifications.
             </p>
           </div>
         </div>

@@ -45,7 +45,7 @@ const NAV: NavGroup[] = [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { label: "Orders", href: "/dashboard/orders", icon: Package },
       {
-        label: "Fraud review",
+        label: "Order verification",
         href: "/dashboard/fraud-review",
         icon: ShieldAlert,
         badgeKey: "fraud",
