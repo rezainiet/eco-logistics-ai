@@ -327,6 +327,55 @@ const schema = z
       .enum(["0", "1"])
       .default("0")
       .transform((v) => v === "1"),
+    /**
+     * Phase 4A — master flag for the external delivery history
+     * intelligence subsystem. When "0" (the default), the orchestrator
+     * (`getOrFetchExternalProfile`) returns null immediately; no DB
+     * read, no provider fan-out, no cache touch. The
+     * ExternalDeliveryProfile collection remains empty.
+     *
+     * Default OFF. Flip to "1" to enable the substrate; per-provider
+     * flags below additionally gate which adapters actually run.
+     *
+     * Replay-safety: this subsystem is COMPLETELY SEPARATE from the
+     * operational chokepoint. Toggling has no impact on any aggregate
+     * write path.
+     */
+    EXTERNAL_DELIVERY_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    /** Default cache TTL in hours. Profile is considered stale after this
+     *  window and the orchestrator triggers a fresh provider fan-out. */
+    EXTERNAL_DELIVERY_TTL_HOURS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(168)
+      .default(24),
+    /** Per-provider call timeout in milliseconds. The orchestrator races
+     *  every adapter against this limit; a provider that doesn't return
+     *  in time is recorded as a timeout and excluded from the aggregate. */
+    EXTERNAL_DELIVERY_PROVIDER_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(500)
+      .max(30_000)
+      .default(5000),
+    /** Per-provider opt-in flags. Each adapter's isConfigured() returns
+     *  false when its flag is "0" — it never participates in the fan-out. */
+    EXTERNAL_DELIVERY_PATHAO_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    EXTERNAL_DELIVERY_STEADFAST_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    EXTERNAL_DELIVERY_REDX_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",
