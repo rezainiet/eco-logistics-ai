@@ -29,6 +29,8 @@ import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
 import { computeAddressQuality } from "../lib/address-intelligence.js";
 import { extractThana } from "../lib/thana-lexicon.js";
 import { scoreIntentForOrder } from "../lib/intent.js";
+import { canonicaliseAddress } from "../lib/address-canonical.js";
+import { getGazetteer } from "../lib/gazetteer.js";
 import { env } from "../env.js";
 import {
   isNormalizationSkip,
@@ -209,6 +211,52 @@ export async function ingestNormalizedOrder(
       );
     }
 
+    // Phase 2 address canonicalisation. Pure-function compute against the
+    // in-memory gazetteer; no DB cost. Wrapped in try/catch so a bug in
+    // the pipeline can NEVER block ingest — on failure we log and move
+    // on, leaving `canonicalAddress` undefined (legacy `addressHash` is
+    // still stamped). Toggle off via `ADDRESS_CANONICALIZATION_ENABLED=0`.
+    let canonicalAddressDoc:
+      | ReturnType<typeof canonicaliseAddress>
+      | null = null;
+    if (env.ADDRESS_CANONICALIZATION_ENABLED) {
+      const canonStartedAtMs = Date.now();
+      try {
+        canonicalAddressDoc = canonicaliseAddress(
+          {
+            address: normalized.customer.address,
+            district: normalized.customer.district,
+            thana: extractedThana ?? undefined,
+          },
+          getGazetteer(),
+        );
+      } catch (err) {
+        // Defence-in-depth: the canonicaliser is pure and shouldn't throw,
+        // but a future refactor could regress this guarantee. Log and
+        // proceed with `canonicalAddressDoc = null`.
+        canonicalAddressDoc = null;
+        console.error(
+          JSON.stringify({
+            evt: "address.canonicalise_error",
+            merchantId: String(opts.merchantId),
+            error: (err as Error).message?.slice(0, 200),
+          }),
+        );
+      }
+      console.log(
+        JSON.stringify({
+          evt: "address.canonicalised",
+          merchantId: String(opts.merchantId),
+          confidence: canonicalAddressDoc?.confidence ?? "no_match",
+          matchedOnCount: canonicalAddressDoc?.matchedOn?.length ?? 0,
+          hasDistrict: !!canonicalAddressDoc?.district,
+          hasThana: !!canonicalAddressDoc?.thana,
+          hasRoadHouse: !!(canonicalAddressDoc?.road || canonicalAddressDoc?.house),
+          totalMs: Date.now() - canonStartedAtMs,
+        }),
+      );
+    }
+
     // Race-safe insert. Two workers can each pass the findOne dedup above
     // (rapid-fire order.created + order.updated webhooks for the same WC
     // order do this all the time) and reach the create in parallel. The
@@ -248,6 +296,14 @@ export async function ingestNormalizedOrder(
         ip: opts.ip,
         userAgent: opts.userAgent,
         addressHash: addressHashValue ?? undefined,
+        // Phase 2 canonical address — additive sibling to addressHash.
+        // Absent when the flag is off OR the canonicaliser produced no
+        // result (degenerate / unusable input). Mongoose default:undefined
+        // on the subdoc means the field is omitted from the document
+        // entirely rather than stored as `{}`.
+        ...(canonicalAddressDoc
+          ? { canonicalAddress: canonicalAddressDoc }
+          : {}),
         channel: opts.channel,
         externalId: normalized.externalId,
         sourceProvider: opts.source,

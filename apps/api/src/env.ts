@@ -274,6 +274,26 @@ const schema = z
       .string()
       .optional()
       .transform((v) => v?.trim() ?? ""),
+    /**
+     * Phase 2 master flag for the Bangladesh address canonicalisation
+     * pipeline. When "0" (the default), `ingestNormalizedOrder` does NOT
+     * call `canonicaliseAddress` and `Order.source.canonicalAddress`
+     * remains undefined on new orders. The legacy `addressHash` is
+     * stamped exactly as before — full ingest stability is preserved
+     * regardless of flag state.
+     *
+     * Default OFF. Flip to "1" after the gazetteer is seeded
+     * (`scripts/seedGazetteer.ts`) and the loader has primed
+     * (`awaitLoad()` at boot).
+     *
+     * Replay-safety: this flag controls a pure ADDITIVE write. Existing
+     * AddressReliability / FraudSignal aggregates are unaffected on
+     * either side of the flip.
+     */
+    ADDRESS_CANONICALIZATION_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
   })
   .refine((e) => e.NODE_ENV !== "production" || !!e.REDIS_URL, {
     message: "REDIS_URL is required when NODE_ENV=production",

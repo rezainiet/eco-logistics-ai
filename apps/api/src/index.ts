@@ -120,6 +120,32 @@ async function main() {
     );
   }
 
+  // Phase 2 BD address gazetteer — idempotent seed + prime the in-memory
+  // lookup. Both steps are non-fatal: the canonicaliser degrades to
+  // confidence:"low" when the gazetteer is empty, and ingest is never
+  // blocked by either step. We run the seed unconditionally (cheap upserts;
+  // bumps the alias set on every redeploy that ships a new lexicon) and
+  // prime the loader so the first ingest doesn't pay a Mongo round-trip.
+  try {
+    const { seedGazetteer } = await import("./scripts/seedGazetteer.js");
+    await seedGazetteer();
+  } catch (err) {
+    console.warn(
+      `[boot] gazetteer seed failed (non-fatal): ${(err as Error).message}`,
+    );
+  }
+  try {
+    const { awaitLoad } = await import("./lib/gazetteer.js");
+    const snap = await awaitLoad();
+    console.log(
+      `[boot] gazetteer primed size=${snap.size} version=${snap.pipelineVersion} empty=${snap.empty}`,
+    );
+  } catch (err) {
+    console.warn(
+      `[boot] gazetteer prime failed (non-fatal): ${(err as Error).message}`,
+    );
+  }
+
   // Fire-and-forget index sync. autoIndex is OFF in production (lib/db.ts)
   // so a fresh Atlas DB starts with no model indexes — including the
   // partial-unique on (merchantId, source.externalId) the ingest race fix
