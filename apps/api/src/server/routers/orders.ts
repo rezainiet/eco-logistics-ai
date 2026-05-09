@@ -8,6 +8,7 @@ import {
   type BulkUploadMode,
   BulkUploadBatch,
   COURIER_PROVIDER_NAMES,
+  ExternalDeliveryProfile,
   Merchant,
   type MerchantFraudConfig,
   MerchantStats,
@@ -1721,6 +1722,54 @@ export const ordersRouter = router({
         }
       }
 
+      // Phase 4A — external delivery profile (per-merchant courier-
+      // history backfill). READ-ONLY Mongo lookup — never triggers a
+      // BDCourier API call from the order-detail hot path. The
+      // orchestrator's full fetch flow (including provider fan-out)
+      // is reserved for the admin diagnostic procedures and any
+      // future explicit refresh action.
+      //
+      // Gated by EXTERNAL_DELIVERY_ENABLED. Fails closed: any error
+      // returns null and the field is absent from the response.
+      let externalDelivery: {
+        providers: Record<string, unknown>;
+        aggregate: unknown;
+        signals: unknown;
+        freshness: unknown;
+        pipelineVersion?: string;
+      } | null = null;
+      if (env.EXTERNAL_DELIVERY_ENABLED) {
+        try {
+          const phoneHash = hashPhoneForNetwork(order.customer?.phone ?? null);
+          if (phoneHash) {
+            const profile = await ExternalDeliveryProfile.findOne({
+              merchantId,
+              phoneHash,
+            })
+              .lean()
+              .exec();
+            if (profile) {
+              const providersMap: Record<string, unknown> = {};
+              const rawProviders = profile.providers;
+              if (rawProviders instanceof Map) {
+                for (const [k, v] of rawProviders) providersMap[k] = v;
+              } else if (rawProviders && typeof rawProviders === "object") {
+                Object.assign(providersMap, rawProviders);
+              }
+              externalDelivery = {
+                providers: providersMap,
+                aggregate: profile.aggregate ?? null,
+                signals: profile.signals ?? null,
+                freshness: profile.freshness ?? null,
+                pipelineVersion: profile.pipelineVersion,
+              };
+            }
+          }
+        } catch {
+          externalDelivery = null;
+        }
+      }
+
       return {
         id: String(order._id),
         orderNumber: order.orderNumber,
@@ -1787,6 +1836,13 @@ export const ordersRouter = router({
         // null-check. Visibility-only — never feeds risk scoring or
         // automation decisions.
         networkEvidence,
+        // Phase 4A — per-merchant external delivery profile. READ-
+        // ONLY Mongo snapshot; the order-detail path NEVER triggers
+        // an upstream provider call. `null` when
+        // EXTERNAL_DELIVERY_ENABLED=0 (default), no profile exists
+        // for this (merchantId, phoneHash), or the lookup fell back
+        // due to error. Consumers MUST null-check.
+        externalDelivery,
         createdAt: order.createdAt,
       };
     }),

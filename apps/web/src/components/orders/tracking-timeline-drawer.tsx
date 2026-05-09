@@ -30,6 +30,14 @@ import {
 } from "@/components/orders/intelligence-panels";
 import { OperationalHintPanel } from "@/components/orders/operational-hint-panel";
 import { DeliveryReliabilityPanel } from "@/components/orders/delivery-reliability-panel";
+import { ExternalDeliveryHistoryCard } from "@/components/orders/external-delivery-history-card";
+import { NetworkEvidencePanel } from "@/components/orders/network-evidence-panel";
+import { OperationalRecommendationList } from "@/components/orders/operational-recommendation-list";
+
+const NETWORK_EVIDENCE_UI_ENABLED =
+  process.env.NEXT_PUBLIC_NETWORK_EVIDENCE_UI_ENABLED === "1";
+const EXTERNAL_DELIVERY_UI_ENABLED =
+  process.env.NEXT_PUBLIC_EXTERNAL_DELIVERY_UI_ENABLED === "1";
 
 type TrackingBadge = { label: string; className: string; icon: typeof Package };
 const FALLBACK_BADGE: TrackingBadge = {
@@ -189,6 +197,58 @@ export function TrackingTimelineDrawer({
               <DeliveryReliabilityPanel
                 reliability={(order as { deliveryReliability?: unknown }).deliveryReliability as never}
               />
+
+              {/* Phase 4A — external delivery history (BDCourier +
+                  per-merchant adapters). Double-gated: server provides
+                  the data only when EXTERNAL_DELIVERY_ENABLED=1 AND
+                  this client flag is on. Either off → field absent /
+                  panel renders nothing. Read-only; never triggers a
+                  fresh provider fetch from the order-detail path. */}
+              {EXTERNAL_DELIVERY_UI_ENABLED ? (
+                <ExternalDeliveryHistoryCard
+                  data={(order as { externalDelivery?: unknown }).externalDelivery as never}
+                />
+              ) : null}
+
+              {/* Phase 4A.5 — cross-merchant FraudSignal evidence
+                  surfaced as operational observations. Double-gated
+                  by NETWORK_EVIDENCE_SURFACE_ENABLED (server) AND
+                  this client flag. K-anonymity preserved at both the
+                  classifier and the rendering layers. */}
+              {NETWORK_EVIDENCE_UI_ENABLED ? (
+                <NetworkEvidencePanel
+                  evidence={(order as { networkEvidence?: unknown }).networkEvidence as never}
+                />
+              ) : null}
+
+              {/* Operational recommendations — pure-function classifier
+                  over all available evidence. Renders nothing when no
+                  recommendation applies. Advisory only; never enforces. */}
+              {(EXTERNAL_DELIVERY_UI_ENABLED || NETWORK_EVIDENCE_UI_ENABLED) ? (
+                <OperationalRecommendationList
+                  inputs={{
+                    networkEvidence: (order as {
+                      networkEvidence?: { label?: "strong" | "caution" | "neutral" | "no_data" };
+                    }).networkEvidence ?? null,
+                    externalSignals: ((order as {
+                      externalDelivery?: { signals?: Record<string, boolean | undefined> };
+                    }).externalDelivery?.signals ?? null) as never,
+                    reliabilityTier: (
+                      (order as { deliveryReliability?: { tier?: string } })
+                        .deliveryReliability?.tier as never
+                    ) ?? undefined,
+                    operationalHintCode: (
+                      (order as { operationalHint?: { code?: string | null } })
+                        .operationalHint?.code ?? null
+                    ),
+                    automationState: (
+                      (order as { automation?: { state?: string | null } })
+                        .automation?.state ?? null
+                    ),
+                    codAmount: order.cod ?? null,
+                  }}
+                />
+              ) : null}
 
               {/* RTO Intelligence v1 panels — observation-only. Either may
                   be null on legacy orders or when the kill-switch was off
