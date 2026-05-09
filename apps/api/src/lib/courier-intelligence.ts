@@ -1,10 +1,12 @@
 import { Types } from "mongoose";
 import {
+  CourierLane,
   CourierPerformance,
   COURIER_PERF_GLOBAL_DISTRICT,
   type CourierPerfOutcome,
 } from "@ecom/db";
 import { normalizeDistrict } from "./district.js";
+import { env } from "../env.js";
 
 /**
  * Courier intelligence — picks the best courier for an order using each
@@ -40,6 +42,14 @@ export const SCORE_WEIGHTS = {
 } as const;
 
 const MIN_OBSERVATIONS = 10;
+/**
+ * Phase 3 — minimum thana-level observations before the thana row wins
+ * the fallback ladder. Slightly higher than `MIN_OBSERVATIONS` because
+ * thana cohorts are smaller and noisier; we want district-level evidence
+ * to remain authoritative until a thana has demonstrably accumulated
+ * enough volume to be meaningful on its own.
+ */
+const MIN_OBSERVATIONS_THANA = 20;
 const NEUTRAL_SCORE = 50;
 const PREFERRED_BONUS = 5;
 const SPEED_BASELINE_HOURS = 24;
@@ -253,6 +263,14 @@ export interface SelectBestCourierInput {
   candidates: string[];
   /** Merchant.automationConfig.autoBookCourier — gets a small score bonus. */
   preferredCourier?: string | null;
+  /**
+   * Phase 3 — optional canonical thana for the order's destination.
+   * Read by the thana → district → _GLOBAL_ ladder when
+   * LANE_INTELLIGENCE_READ_ENABLED is on. Absent on legacy callers and
+   * on orders without a resolved thana; ladder degrades to the legacy
+   * district + _GLOBAL_ behaviour with zero risk.
+   */
+  thana?: string | null;
 }
 
 export interface SelectBestCourierResult {
@@ -281,7 +299,7 @@ export async function selectBestCourier(
   }
   const preferred = input.preferredCourier?.trim().toLowerCase() ?? null;
 
-  // Single round-trip read of every row that could matter.
+  // Single round-trip read of the legacy district + _GLOBAL_ rows.
   const rows = await CourierPerformance.find({
     merchantId: merchantOid,
     courier: { $in: candidates.map((c) => c.toLowerCase()) },
@@ -291,19 +309,89 @@ export async function selectBestCourier(
   const byKey = new Map<string, (typeof rows)[number]>();
   for (const r of rows) byKey.set(`${r.courier}|${r.district}`, r);
 
+  // Phase 3 — optional thana row read. Gated by
+  // LANE_INTELLIGENCE_READ_ENABLED and only when the caller supplies a
+  // thana. On flag-off / no thana, the ladder collapses to the legacy
+  // district + _GLOBAL_ behaviour byte-identically. The thana fetch is
+  // a single bounded query parallel to the legacy read above (issued
+  // sequentially here for code-clarity; could be Promise.all'd if the
+  // ingest path ever proves latency-sensitive).
+  const normalizedThana =
+    typeof input.thana === "string" ? input.thana.trim().toLowerCase() : null;
+  const useThanaLadder =
+    env.LANE_INTELLIGENCE_READ_ENABLED && !!normalizedThana;
+  const thanaByCourier = new Map<string, {
+    deliveredCount: number;
+    rtoCount: number;
+    cancelledCount: number;
+    totalDeliveryHours: number;
+    lastOutcomeAt?: Date | null;
+  }>();
+  if (useThanaLadder) {
+    try {
+      const laneRows = await CourierLane.find({
+        merchantId: merchantOid,
+        courier: { $in: candidates.map((c) => c.toLowerCase()) },
+        district,
+        thana: normalizedThana,
+      }).lean();
+      for (const r of laneRows) {
+        thanaByCourier.set(r.courier, {
+          deliveredCount: r.deliveredCount,
+          rtoCount: r.rtoCount,
+          cancelledCount: r.cancelledCount,
+          totalDeliveryHours: r.totalDeliveryHours,
+          lastOutcomeAt: r.lastOutcomeAt ?? null,
+        });
+      }
+    } catch (err) {
+      // Defence-in-depth: a CourierLane read failure must NOT poison
+      // the legacy district + _GLOBAL_ ladder. Degrade to the legacy
+      // behaviour.
+      console.error(
+        "[courier-intelligence] thana ladder read failed:",
+        (err as Error).message,
+      );
+    }
+  }
+
   const ranked: CourierCandidateResult[] = candidates.map((courier) => {
     const c = courier.toLowerCase();
+    const thanaRow = thanaByCourier.get(c);
     const districtRow = byKey.get(`${c}|${district}`);
     const globalRow = byKey.get(`${c}|${COURIER_PERF_GLOBAL_DISTRICT}`);
 
-    let pickedRow: typeof districtRow | undefined;
+    let pickedRow:
+      | typeof districtRow
+      | (typeof thanaRow & { district?: string })
+      | undefined;
     let matchedOn: CourierCandidateResult["matchedOn"];
+    const thanaCompleted =
+      (thanaRow?.deliveredCount ?? 0) +
+      (thanaRow?.rtoCount ?? 0) +
+      (thanaRow?.cancelledCount ?? 0);
     const districtCompleted =
       (districtRow?.deliveredCount ?? 0) +
       (districtRow?.rtoCount ?? 0) +
       (districtRow?.cancelledCount ?? 0);
 
-    if (districtRow && districtCompleted >= MIN_OBSERVATIONS) {
+    if (
+      useThanaLadder &&
+      thanaRow &&
+      thanaCompleted >= MIN_OBSERVATIONS_THANA
+    ) {
+      // Synthesize a CourierPerformance-shape pickedRow from the
+      // CourierLane row so the existing scorer gets the same fields.
+      pickedRow = {
+        ...thanaRow,
+        district: `${district}/${normalizedThana}`,
+      };
+      // Surface "district" matchedOn — the existing union doesn't have a
+      // "thana" tag and a future schema bump will widen it. For now
+      // "district" is honest (a thana IS within a district) and keeps the
+      // selectBestCourier consumer surface stable.
+      matchedOn = "district";
+    } else if (districtRow && districtCompleted >= MIN_OBSERVATIONS) {
       pickedRow = districtRow;
       matchedOn = "district";
     } else if (globalRow) {
@@ -317,7 +405,11 @@ export async function selectBestCourier(
     const stats: CourierCandidateStats = pickedRow
       ? {
           courier: c,
-          district: pickedRow.district,
+          // Phase 3: thana-synthesized rows carry district="<district>/<thana>"
+          // for transparency in the breakdown. Legacy CourierPerformance rows
+          // carry the canonical district. Either way it's a non-null string;
+          // the `?? district` fallback handles the union-narrowing.
+          district: pickedRow.district ?? district,
           deliveredCount: pickedRow.deliveredCount,
           rtoCount: pickedRow.rtoCount,
           cancelledCount: pickedRow.cancelledCount,
@@ -414,6 +506,7 @@ export async function recordCourierOutcome(
 export const __TEST = {
   SCORE_WEIGHTS,
   MIN_OBSERVATIONS,
+  MIN_OBSERVATIONS_THANA,
   NEUTRAL_SCORE,
   PREFERRED_BONUS,
   SPEED_BASELINE_HOURS,
