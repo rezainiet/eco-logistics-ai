@@ -21,7 +21,19 @@ const schema = z
         (v) => { try { return Buffer.from(v, "base64").length === 32; } catch { return false; } },
         "COURIER_ENC_KEY must be a base64-encoded 32-byte key (e.g. openssl rand -base64 32)",
       ),
-    CORS_ORIGIN: z.string().default("http://localhost:3001"),
+    /**
+     * Allowed Origin for browser fetches against this API. Must match the
+     * `Origin` header the browser sends — and per the CORS spec, that
+     * value never has a trailing slash. We strip any trailing slash
+     * defensively so a Railway env var typed as `https://app.example.com/`
+     * (easy mistake when copying from a browser address bar) doesn't
+     * silently fail every preflight with an `Access-Control-Allow-Origin`
+     * mismatch. Already cost ~1h of debugging once.
+     */
+    CORS_ORIGIN: z
+      .string()
+      .default("http://localhost:3001")
+      .transform((v) => v.replace(/\/+$/, "")),
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
     /**
      * Express `trust proxy` setting. Accepts:
