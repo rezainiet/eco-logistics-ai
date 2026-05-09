@@ -2,12 +2,23 @@ import mongoose, { type InferSchemaType, type Model, type Types } from "mongoose
 const { Schema, model, models } = mongoose;
 
 /**
- * Phase 4A — external delivery history intelligence.
+ * Phase 4A — merchant-owned courier history backfill.
  *
- * Per-(buyer phone) snapshot of delivery outcomes aggregated from
- * third-party courier APIs (Pathao / Steadfast / RedX / future
- * couriers). ENRICHMENT data — eventually consistent, cache-oriented,
- * advisory-only.
+ * Per-(merchant, buyer phone) snapshot of delivery outcomes aggregated
+ * from each merchant's connected courier APIs (Pathao / Steadfast /
+ * RedX / future couriers). ENRICHMENT data — eventually consistent,
+ * cache-oriented, advisory-only.
+ *
+ * Why MERCHANT-SCOPED (not global):
+ *   - Real BD courier APIs do not expose cross-merchant phone history
+ *     publicly. Each merchant queries their OWN courier credentials
+ *     for THEIR OWN historical orders.
+ *   - Compliance posture matches the existing booking/tracking flow:
+ *     the merchant is querying data they already own through
+ *     credentials they already control.
+ *   - The cross-merchant network effect lives in `FraudSignal`
+ *     (Phase 1, already privacy-safe). This collection is the
+ *     cold-start helper, not the moat.
  *
  * Architectural rules (binding):
  *
@@ -15,20 +26,19 @@ const { Schema, model, models } = mongoose;
  *     aggregates (CourierPerformance / CourierLane / AreaReliability /
  *     CustomerReliability / AddressReliability). NEVER written from
  *     `applyTrackingEvents`'s chokepoint.
- *   - GLOBAL scope (no merchantId). Identity-level — same buyer phone
- *     produces the same profile across all merchants. Privacy posture
- *     mirrors `FraudSignal`: only hash, only outcome counters, no
- *     order ids, no addresses, no merchant linkage.
+ *   - PER-MERCHANT scope. Keyed (merchantId, phoneHash) — the same
+ *     buyer phone produces a DIFFERENT profile per merchant because
+ *     the data comes from each merchant's own courier credential.
  *   - REPLAY-INSENSITIVE. Atomic findOneAndUpdate upserts with $set;
- *     re-running the orchestrator for the same phoneHash overwrites
- *     fields with byte-identical values modulo the freshness
- *     timestamps. No $inc; no replay-storm class.
+ *     re-running the orchestrator for the same key overwrites fields
+ *     with byte-identical values modulo the freshness timestamps.
+ *     No $inc; no replay-storm class.
  *   - VERSIONED. `pipelineVersion` pins each row to its writer's shape.
  *     Future schema bumps will not retroactively rewrite v1 rows.
  *
  * Read pattern: orchestrator (`lib/external-delivery/fetch-profile.ts`)
  * checks Redis → falls through to Mongo → falls through to provider
- * fan-out → upserts here. See that module for the full flow.
+ * fan-out using THIS merchant's courier credentials → upserts here.
  */
 
 export const EXTERNAL_DELIVERY_PIPELINE_VERSION = "v1" as const;
@@ -129,9 +139,21 @@ const freshnessSchema = new Schema(
 const externalDeliveryProfileSchema = new Schema(
   {
     /**
+     * Owning merchant. Scopes the profile to one merchant's view of a
+     * given phone — the data was fetched using THIS merchant's courier
+     * credentials. Two merchants observing the same buyer produce two
+     * independent profiles.
+     */
+    merchantId: {
+      type: Schema.Types.ObjectId,
+      ref: "Merchant",
+      required: true,
+      index: true,
+    },
+    /**
      * SHA-256[:32] of the canonical normalised phone, matching the
-     * Phase 1 `hashPhoneForNetwork` shape. The collection is keyed
-     * SOLELY on this field — global scope, no merchantId.
+     * Phase 1 `hashPhoneForNetwork` shape. Combined with `merchantId`
+     * to form the unique compound index.
      */
     phoneHash: { type: String, required: true, trim: true, maxlength: 64 },
     /**
@@ -162,16 +184,26 @@ const externalDeliveryProfileSchema = new Schema(
   { timestamps: true },
 );
 
-// Hot read path: phoneHash is the only lookup key. Unique index above
-// enforces the (merchantless) global scope.
-externalDeliveryProfileSchema.index({ phoneHash: 1 }, { unique: true });
+// Hot read path: every read keys on (merchantId, phoneHash). Unique
+// compound index enforces the per-merchant scope and prevents two
+// concurrent orchestrator runs from creating duplicate rows.
+externalDeliveryProfileSchema.index(
+  { merchantId: 1, phoneHash: 1 },
+  { unique: true },
+);
 // Staleness sweep — a future reaper / re-fetch worker queries by
 // `expiresAt: { $lt: now }` to find profiles ready for refresh.
 externalDeliveryProfileSchema.index({ "freshness.expiresAt": 1 });
-// Cohort queries (admin only — never on the hot path):
-//   "buyers with strongest delivery history platform-wide"
-externalDeliveryProfileSchema.index({ "aggregate.successRate": -1 });
-externalDeliveryProfileSchema.index({ "aggregate.total": -1 });
+// Per-merchant cohort queries (admin only — never on the hot path):
+//   "buyers with strongest delivery history for this merchant"
+externalDeliveryProfileSchema.index({
+  merchantId: 1,
+  "aggregate.successRate": -1,
+});
+externalDeliveryProfileSchema.index({
+  merchantId: 1,
+  "aggregate.total": -1,
+});
 
 export type ExternalDeliveryProfile = InferSchemaType<typeof externalDeliveryProfileSchema> & {
   _id: Types.ObjectId;
