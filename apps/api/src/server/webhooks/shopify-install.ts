@@ -59,7 +59,7 @@ const HMAC_FRESHNESS_WINDOW_SEC = 5 * 60;
  * Partners portal; a mismatch causes a `scope_subset_granted` warning during
  * callback.
  */
-const PUBLIC_INSTALL_SCOPES = ["read_orders", "read_customers"] as const;
+const PUBLIC_INSTALL_SCOPES = ["read_orders", "read_customers_private_data"] as const;
 
 export const PENDING_INSTALL_REDIS_PREFIX = "shopify:install:pending:";
 

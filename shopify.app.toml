@@ -1,85 +1,25 @@
-# ConfirmX — Shopify app configuration (Public Distribution, Unlisted).
-#
-# This file is the canonical source of truth for the Shopify CLI
-# (`shopify app dev`, `shopify app deploy`). Some fields (privacy webhook
-# URLs, distribution mode, listing copy if/when we move to App Store
-# listed) are still managed in Partner Dashboard.
-#
-# Pre-flight before `shopify app deploy`:
-#   1. `client_id` below must equal the Client ID from
-#      Partner Dashboard → Apps → ConfirmX → Configuration. Set the
-#      same value into SHOPIFY_APP_API_KEY in the API env (Railway).
-#   2. SHOPIFY_APP_API_SECRET on the API env must equal the Client
-#      secret from the same panel. NEVER commit the secret here —
-#      this file is in version control.
-#   3. `application_url` and `auth.redirect_urls` must point at the
-#      production hosts — `apps.confirmx.ai` (web) and
-#      `api.confirmx.ai` (api) by default. Update these together
-#      with the Railway env vars and re-deploy both.
-#
-# Spec: https://shopify.dev/docs/apps/build/cli-for-apps/app-configuration
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 name = "ConfirmX"
 handle = "confirmx"
-
-# Set this to the Client ID from Partner Dashboard. Public value;
-# safe to commit. Leave the placeholder commented until the dev/prod
-# Partner-app credentials are minted.
-# client_id = ""
-
-# Where the merchant lands AFTER OAuth approves. The connect flow
-# expects `?connected=shopify&shop=...` and parses optional `warning=`
-# query params — see apps/api/src/server/webhooks/integrations.ts.
-#
-# We point at the canonical settings path directly to skip a client-
-# side redirect hop on every install. The legacy `/dashboard/integrations`
-# route still exists as a query-string-preserving redirect for any
-# external links pinned to the old URL (apps/web/src/app/dashboard/
-# integrations/page.tsx).
-application_url = "https://app.confirmx.ai/dashboard/settings/integrations"
-
-# External (non-embedded) app — we render in our own dashboard, not
-# inside Shopify admin's iframe. App Bridge integration is deferred;
-# revisit when we want admin-nav launch.
+application_url = "https://api.confirmx.ai/api/shopify/install"
 embedded = false
-
-[build]
-# Treat this file as source of truth on deploy — `shopify app deploy`
-# writes these values back into Partner Dashboard. Disable only if
-# Partner-Dashboard-driven changes (review feedback fixes, marketing
-# copy edits) are happening live and we don't want them clobbered.
-include_config_on_deploy = true
+client_id = "c380acae5f8587b58971c5d5231fc673"
 
 [access_scopes]
-# Minimum-required scope set for ConfirmX COD operational workflows:
-#   read_orders     — receive new orders + sync fulfilment status from
-#                     the orders/create + orders/updated webhooks.
-#   read_customers  — pull customer phone for confirmation-call
-#                     workflow on flagged orders.
-scopes = "read_orders,read_customers"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers_private_data,read_orders"
+optional_scopes = [ "read_checkouts", "read_fulfillments", "read_products" ]
+use_legacy_install_flow = false
 
 [auth]
-# OAuth callback handler in apps/api. Must exactly match the
-# Allowed-redirect-URL field in Partner Dashboard. Changing the API
-# host requires updating BOTH this list AND Partner Dashboard
-# AND existing-merchant webhook subscriptions (see the
-# `retryShopifyWebhooks` mutation in the integrations router).
 redirect_urls = [
-  "https://api.confirmx.ai/api/integrations/oauth/shopify/callback",
+  "https://api.confirmx.ai/api/integrations/oauth/shopify/callback"
 ]
 
 [webhooks]
-# Pinned to match the Active version's webhook api_version in the
-# Shopify Partner Dashboard (Apps → ConfirmX → Versions). A drift
-# between this file and Partners would silently regress the next
-# `shopify app deploy` (because include_config_on_deploy=true) —
-# keep them lock-stepped on every Partners-side bump.
 api_version = "2026-04"
 
-# Real-time order delivery + uninstall topics. We auto-register these
-# at OAuth-callback time via registerShopifyWebhooks() — declaring
-# them here too means a merchant who installs via `shopify app dev`
-# gets the same set without the runtime registration step.
-[[webhooks.subscriptions]]
-topics = ["orders/create", "orders/updated", "app/uninstalled"]
-uri = "https://api.confirmx.ai/api/integrations/webhook/shopify"
+  [[webhooks.subscriptions]]
+  uri = "https://api.confirmx.ai/api/integrations/webhook/shopify"
+  topics = [ "orders/create", "orders/updated", "app/uninstalled" ]
