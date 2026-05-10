@@ -183,6 +183,17 @@ export function FirstFlagBanner() {
   const codSaved = fraud.data?.window?.codSaved ?? 0;
   const risky = fraud.data?.window?.risky ?? 0;
 
+  // Suppress the banner when the live count is zero — even though we
+  // legitimately stamped the banner-show date earlier (the merchant DID
+  // have at least one risky order at some point), rendering the body
+  // "0 flagged in the last 30 days" alongside the title "flagged its
+  // first order for review" reads as a contradiction. The localStorage
+  // stamp is preserved so the banner can re-appear within the 7-day
+  // window when new flags arrive — losing the celebration to a
+  // momentarily-empty queue would also be wrong. We just don't paint
+  // the lie.
+  if (risky <= 0) return null;
+
   return (
     <div className="relative overflow-hidden rounded-xl border border-brand/30 bg-brand/8 px-4 py-3">
       {/* Soft brand-tinted gradient — same visual language as the landing

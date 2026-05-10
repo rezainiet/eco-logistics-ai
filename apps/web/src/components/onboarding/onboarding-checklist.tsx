@@ -100,8 +100,22 @@ export function OnboardingChecklist({
       : [];
   const hasFirstOrder = ordersList.length > 0;
   const automationOn = automation.data?.enabled === true;
+  // Step is "done" only when the integration is BOTH connected AND
+  // healthy. The status==="connected" check alone passed for integrations
+  // whose Admin API calls were 403'ing (mid-2026 Non-expiring-token
+  // enforcement) — onboarding showed a green tick while orders weren't
+  // actually flowing. Health.ok flips false the moment a Test Connection
+  // or import worker fails auth, so the step now reflects reality.
+  // `health` is always present on the wire (defaulted to ok=true on
+  // legacy rows in the integrations.list mapper) — the !== false
+  // guard preserves the legacy-row optimistic default while still
+  // catching the explicit-false case that today's broken-token rows
+  // hit.
   const hasStoreConnected = (integrations.data ?? []).some(
-    (i) => i.provider !== "csv" && i.status === "connected",
+    (i) =>
+      i.provider !== "csv" &&
+      i.status === "connected" &&
+      i.health?.ok !== false,
   );
   const smsTested = ordersList.some(
     (o) =>

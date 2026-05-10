@@ -443,7 +443,23 @@ export default function OrdersPage() {
       <PageHeader
         eyebrow="Operations"
         title="Orders"
-        description={`${total.toLocaleString()} total orders across all statuses`}
+        // Header description must NOT default to "0 total orders" while
+        // the list query is still loading — that contradicts the
+        // skeleton rows in the body and reads as "the merchant has no
+        // orders" before the data has even arrived. Render a
+        // Load-aware header: avoid showing "0 total orders across all
+        // statuses" while the query is mid-flight (cache-invalidation
+        // race — isLoading flips false momentarily but data is still
+        // undefined, which fell through to "total = 0" and printed a
+        // misleading zero before the real number arrived). Treat
+        // missing-data-without-error as still loading.
+        description={
+          list.isLoading || (!list.data && !list.isError)
+            ? "Loading orders…"
+            : list.isError
+              ? "Couldn't load orders. Retry below."
+              : `${total.toLocaleString()} total orders across all statuses`
+        }
         actions={
           <>
             <Button
@@ -621,7 +637,14 @@ export default function OrdersPage() {
                     />
                   </TableCell>
                 </TableRow>
-              ) : list.isLoading ? (
+              ) : list.isLoading || !list.data ? (
+                /* Skeleton path — keep showing shimmer rows until the
+                   query has actually returned at least once. The
+                   `!list.data` guard catches the cache-invalidation
+                   race where isLoading flips false momentarily before
+                   the new data arrives; without it the table flashes
+                   the "No orders yet" empty state mid-refetch even
+                   when there are real orders to load. */
                 Array.from({ length: 6 }).map((_, i) => (
                   <TableRow key={i} className="border-stroke/8">
                     <TableCell colSpan={columns.length} className="py-3.5">
