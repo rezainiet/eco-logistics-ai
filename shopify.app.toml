@@ -79,7 +79,12 @@ redirect_urls = [
 ]
 
 [webhooks]
-api_version = "2024-04"
+# Pinned to match the Active version's webhook api_version in the
+# Shopify Partner Dashboard (Apps → ConfirmX → Versions). A drift
+# between this file and Partners would silently regress the next
+# `shopify app deploy` (because include_config_on_deploy=true) —
+# keep them lock-stepped on every Partners-side bump.
+api_version = "2026-04"
 
 # Real-time order delivery + uninstall topics. We auto-register these
 # at OAuth-callback time via registerShopifyWebhooks() — declaring

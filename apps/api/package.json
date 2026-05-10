@@ -26,6 +26,7 @@
     "@ecom/branding": "*",
     "@ecom/db": "*",
     "@ecom/types": "*",
+    "@shopify/shopify-api": "^11.13.0",
     "@trpc/server": "^10.45.2",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.75.2",
