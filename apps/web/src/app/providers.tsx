@@ -7,6 +7,7 @@ import { httpBatchLink } from "@trpc/client";
 import { useState, type ReactNode } from "react";
 import { toast } from "@/components/ui/toast";
 import { trpc } from "@/lib/trpc";
+import { getEmbeddedApiToken } from "@/lib/embedded-token-bus";
 
 /**
  * Custom DOM event fired from the queryCache onError when a tRPC call
@@ -83,9 +84,26 @@ export function Providers({ children }: { children: ReactNode }) {
             const session = await getSession();
             const csrf = readCsrfCookie();
             const headers: Record<string, string> = {};
-            if (session?.apiToken) headers.authorization = `Bearer ${session.apiToken}`;
+            // Dual-auth: prefer the NextAuth session apiToken when
+            // present (direct, non-iframe path). Fall back to the
+            // embedded-mode token bus (populated by
+            // <SessionTokenBridge> inside the (embedded) route group)
+            // when NextAuth has nothing — this is what makes embedded
+            // and direct surfaces share the same tRPC client without
+            // forking. Order is intentional: a merchant who is BOTH
+            // signed in via password AND has an embedded session
+            // somehow keeps their NextAuth token, since the embedded
+            // session is meant for an iframe context that wouldn't see
+            // the NextAuth cookie anyway.
+            const directToken = session?.apiToken ?? null;
+            const embeddedToken = directToken ? null : getEmbeddedApiToken();
+            const apiToken = directToken ?? embeddedToken;
+            if (apiToken) headers.authorization = `Bearer ${apiToken}`;
             // Double-submit CSRF token for cookie-auth mutations. Mirrors
             // the value the API set in the non-HttpOnly csrf_token cookie.
+            // CSRF is a NextAuth-cookie-flow concern; embedded clients
+            // never carry the csrf cookie (their JWT travels in the
+            // bearer header), so the empty-csrf branch is harmless.
             if (csrf) headers["x-csrf-token"] = csrf;
             return headers;
           },

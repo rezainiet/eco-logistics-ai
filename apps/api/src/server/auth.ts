@@ -5,7 +5,11 @@ import jwt from "jsonwebtoken";
 import { z } from "zod";
 import { Merchant, MERCHANT_COUNTRIES, MERCHANT_LANGUAGES, PHONE_RE, Integration } from "@ecom/db";
 import { env } from "../env.js";
-import { verifyShopifyAppBridgeSessionToken } from "../lib/integrations/shopify.js";
+import {
+  exchangeSessionTokenForOfflineToken,
+  verifyShopifyAppBridgeSessionToken,
+} from "../lib/integrations/shopify.js";
+import { encryptSecret } from "../lib/crypto.js";
 import {
   loginLimiter,
   passwordResetLimiter,
@@ -673,7 +677,17 @@ authRouter.post("/shopify/exchange", async (req, res) => {
   // claim is the only source of truth for the shop identity — never
   // trust a body-supplied `shop` field.
   const shop = claims.shop;
-  const integration = await Integration.findOne({
+  // Narrow type for the integration reference the rest of this
+  // handler actually uses. Both the findOne().lean() result and the
+  // auto-provision branch's upsert payload satisfy this shape.
+  type IntegrationRef = {
+    _id: import("mongoose").Types.ObjectId;
+    merchantId: import("mongoose").Types.ObjectId;
+    provider: string;
+    accountKey: string;
+    status: string;
+  };
+  const initialIntegration = await Integration.findOne({
     provider: "shopify",
     accountKey: shop,
     // Accept either connected or pending — pending means the OAuth
@@ -683,29 +697,180 @@ authRouter.post("/shopify/exchange", async (req, res) => {
   })
     .select("_id merchantId provider accountKey status")
     .lean();
+  let integration: IntegrationRef | null = initialIntegration
+    ? {
+        _id: initialIntegration._id,
+        merchantId: initialIntegration.merchantId,
+        provider: initialIntegration.provider,
+        accountKey: initialIntegration.accountKey,
+        status: initialIntegration.status,
+      }
+    : null;
 
+  // Auto-provision branch (Phase C C7). When no Integration exists for
+  // this shop, the embedded path completes the install via Token
+  // Exchange instead of bouncing the merchant back to the legacy
+  // /api/shopify/install URL. The session token we already verified
+  // is sufficient proof-of-merchant — Shopify will mint an offline
+  // access token in exchange.
+  //
+  // Race protection: Merchant.create is the leader-election point.
+  // If a concurrent request races us to create the merchant for the
+  // same shop, the unique-email index throws and we re-fetch the
+  // existing merchant. The Integration upsert keyed on
+  // (merchantId, provider, accountKey) handles its own concurrency
+  // via Mongo's atomic findOneAndUpdate.
   if (!integration) {
-    // Phase B stops here. Phase C will:
-    //   1. Call exchangeSessionTokenForOfflineToken() with the same
-    //      session token to mint an offline access token.
-    //   2. Auto-provision a Merchant document keyed on the shop.
-    //   3. Upsert the Integration row reusing the
-    //      completeShopifyInstall persistence logic.
-    //   4. Fall through to the JWT issuance below.
-    //
-    // Until then, the SPA receives a structured 404 it can act on
-    // (e.g. redirect the merchant to the legacy /api/shopify/install
-    // entry to land an Integration row before retrying).
-    console.log(
-      "[auth/shopify/exchange] no integration for shop; deferring to legacy install",
+    let exchange;
+    try {
+      exchange = await exchangeSessionTokenForOfflineToken({
+        shopDomain: shop,
+        sessionToken: parsed.data.sessionToken,
+        apiKey,
+        apiSecret,
+      });
+    } catch (err) {
+      console.warn(
+        "[auth/shopify/exchange] auto-provision token exchange failed",
+        { shop, err: (err as Error).message?.slice(0, 200) },
+      );
+      // Token Exchange failures are most often "this app isn't
+      // configured for token exchange" or "session token expired
+      // mid-flight" — both rare-but-recoverable. Surface a 502 so
+      // the SPA can prompt a retry rather than silently 404'ing.
+      return res.status(502).json({
+        error: "token_exchange_failed",
+        shop,
+      });
+    }
+
+    // Synthesize a merchant row keyed on the shop. The email is
+    // recognisable but un-routable; the password hash is random and
+    // can never be matched by a credentials login (locking the
+    // account to the embedded path). The merchant can update both
+    // later from Settings → Workspace once they're in the dashboard.
+    const shopSlug = shop.replace(/\.myshopify\.com$/i, "");
+    const syntheticEmail = `embedded-${shopSlug}@confirmx.shop`.toLowerCase();
+    const lockedPasswordHash = await bcrypt.hash(
+      randomBytes(32).toString("base64url"),
+      10,
+    );
+    const now = new Date();
+    const trialEndsAt = new Date(
+      now.getTime() + env.TRIAL_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    let merchantDoc;
+    try {
+      merchantDoc = await Merchant.create({
+        email: syntheticEmail,
+        passwordHash: lockedPasswordHash,
+        businessName: shopSlug,
+        emailVerified: true,
+        subscription: {
+          status: "trial",
+          tier: "starter",
+          startDate: now,
+          trialEndsAt,
+        },
+      });
+    } catch (err) {
+      // Race: a sibling request just created this merchant. Re-fetch
+      // by the synthetic email and continue.
+      const e = err as { code?: number; message?: string };
+      const isDuplicateEmail =
+        e?.code === 11000 || (e?.message ?? "").includes("duplicate key");
+      if (!isDuplicateEmail) {
+        console.error(
+          "[auth/shopify/exchange] merchant create failed",
+          { shop, err: e?.message?.slice(0, 200) },
+        );
+        return res.status(500).json({ error: "merchant_provision_failed" });
+      }
+      const existing = await Merchant.findOne({ email: syntheticEmail });
+      if (!existing) {
+        return res.status(500).json({ error: "merchant_provision_race" });
+      }
+      merchantDoc = existing;
+    }
+
+    // Upsert the Integration row. Keyed on
+    // (merchantId, provider, accountKey) which has a unique index;
+    // findOneAndUpdate with upsert is atomic. If the Token Exchange
+    // re-fired for any reason and the row already exists, we reuse
+    // it and update its credentials in place.
+    const credentialsPayload: Record<string, string | Date> = {
+      apiKey: encryptSecret(apiKey),
+      apiSecret: encryptSecret(apiSecret),
+      siteUrl: shop,
+      accessToken: encryptSecret(exchange.accessToken),
+    };
+    if (
+      typeof exchange.refreshToken === "string" &&
+      exchange.refreshToken
+    ) {
+      credentialsPayload.refreshToken = encryptSecret(exchange.refreshToken);
+    }
+    if (typeof exchange.expiresIn === "number") {
+      credentialsPayload.accessTokenExpiresAt = new Date(
+        Date.now() + exchange.expiresIn * 1000,
+      );
+    }
+
+    const upserted = await Integration.findOneAndUpdate(
+      { merchantId: merchantDoc._id, provider: "shopify", accountKey: shop },
+      {
+        $set: {
+          label: `Shopify · ${shop}`,
+          status: "connected",
+          credentials: credentialsPayload,
+          permissions: exchange.scope
+            ? exchange.scope.split(",").map((s) => s.trim()).filter(Boolean)
+            : [],
+          connectedAt: now,
+          disconnectedAt: null,
+          health: { ok: true, lastCheckedAt: now },
+        },
+        $setOnInsert: {
+          merchantId: merchantDoc._id,
+          provider: "shopify",
+          accountKey: shop,
+          createdAt: now,
+        },
+      },
+      { upsert: true, new: true },
+    );
+
+    console.log("[auth/shopify/exchange] auto-provisioned", {
+      shop,
+      merchantId: String(merchantDoc._id),
+      integrationId: String(upserted._id),
+      hasRefreshToken: !!credentialsPayload.refreshToken,
+      hasExpiresAt: !!credentialsPayload.accessTokenExpiresAt,
+    });
+
+    integration = {
+      _id: upserted._id,
+      merchantId: upserted.merchantId,
+      provider: upserted.provider,
+      accountKey: upserted.accountKey,
+      status: upserted.status,
+    } satisfies IntegrationRef;
+  }
+
+  // After the auto-provision branch, `integration` is guaranteed
+  // non-null: either the initial findOne returned a row, or the
+  // branch above re-bound it to the upserted document. The
+  // assertion is a type-narrow for TS, not a runtime check — the
+  // explicit `if (!integration)` would be unreachable, so we fail
+  // loud only if the invariant breaks (which would be a
+  // programming error).
+  if (!integration) {
+    console.error(
+      "[auth/shopify/exchange] integration unset after auto-provision — invariant violated",
       { shop },
     );
-    return res.status(404).json({
-      error: "no_integration_for_shop",
-      shop,
-      // Hint for the client: where to send the merchant to provision.
-      installUrl: `/api/shopify/install?shop=${encodeURIComponent(shop)}`,
-    });
+    return res.status(500).json({ error: "integration_unresolved" });
   }
 
   // Resolve the Merchant. The integration row carries merchantId; load

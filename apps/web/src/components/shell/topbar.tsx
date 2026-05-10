@@ -4,6 +4,9 @@ import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { isEmbedded } from "@/lib/embedded";
+import { setEmbeddedApiToken } from "@/lib/embedded-token-bus";
+import { toast } from "@/components/ui/toast";
 import {
   Bell,
   ChevronDown,
@@ -263,7 +266,25 @@ export function Topbar({ userLabel }: { userLabel: string }) {
           <DropdownMenuItem
             onSelect={(e) => {
               e.preventDefault();
-              void signOut({ callbackUrl: "/login" });
+              // Iframe gate (Phase C C9): inside Shopify Admin's
+              // iframe, signOut({ callbackUrl: "/login" }) reloads the
+              // iframe to /login — but our /login page is gated by CSP
+              // frame-ancestors 'none', so the iframe goes blank.
+              // Embedded merchants don't really "sign out" of our app
+              // (Shopify owns their identity); they uninstall instead.
+              // For now, the embedded path clears the in-memory
+              // bearer + shows an inline notice; direct path keeps
+              // its existing redirect behaviour.
+              if (isEmbedded()) {
+                setEmbeddedApiToken(null);
+                void signOut({ redirect: false });
+                toast.info(
+                  "Signed out",
+                  "Reload from Shopify Admin to sign back in.",
+                );
+              } else {
+                void signOut({ callbackUrl: "/login" });
+              }
             }}
             className="text-danger focus:bg-danger-subtle focus:text-danger"
           >

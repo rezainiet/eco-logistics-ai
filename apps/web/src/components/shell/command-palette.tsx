@@ -3,6 +3,9 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { isEmbedded } from "@/lib/embedded";
+import { setEmbeddedApiToken } from "@/lib/embedded-token-bus";
+import { toast } from "@/components/ui/toast";
 import {
   ArrowRight,
   BarChart3,
@@ -246,7 +249,19 @@ function CommandPaletteDialog({
         keywords: "logout",
         onSelect: () => {
           close();
-          void signOut({ callbackUrl: "/login" });
+          // Iframe gate (Phase C C9): see topbar.tsx for full
+          // rationale — embedded path doesn't redirect to /login,
+          // direct path keeps its existing behaviour.
+          if (isEmbedded()) {
+            setEmbeddedApiToken(null);
+            void signOut({ redirect: false });
+            toast.info(
+              "Signed out",
+              "Reload from Shopify Admin to sign back in.",
+            );
+          } else {
+            void signOut({ callbackUrl: "/login" });
+          }
         },
       },
     ],

@@ -29,6 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { isEmbedded } from "@/lib/embedded";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -390,12 +391,29 @@ export default function IntegrationsPage() {
           shop,
         });
         setOpenProvider(null);
-        // Best-effort popup. Ignore failure — the inline button below is
-        // the primary action.
+        // Best-effort popup. Ignore failure — the inline button below
+        // is the primary action.
+        //
+        // Iframe gate (Phase C C8): when ConfirmX is rendered inside
+        // Shopify Admin's iframe, window.open is blocked by the
+        // browser's iframe sandbox AND a new tab would be the wrong UX
+        // anyway (the merchant should stay inside Shopify Admin). We
+        // detect the embedded context via isEmbedded() and use a
+        // top-frame navigation instead. The inline "Open Shopify
+        // install" button still covers the case where neither method
+        // resolves cleanly.
         try {
-          window.open(data.installUrl, "_blank", "noopener,noreferrer");
+          if (isEmbedded()) {
+            // top.location.assign() asks the iframe's parent (Shopify
+            // Admin) to navigate. Permitted because the merchant just
+            // clicked Connect — same-user-gesture rule applies.
+            window.top?.location.assign(data.installUrl);
+          } else {
+            window.open(data.installUrl, "_blank", "noopener,noreferrer");
+          }
         } catch {
-          /* popup blocked — inline button covers us */
+          /* popup blocked OR top-frame access denied — inline button
+             covers either case */
         }
         toast.success(
           "Almost there — click 'Open Shopify install' below to finish.",

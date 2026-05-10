@@ -26,8 +26,26 @@ const buttonVariants = cva(
   }
 );
 
+// Omit `variant` from React.ButtonHTMLAttributes before extending.
+// `@shopify/app-bridge-types` (a transitive dep of
+// `@shopify/app-bridge-react` introduced by the embedded-app
+// migration) ships a `declare global` block that augments
+// `React.ButtonHTMLAttributes<T>` with `variant?: 'primary' |
+// 'breadcrumb'` to support Shopify's polaris-web-components.
+// Without the Omit, ButtonProps would be extending two interfaces
+// that both define `variant`, producing TS2320 ("Interface
+// 'ButtonProps' cannot simultaneously extend ... because they
+// disagree about variant"). Our cva-driven variant union is the
+// canonical one; the Omit makes that explicit while leaving the
+// App Bridge augmentation intact for any plain <button> usages
+// elsewhere.
+type ButtonElementAttrsWithoutVariant = Omit<
+  React.ButtonHTMLAttributes<HTMLButtonElement>,
+  "variant"
+>;
+
 export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+  extends ButtonElementAttrsWithoutVariant,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
 }
