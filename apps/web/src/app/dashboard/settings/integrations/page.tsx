@@ -1663,9 +1663,7 @@ function ConnectDialog({
                   // app version, mirror it here AND vice-versa.
                   scopes: [
                     "read_orders",
-                    "read_products",
                     "read_customers",
-                    "read_fulfillments",
                   ],
                 })
               }

@@ -119,7 +119,7 @@ const connectShopifySchema = z.object({
   apiKey: z.string().min(1).optional(),
   apiSecret: z.string().min(1).optional(),
   accessToken: z.string().min(1).optional(),
-  scopes: z.array(z.string()).default(["read_orders", "write_orders", "read_customers"]),
+  scopes: z.array(z.string()).default(["read_orders", "read_customers"]),
   /**
    * The merchant has explicitly confirmed they want to overwrite an existing
    * connected integration (rotating credentials / forcing a fresh OAuth).
@@ -318,7 +318,7 @@ export const integrationsRouter = router({
           consumerSecret: encryptSecret(input.consumerSecret),
           siteUrl: input.siteUrl,
         };
-        permissions.push("read_orders", "write_orders");
+        permissions.push("read_orders", "read_customers");
       } else if (input.provider === "custom_api") {
         accountKey = `custom-${randomBytes(4).toString("hex")}`;
         const apiKey = randomBytes(24).toString("base64url");

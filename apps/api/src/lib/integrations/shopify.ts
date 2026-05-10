@@ -756,8 +756,8 @@ export function diffShopifyScopes(
     .filter(Boolean)
     .filter((s) => !granted.has(s));
   // Dedup while preserving the requested order so error messages read like
-  // "Missing: read_products, read_fulfillments" not "read_products,
-  // read_products, read_fulfillments".
+  // "Missing: read_orders, read_customers" not "read_orders,
+  // read_orders, read_customers".
   return {
     missing: Array.from(new Set(missing)),
     granted: Array.from(granted),

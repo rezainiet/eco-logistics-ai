@@ -54,19 +54,9 @@ include_config_on_deploy = true
 # Minimum-required scope set for ConfirmX COD operational workflows:
 #   read_orders     — receive new orders + sync fulfilment status from
 #                     the orders/create + orders/updated webhooks.
-#   write_orders    — operator-driven cancel/refund from the fraud
-#                     review queue. Operator decides; we never act
-#                     autonomously. Reviewer-friendly framing: this
-#                     is "merchant tooling for COD confirmation
-#                     workflows", not autonomous automation.
 #   read_customers  — pull customer phone for confirmation-call
 #                     workflow on flagged orders.
-#
-# Reviewer pushback on `write_orders` is realistic. If review asks
-# us to drop it, the alternative is "redirect the merchant into
-# Shopify admin to cancel" — adds a click but works without the
-# scope. Easier to pre-empt by removing now if you're comfortable.
-scopes = "read_orders,write_orders,read_customers"
+scopes = "read_orders,read_customers"
 
 [auth]
 # OAuth callback handler in apps/api. Must exactly match the

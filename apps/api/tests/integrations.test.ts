@@ -351,7 +351,7 @@ describe("integrations router + connectors", () => {
   it("exchangeShopifyCode posts code+credentials and returns token", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
-        JSON.stringify({ access_token: "shpat_abcdef", scope: "read_orders,write_orders" }),
+        JSON.stringify({ access_token: "shpat_abcdef", scope: "read_orders,read_customers" }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
     );
@@ -363,7 +363,7 @@ describe("integrations router + connectors", () => {
       fetchImpl: fetchMock as unknown as typeof fetch,
     });
     expect(result.accessToken).toBe("shpat_abcdef");
-    expect(result.scope).toBe("read_orders,write_orders");
+    expect(result.scope).toBe("read_orders,read_customers");
     expect(fetchMock).toHaveBeenCalledOnce();
     const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(call[0]).toBe("https://demo.myshopify.com/admin/oauth/access_token");
