@@ -845,11 +845,25 @@ export const integrationsRouter = router({
         //   `IntegrationError` detail silently broke auto-disconnect,
         //   leaving merchants wedged in `error` until the next
         //   retry.
+        // Tightened auth-failure heuristic for Shopify. Previously we
+        // matched the bare substring "access token" — which mistakenly
+        // triggered on Shopify's 403 "Non-expiring access tokens are
+        // no longer accepted" message. That 403 is a TOKEN-FORMAT
+        // policy rejection, not a token-revoked event: the merchant
+        // didn't uninstall, the OAuth grant is technically valid, the
+        // app just needs the modern Token Access framework. Auto-
+        // disconnecting on it stranded merchants in a loop.
+        //
+        // Rule: only flip to disconnected on a true revoked/invalid
+        // token signal (401, "invalid api key", "unrecognized
+        // login"). Anything else — 403 policy errors, scope
+        // mismatches, transient 5xx — keeps the row in "error" so
+        // the merchant can retry without losing their slot.
         const isPermanentAuthFailure =
           (integration.provider === "shopify" &&
             (detail.includes("401") ||
               detail.includes("invalid api key") ||
-              detail.includes("access token") ||
+              detail.includes("invalid access token") ||
               detail.includes("unrecognized login"))) ||
           (integration.provider === "woocommerce" &&
             result.kind === "auth_rejected");
