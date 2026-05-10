@@ -62,6 +62,7 @@ type AuditAction =
   | "auth.password_changed"
   | "auth.email_verified"
   | "auth.logout_all"
+  | "auth.shopify_exchange"
   | "merchant.test_sms_sent"
   | "automation.config_updated"
   | "automation.auto_confirm"

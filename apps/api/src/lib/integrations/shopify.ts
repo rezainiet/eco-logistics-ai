@@ -444,6 +444,230 @@ export async function refreshShopifyAccessToken(args: {
 }
 
 /**
+ * Token Exchange — Shopify's modern alternative to the OAuth code-grant
+ * flow for embedded apps. Trades a short-lived App Bridge session token
+ * (`subject_token`, signed by the app's API secret and minted on every
+ * iframe load) for a long-lived OFFLINE access token that we persist
+ * against the Integration row.
+ *
+ * This is the path that finally produces expiring offline tokens with
+ * a `refresh_token` for non-popup installs. The legacy code-grant flow
+ * (`exchangeShopifyCode`) keeps producing legacy non-expiring tokens
+ * for non-embedded apps — Shopify's mid-2026 enforcement is rejecting
+ * those at the Admin API layer.
+ *
+ * Shape match: returns the same `ShopifyOAuthExchangeResult` produced
+ * by `exchangeShopifyCode` so the persist path inside
+ * `completeShopifyInstall` (and the new embedded auth handler) is
+ * identical for both flows.
+ *
+ * Spec: https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/token-exchange
+ *
+ * Phase B note: this function is part of the embedded-app migration's
+ * defensive prep. It is NOT yet wired into any production code path —
+ * the new `/auth/shopify/exchange` endpoint introduced in Phase B3
+ * uses it, but only when an Integration row needs to be auto-
+ * provisioned (which Phase B leaves out — the endpoint returns
+ * `no_integration_for_shop` instead). Phase C completes the wiring.
+ */
+export async function exchangeSessionTokenForOfflineToken(args: {
+  shopDomain: string;
+  sessionToken: string;
+  apiKey: string;
+  apiSecret: string;
+  fetchImpl?: typeof fetch;
+}): Promise<ShopifyOAuthExchangeResult> {
+  const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const fetcher = args.fetchImpl ?? fetch;
+  const res = await fetchWithTimeout(
+    fetcher,
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: args.apiKey,
+        client_secret: args.apiSecret,
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        subject_token: args.sessionToken,
+        subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+        // Offline access — the kind we persist for background jobs and
+        // webhooks. The other option (`online-access-token`) is tied
+        // to the merchant user session and dies after 24h with no
+        // refresh path; not a fit for ConfirmX worker-driven imports.
+        requested_token_type:
+          "urn:shopify:params:oauth:token-type:offline-access-token",
+      }),
+    },
+    "exchangeSessionTokenForOfflineToken",
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new IntegrationError(
+      `shopify token exchange ${res.status}: ${body.slice(0, 200)}`,
+    );
+  }
+  const json = (await res.json()) as {
+    access_token?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
+  if (!json.access_token) {
+    throw new IntegrationError(
+      "shopify token exchange: response missing access_token",
+    );
+  }
+  return {
+    accessToken: json.access_token,
+    scope: json.scope ?? "",
+    expiresIn:
+      typeof json.expires_in === "number" ? json.expires_in : undefined,
+    refreshToken:
+      typeof json.refresh_token === "string" ? json.refresh_token : undefined,
+  };
+}
+
+/**
+ * Result shape of a successfully verified Shopify App Bridge session token.
+ * Subset of the JWT claims we trust enough to act on — everything else is
+ * either reconstructable from these or considered unverified payload.
+ */
+export interface ShopifyAppBridgeSessionClaims {
+  /** The shop domain extracted from the `dest` claim (`shop.myshopify.com`). */
+  shop: string;
+  /** The Shopify-side staff user id (sub claim). Opaque string. */
+  sub: string;
+  /** Unix-seconds expiry the token is valid until. */
+  exp: number;
+  /** Audience — must equal our app's API key. */
+  aud: string;
+  /** Issuer — Shopify's admin URL for the shop. */
+  iss: string;
+  /** Optional Shopify-issued session id (sid claim). */
+  sid?: string;
+  /** Optional unique JWT id (jti) — useful for replay defence. */
+  jti?: string;
+}
+
+/**
+ * Verify a Shopify App Bridge session token and return its trusted claims.
+ *
+ * App Bridge mints these tokens client-side from the embedded iframe and
+ * the SPA forwards them to our API to prove "this request is on behalf of
+ * shop X on behalf of user Y, signed by Shopify with our app secret".
+ *
+ * Verification gates (in order):
+ *
+ *   1. Algorithm pin — HS256 only. Stops alg=none and key-confusion
+ *      attacks.
+ *   2. Signature — HMAC against our SHOPIFY_APP_API_SECRET. The same
+ *      shared secret Shopify uses to mint the token.
+ *   3. `aud` claim — must exactly equal our SHOPIFY_APP_API_KEY. Stops
+ *      a token issued for a DIFFERENT app's iframe being replayed against
+ *      ours.
+ *   4. `iss` and `dest` claims — both must end with `.myshopify.com` and
+ *      should match each other shop. The `dest` claim is the canonical
+ *      shop URL Shopify wants us to act against.
+ *   5. `exp` window — jsonwebtoken's verify checks this with 5s clock
+ *      tolerance (matching trpc.ts).
+ *
+ * Throws on any failure with a redacted `Error` message — the caller
+ * surfaces a generic 401. The detailed reason is logged once on the
+ * server side in the calling endpoint, never returned to the client
+ * (would leak which gate failed and help an attacker iterate).
+ *
+ * Spec: https://shopify.dev/docs/apps/build/authentication-authorization/session-tokens
+ *
+ * Phase B note: pure verifier, no IO, no Mongo. Used only by
+ * `/auth/shopify/exchange` in Phase B3.
+ */
+export function verifyShopifyAppBridgeSessionToken(args: {
+  token: string;
+  apiKey: string;
+  apiSecret: string;
+}): ShopifyAppBridgeSessionClaims {
+  if (!args.token || typeof args.token !== "string") {
+    throw new IntegrationError("session token missing");
+  }
+  if (!args.apiSecret) {
+    throw new IntegrationError("session token verifier misconfigured: no apiSecret");
+  }
+  let raw: unknown;
+  try {
+    // Lazy-import to keep the worker bundles small. shopify.ts is also
+    // loaded by adapters that never need JWT verification.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const jwt = require("jsonwebtoken") as typeof import("jsonwebtoken");
+    raw = jwt.verify(args.token, args.apiSecret, {
+      algorithms: ["HS256"],
+      // App Bridge session tokens have aud == apiKey. Pin it so a
+      // token minted for a different app cannot be replayed here.
+      audience: args.apiKey,
+      clockTolerance: 5,
+    });
+  } catch (err) {
+    throw new IntegrationError(
+      `session token verify failed: ${(err as Error).message.slice(0, 120)}`,
+    );
+  }
+  if (!raw || typeof raw !== "object") {
+    throw new IntegrationError("session token claims malformed");
+  }
+  const claims = raw as Record<string, unknown>;
+  // `dest` is the Shopify-canonical shop URL. The SPA cannot fake it
+  // because the signature is over the whole payload.
+  const destRaw = typeof claims.dest === "string" ? claims.dest : null;
+  if (!destRaw) throw new IntegrationError("session token missing dest claim");
+  const issRaw = typeof claims.iss === "string" ? claims.iss : null;
+  if (!issRaw) throw new IntegrationError("session token missing iss claim");
+
+  // Both `dest` and `iss` are full URLs like `https://shop.myshopify.com`
+  // or `https://shop.myshopify.com/admin`. Normalize to the bare shop
+  // hostname for downstream comparisons against integration.accountKey.
+  const extractShop = (url: string): string | null => {
+    try {
+      const u = new URL(url);
+      return u.host.toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  const shopFromDest = extractShop(destRaw);
+  const shopFromIss = extractShop(issRaw);
+  if (!shopFromDest || !shopFromDest.endsWith(".myshopify.com")) {
+    throw new IntegrationError("session token dest is not a myshopify.com shop");
+  }
+  if (!shopFromIss || !shopFromIss.endsWith(".myshopify.com")) {
+    throw new IntegrationError("session token iss is not a myshopify.com shop");
+  }
+  if (shopFromDest !== shopFromIss) {
+    throw new IntegrationError("session token dest/iss shop mismatch");
+  }
+  // jwt.verify already pinned aud === apiKey, but the cast back to
+  // string here is what feeds the typed return shape.
+  const aud = typeof claims.aud === "string" ? claims.aud : null;
+  if (aud !== args.apiKey) {
+    throw new IntegrationError("session token aud mismatch");
+  }
+  const sub = typeof claims.sub === "string" ? claims.sub : null;
+  if (!sub) throw new IntegrationError("session token missing sub claim");
+  const exp = typeof claims.exp === "number" ? claims.exp : null;
+  if (!exp) throw new IntegrationError("session token missing exp claim");
+  const sid = typeof claims.sid === "string" ? claims.sid : undefined;
+  const jti = typeof claims.jti === "string" ? claims.jti : undefined;
+  return {
+    shop: shopFromDest,
+    sub,
+    exp,
+    aud,
+    iss: issRaw,
+    sid,
+    jti,
+  };
+}
+
+/**
  * Compare what we ASKED for at install start with what Shopify actually
  * granted. Pure helper — does no IO, safe to call from anywhere. Returns
  * the missing scopes (requested - granted), normalized + deduplicated.

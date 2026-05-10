@@ -3,8 +3,9 @@ import { Router, type Request, type Response } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { Merchant, MERCHANT_COUNTRIES, MERCHANT_LANGUAGES, PHONE_RE } from "@ecom/db";
+import { Merchant, MERCHANT_COUNTRIES, MERCHANT_LANGUAGES, PHONE_RE, Integration } from "@ecom/db";
 import { env } from "../env.js";
+import { verifyShopifyAppBridgeSessionToken } from "../lib/integrations/shopify.js";
 import {
   loginLimiter,
   passwordResetLimiter,
@@ -577,6 +578,191 @@ authRouter.post("/verify-email", async (req, res) => {
   await merchant.save();
 
   res.json({ ok: true });
+});
+
+/**
+ * App Bridge session-token exchange — embedded-app auth bridge.
+ *
+ * Phase B B3 of the Shopify embedded-app migration. Accepts a Shopify
+ * session token (HS256-signed JWT minted by App Bridge inside the iframe
+ * and forwarded to us by the SPA) and returns OUR access token in
+ * exactly the same JSON shape as `/auth/login` so the SPA's existing
+ * tRPC client can consume it without branching.
+ *
+ * Phase B scope (deliberately limited):
+ *
+ *   - Verifies the session token signature, audience, issuer, and
+ *     freshness via verifyShopifyAppBridgeSessionToken().
+ *   - Looks up the Integration row by accountKey == shop. The shop is
+ *     extracted from the verified `dest` claim — never trusted from
+ *     the request body.
+ *   - If the Integration row exists and is connected to a merchant,
+ *     mints OUR JWT for that merchant via the same setAuthCookies()
+ *     used by /auth/login. Cookie + body parity with the existing
+ *     login response means the SPA already knows how to consume it.
+ *   - If NO Integration row matches, returns 404 with
+ *     `{ error: "no_integration_for_shop" }`. Phase C extends this
+ *     branch to auto-provision a Merchant + Integration via the
+ *     Token Exchange offline-token flow. Phase B intentionally
+ *     stops here so the change is small and reversible.
+ *
+ * What this endpoint does NOT do (yet):
+ *
+ *   - Auto-create a Merchant for first-time embedded installs. Phase C.
+ *   - Call exchangeSessionTokenForOfflineToken() to mint an offline
+ *     access token. Phase C, only when auto-provisioning.
+ *   - Set non-strict-SameSite cookies for cross-origin iframe usage.
+ *     The existing strict cookies are still set (harmless inside the
+ *     iframe; the SPA reads the bearer token from the JSON body).
+ *     Phase D revisits cookie SameSite when CSP changes.
+ *   - Replace any existing /auth/login or /auth/refresh code path.
+ *     Both stay live for the direct (non-iframe) entry.
+ *
+ * Production stability: this endpoint is additive. No existing route
+ * or handler is modified. Removing it (or reverting Phase B entirely)
+ * has no behaviour change on the non-embedded surface.
+ */
+const shopifyExchangeSchema = z.object({
+  sessionToken: z.string().min(20).max(4096),
+});
+
+authRouter.post("/shopify/exchange", async (req, res) => {
+  // Sanity: refuse to operate without app credentials. In dev, an
+  // operator running without SHOPIFY_APP_API_KEY/_SECRET env values
+  // gets a 503 here so the failure mode is "configure the env" rather
+  // than a confusing 401. Production envs always have these set.
+  const apiKey = env.SHOPIFY_APP_API_KEY ?? "";
+  const apiSecret = env.SHOPIFY_APP_API_SECRET ?? "";
+  if (!apiKey || !apiSecret) {
+    console.error(
+      "[auth/shopify/exchange] SHOPIFY_APP_API_KEY / SHOPIFY_APP_API_SECRET unset",
+    );
+    return res
+      .status(503)
+      .json({ error: "embedded_auth_not_configured" });
+  }
+
+  const parsed = shopifyExchangeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "invalid_session_token_request" });
+  }
+
+  // Verify Shopify session token. The verifier rejects:
+  // - bad/missing signature
+  // - aud mismatch (token minted for a different app)
+  // - iss/dest mismatch with .myshopify.com hostname
+  // - sub/exp/aud claim absence
+  let claims;
+  try {
+    claims = verifyShopifyAppBridgeSessionToken({
+      token: parsed.data.sessionToken,
+      apiKey,
+      apiSecret,
+    });
+  } catch (err) {
+    // Log the specific gate failure on the server but never return it
+    // to the client — a noisy 401 reason is a fingerprint helper for
+    // attackers iterating on forged tokens.
+    console.warn("[auth/shopify/exchange] session token rejected", {
+      err: (err as Error).message.slice(0, 200),
+    });
+    return res.status(401).json({ error: "invalid_session_token" });
+  }
+
+  // Look up the Integration row for this shop. The verified `dest`
+  // claim is the only source of truth for the shop identity — never
+  // trust a body-supplied `shop` field.
+  const shop = claims.shop;
+  const integration = await Integration.findOne({
+    provider: "shopify",
+    accountKey: shop,
+    // Accept either connected or pending — pending means the OAuth
+    // grant happened but the merchant hasn't claimed yet, which is
+    // exactly the window the embedded path can take over from.
+    status: { $in: ["connected", "pending", "error"] },
+  })
+    .select("_id merchantId provider accountKey status")
+    .lean();
+
+  if (!integration) {
+    // Phase B stops here. Phase C will:
+    //   1. Call exchangeSessionTokenForOfflineToken() with the same
+    //      session token to mint an offline access token.
+    //   2. Auto-provision a Merchant document keyed on the shop.
+    //   3. Upsert the Integration row reusing the
+    //      completeShopifyInstall persistence logic.
+    //   4. Fall through to the JWT issuance below.
+    //
+    // Until then, the SPA receives a structured 404 it can act on
+    // (e.g. redirect the merchant to the legacy /api/shopify/install
+    // entry to land an Integration row before retrying).
+    console.log(
+      "[auth/shopify/exchange] no integration for shop; deferring to legacy install",
+      { shop },
+    );
+    return res.status(404).json({
+      error: "no_integration_for_shop",
+      shop,
+      // Hint for the client: where to send the merchant to provision.
+      installUrl: `/api/shopify/install?shop=${encodeURIComponent(shop)}`,
+    });
+  }
+
+  // Resolve the Merchant. The integration row carries merchantId; load
+  // the merchant so we can mint a JWT with the canonical email/role
+  // claims (matches the /auth/login response shape).
+  const merchant = await Merchant.findById(integration.merchantId)
+    .select("_id email businessName role")
+    .lean();
+  if (!merchant) {
+    // Defensive: an Integration row without a merchant is a data
+    // integrity failure, not a normal flow. Surface as 410 so the
+    // client knows the row is gone and shouldn't retry.
+    console.error(
+      "[auth/shopify/exchange] integration without merchant — data integrity",
+      { shop, integrationId: String(integration._id) },
+    );
+    return res.status(410).json({ error: "merchant_missing" });
+  }
+
+  // Issue our JWT in the same shape as /auth/login. Sets cookies as a
+  // side effect (useful for the direct path; harmless for the iframe
+  // path since strict cookies are not sent cross-site). The SPA reads
+  // the `token` field from the JSON body either way.
+  const { accessToken, csrfToken } = await setAuthCookies(req, res, {
+    _id: merchant._id,
+    email: merchant.email,
+    role: merchant.role,
+  });
+
+  void writeAudit({
+    merchantId: merchant._id as import("mongoose").Types.ObjectId,
+    actorId: merchant._id as import("mongoose").Types.ObjectId,
+    actorEmail: merchant.email,
+    actorType: "merchant",
+    action: "auth.shopify_exchange",
+    subjectType: "merchant",
+    subjectId: merchant._id as import("mongoose").Types.ObjectId,
+    ip: req.ip ?? null,
+    userAgent: req.headers["user-agent"] ?? null,
+    meta: {
+      shop,
+      integrationId: String(integration._id),
+      sub: claims.sub,
+      jti: claims.jti ?? null,
+    },
+  });
+
+  res.json({
+    id: String(merchant._id),
+    email: merchant.email,
+    name: merchant.businessName,
+    role: merchant.role,
+    token: accessToken,
+    csrfToken,
+    shop,
+    integrationId: String(integration._id),
+  });
 });
 
 const resendVerifySchema = z.object({ email: z.string().email() });
