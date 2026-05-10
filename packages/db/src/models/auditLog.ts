@@ -97,6 +97,11 @@ export const AUDIT_ACTIONS = [
   "auth.password_changed",
   "auth.email_verified",
   "auth.logout_all",
+  // Embedded-app session-token exchange (Phase B): an iframe-mounted
+  // SPA traded an App Bridge session token for our JWT via
+  // POST /auth/shopify/exchange. Distinct from auth.signup so embedded
+  // logins don't pollute the activation funnel.
+  "auth.shopify_exchange",
   // Merchant-initiated config updates surfaced in the merchant audit
   // trail (settings page).
   "merchant.branding_updated",
