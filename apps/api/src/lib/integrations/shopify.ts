@@ -334,6 +334,8 @@ export function verifyShopifyOAuthHmac(
 export interface ShopifyOAuthExchangeResult {
   accessToken: string;
   scope: string;
+  expiresIn?: number;
+  refreshToken?: string;
 }
 
 /**
@@ -369,11 +371,76 @@ export async function exchangeShopifyCode(args: {
     const body = await res.text().catch(() => "");
     throw new IntegrationError(`shopify oauth ${res.status}: ${body.slice(0, 200)}`);
   }
-  const json = (await res.json()) as { access_token?: string; scope?: string };
+  const json = (await res.json()) as {
+    access_token?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
   if (!json.access_token) {
     throw new IntegrationError("shopify oauth: response missing access_token");
   }
-  return { accessToken: json.access_token, scope: json.scope ?? "" };
+  return {
+    accessToken: json.access_token,
+    scope: json.scope ?? "",
+    expiresIn: typeof json.expires_in === "number" ? json.expires_in : undefined,
+    refreshToken: typeof json.refresh_token === "string" ? json.refresh_token : undefined,
+  };
+}
+
+/**
+ * Refresh an expiring Shopify offline access token using the refresh_token
+ * issued during the original code exchange. Shopify rotates the refresh
+ * token on every call, so callers MUST persist BOTH values together.
+ */
+export async function refreshShopifyAccessToken(args: {
+  shopDomain: string;
+  refreshToken: string;
+  apiKey: string;
+  apiSecret: string;
+  fetchImpl?: typeof fetch;
+}): Promise<{
+  accessToken: string;
+  scope?: string;
+  expiresIn?: number;
+  refreshToken?: string;
+}> {
+  const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const fetcher = args.fetchImpl ?? fetch;
+  const res = await fetchWithTimeout(
+    fetcher,
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: args.apiKey,
+        client_secret: args.apiSecret,
+        grant_type: "refresh_token",
+        refresh_token: args.refreshToken,
+      }),
+    },
+    "refreshShopifyAccessToken",
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new IntegrationError(`shopify token refresh ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as {
+    access_token?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
+  if (!json.access_token) {
+    throw new IntegrationError("shopify token refresh: response missing access_token");
+  }
+  return {
+    accessToken: json.access_token,
+    scope: typeof json.scope === "string" ? json.scope : undefined,
+    expiresIn: typeof json.expires_in === "number" ? json.expires_in : undefined,
+    refreshToken: typeof json.refresh_token === "string" ? json.refresh_token : undefined,
+  };
 }
 
 /**

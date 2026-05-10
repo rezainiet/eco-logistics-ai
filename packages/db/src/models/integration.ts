@@ -50,6 +50,14 @@ const integrationSchema = new Schema(
       apiKey: { type: String },
       apiSecret: { type: String },
       accessToken: { type: String },
+      // Shopify's modern Token Access framework returns access tokens that
+      // expire (typically every 24h for offline tokens). We persist the
+      // refresh token + the expiry timestamp so a worker can rotate the
+      // pair before expiry, OR a caller can refresh-on-401 inline. Both
+      // fields are absent on legacy non-expiring installs and on providers
+      // other than Shopify; consumers must treat them as optional.
+      refreshToken: { type: String },
+      accessTokenExpiresAt: { type: Date },
       consumerKey: { type: String },
       consumerSecret: { type: String },
       siteUrl: { type: String, trim: true, maxlength: 500 },

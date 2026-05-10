@@ -41,6 +41,10 @@ export interface ShopifyInstallClaim {
   scopes: string[];
   installedFrom: "public_install";
   createdAt: number;
+  /** Present when Shopify issued an expiring access token. The web
+   *  finalize mutation persists these alongside the access token. */
+  expiresIn?: number;
+  refreshToken?: string;
 }
 
 /**
@@ -601,6 +605,8 @@ shopifyOauthRouter.get(
             : [...pending.scopes],
           installedFrom: "public_install",
           createdAt: Date.now(),
+          expiresIn: exchange.expiresIn,
+          refreshToken: exchange.refreshToken,
         };
         try {
           await redisHandle.set(
@@ -844,6 +850,19 @@ shopifyOauthRouter.get(
     integration.credentials = {
       ...(integration.credentials ?? {}),
       accessToken: encryptSecret(exchange.accessToken),
+      // Persist refresh token + expiry when Shopify issued an expiring
+      // access token (modern Token Access framework). Encrypted at rest
+      // alongside the access token. Both fields are absent on legacy
+      // non-expiring installs — Shopify rejects those at the Admin API
+      // since mid-2026, so a missing pair here is a red flag the version
+      // config still has Use-legacy-install-flow=true.
+      refreshToken: exchange.refreshToken
+        ? encryptSecret(exchange.refreshToken)
+        : undefined,
+      accessTokenExpiresAt:
+        typeof exchange.expiresIn === "number"
+          ? new Date(Date.now() + exchange.expiresIn * 1000)
+          : undefined,
       // Wipe install scratch data — nonce so the code can't be replayed,
       // installStartedAt so a future re-connect's elapsed-time log isn't
       // contaminated by the previous attempt.

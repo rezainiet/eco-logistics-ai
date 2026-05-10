@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { ImportJob, Integration, type IntegrationProvider } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
+import { ensureFreshShopifyAccessToken } from "../lib/integrations/shopify-token-refresh.js";
 import { decryptSecret } from "../lib/crypto.js";
 import { ingestNormalizedOrder } from "../server/ingest.js";
 import type { IntegrationCredentials } from "../lib/integrations/types.js";
@@ -87,6 +88,19 @@ export async function processCommerceImport(
   }
 
   const adapter = adapterFor(integration.provider as IntegrationProvider);
+  // Shopify-only: rotate the access token if it is near expiry. For
+  // legacy non-expiring installs (no refreshToken / no expiresAt) this
+  // is a no-op. Other providers (woo, custom_api, csv) skip this path.
+  if (integration.provider === "shopify") {
+    try {
+      await ensureFreshShopifyAccessToken(integration);
+    } catch (err) {
+      console.warn("[commerce-import] shopify token rotation failed", {
+        integrationId: String(integration._id),
+        err: (err as Error).message.slice(0, 200),
+      });
+    }
+  }
   const creds = decryptCreds(integration.credentials ?? {});
   const limit = Math.max(1, Math.min(50, jobRow.requestedLimit || 25));
   const fetched = await adapter.fetchSampleOrders(creds, limit);
