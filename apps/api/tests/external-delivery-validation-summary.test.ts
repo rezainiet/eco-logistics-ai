@@ -8,11 +8,11 @@ import type { ExternalProfileResult } from "../src/lib/external-delivery/fetch-p
 
 const NOW = new Date("2026-05-09T12:00:00Z");
 
-function profile(
-  partial: Partial<ExternalProfileResult> & {
-    signals?: Partial<ExternalProfileResult["signals"]>;
-  } = {},
-): ExternalProfileResult {
+type ProfileOverrides = Omit<Partial<ExternalProfileResult>, "signals"> & {
+  signals?: Partial<ExternalProfileResult["signals"]>;
+};
+
+function profile(partial: ProfileOverrides = {}): ExternalProfileResult {
   const signals: ExternalProfileResult["signals"] = {
     strong_delivery_history: false,
     elevated_return_pattern: false,

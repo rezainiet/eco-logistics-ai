@@ -18,6 +18,7 @@ const original: MutableEnv = {
   EXTERNAL_DELIVERY_STEADFAST_ENABLED: env.EXTERNAL_DELIVERY_STEADFAST_ENABLED,
   EXTERNAL_DELIVERY_REDX_ENABLED: env.EXTERNAL_DELIVERY_REDX_ENABLED,
 };
+const TEST_MERCHANT_ID = "507f1f77bcf86cd799439011";
 
 beforeEach(() => {
   (env as unknown as MutableEnv).EXTERNAL_DELIVERY_PATHAO_ENABLED = false;
@@ -38,7 +39,11 @@ afterEach(() => {
 describe("external-delivery / boundedFetch", () => {
   it("returns ok payload with computed successRate when work resolves", async () => {
     const r = await boundedFetch({
-      input: { normalizedPhone: "8801712345678", timeoutMs: 1000 },
+      input: {
+        merchantId: TEST_MERCHANT_ID,
+        normalizedPhone: "8801712345678",
+        timeoutMs: 1000,
+      },
       work: async () => ({ total: 10, delivered: 9, rto: 1, cancelled: 0 }),
     });
     if (!r.ok) throw new Error("expected ok");
@@ -49,7 +54,11 @@ describe("external-delivery / boundedFetch", () => {
 
   it("times out when work takes longer than timeoutMs", async () => {
     const r = await boundedFetch({
-      input: { normalizedPhone: "8801712345678", timeoutMs: 50 },
+      input: {
+        merchantId: TEST_MERCHANT_ID,
+        normalizedPhone: "8801712345678",
+        timeoutMs: 50,
+      },
       work: (signal) =>
         new Promise<{ total: number; delivered: number; rto: number; cancelled: number }>(
           (_resolve, reject) => {
@@ -74,7 +83,11 @@ describe("external-delivery / boundedFetch", () => {
 
   it("routes thrown errors via classifyError", async () => {
     const r = await boundedFetch({
-      input: { normalizedPhone: "8801712345678", timeoutMs: 1000 },
+      input: {
+        merchantId: TEST_MERCHANT_ID,
+        normalizedPhone: "8801712345678",
+        timeoutMs: 1000,
+      },
       work: async () => {
         throw new Error("upstream returned 500");
       },
@@ -91,7 +104,12 @@ describe("external-delivery / boundedFetch", () => {
     const ac = new AbortController();
     ac.abort();
     const r = await boundedFetch({
-      input: { normalizedPhone: "8801712345678", timeoutMs: 1000, signal: ac.signal },
+      input: {
+        merchantId: TEST_MERCHANT_ID,
+        normalizedPhone: "8801712345678",
+        timeoutMs: 1000,
+        signal: ac.signal,
+      },
       work: async () => ({ total: 1, delivered: 1, rto: 0, cancelled: 0 }),
     });
     expect(r.ok).toBe(false);
@@ -101,7 +119,11 @@ describe("external-delivery / boundedFetch", () => {
 
   it("defaults classifier to 'unexpected'", async () => {
     const r = await boundedFetch({
-      input: { normalizedPhone: "8801712345678", timeoutMs: 1000 },
+      input: {
+        merchantId: TEST_MERCHANT_ID,
+        normalizedPhone: "8801712345678",
+        timeoutMs: 1000,
+      },
       work: async () => {
         throw new Error("boom");
       },
@@ -156,7 +178,7 @@ describe("external-delivery / provider stubs", () => {
   it("fetchHistory always resolves to stub_unconfigured for stubs", async () => {
     for (const a of DEFAULT_EXTERNAL_PROVIDERS) {
       const r = await a.fetchHistory({
-        merchantId: "507f1f77bcf86cd799439011",
+        merchantId: TEST_MERCHANT_ID,
         normalizedPhone: "8801712345678",
         timeoutMs: 1000,
       });

@@ -125,7 +125,6 @@ describe("external-delivery / aggregation", () => {
   it("safeCount clamps NaN / negative / non-finite to 0", () => {
     const r = aggregateProviders([
       provider("pathao", {
-        // @ts-expect-error — exercising defensive runtime
         total: Number.NaN,
         delivered: -5,
         rto: Infinity,
