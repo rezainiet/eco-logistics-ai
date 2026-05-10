@@ -10,6 +10,11 @@ import { adapterFor } from "../lib/integrations/index.js";
 import { decryptSecret } from "../lib/crypto.js";
 import { enqueueInboundWebhook } from "../server/ingest.js";
 import type { IntegrationCredentials } from "../lib/integrations/types.js";
+import {
+  ensureFreshShopifyAccessToken,
+  isShopifyTokenMigrationRequiredError,
+  SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+} from "../lib/integrations/shopify-token-refresh.js";
 
 export interface OrderSyncTickResult {
   scanned: number;
@@ -134,6 +139,34 @@ export async function syncOneIntegration(
     return { enqueued: 0, duplicates: 0, failed: 0 };
   }
   const adapter: any = adapterFor(integration.provider);
+  if (integration.provider === "shopify") {
+    try {
+      await ensureFreshShopifyAccessToken(integration);
+    } catch (err: any) {
+      const errMsg = isShopifyTokenMigrationRequiredError(err)
+        ? SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE
+        : err?.message?.slice(0, 500) ?? "shopify token refresh failed";
+      await Integration.updateOne(
+        { _id: integration._id },
+        {
+          $set: {
+            ...(isShopifyTokenMigrationRequiredError(err)
+              ? {
+                  status: "error",
+                  "health.ok": false,
+                  "health.lastError": SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+                  "health.lastCheckedAt": new Date(),
+                }
+              : {}),
+            lastSyncStatus: "error",
+            lastError: errMsg,
+          },
+          $inc: { errorCount: 1 },
+        },
+      ).catch(() => {});
+      return { enqueued: 0, duplicates: 0, failed: 1 };
+    }
+  }
   const creds = decryptCreds(integration.credentials ?? {});
   const limit = options.ordersPerTick ?? ORDERS_PER_TICK;
   const since: Date | undefined = integration.lastSyncedAt ?? undefined;

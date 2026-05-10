@@ -5,10 +5,16 @@ import { authUserFor, callerFor, createMerchant, disconnectDb, resetDb } from ".
 import { customApiAdapter } from "../src/lib/integrations/customApi.js";
 import {
   exchangeShopifyCode,
+  exchangeSessionTokenForOfflineToken,
+  migrateNonExpiringShopifyOfflineToken,
   shopifyAdapter,
   verifyShopifyOAuthHmac,
 } from "../src/lib/integrations/shopify.js";
 import { wooAdapter } from "../src/lib/integrations/woocommerce.js";
+import {
+  ensureFreshShopifyAccessToken,
+  isShopifyTokenMigrationRequiredError,
+} from "../src/lib/integrations/shopify-token-refresh.js";
 import {
   nextRetryDelayMs,
   processWebhookOnce,
@@ -363,7 +369,105 @@ describe("integrations router + connectors", () => {
     expect(call[0]).toBe("https://demo.myshopify.com/admin/oauth/access_token");
     expect(call[1].method).toBe("POST");
     const body = JSON.parse(call[1].body as string);
-    expect(body).toMatchObject({ client_id: "k", client_secret: "s", code: "auth-code" });
+    expect(body).toMatchObject({
+      client_id: "k",
+      client_secret: "s",
+      code: "auth-code",
+      expiring: 1,
+    });
+  });
+
+  it("exchangeSessionTokenForOfflineToken requests expiring offline tokens", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: "shpat_expiring",
+          scope: "read_orders",
+          expires_in: 86_400,
+          refresh_token: "shrt_refresh",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const result = await exchangeSessionTokenForOfflineToken({
+      shopDomain: "demo.myshopify.com",
+      apiKey: "k",
+      apiSecret: "s",
+      sessionToken: "session-token",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    expect(result.accessToken).toBe("shpat_expiring");
+    expect(result.expiresIn).toBe(86_400);
+    expect(result.refreshToken).toBe("shrt_refresh");
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(call[1].body as string);
+    expect(body).toMatchObject({
+      client_id: "k",
+      client_secret: "s",
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: "session-token",
+      subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+      requested_token_type:
+        "urn:shopify:params:oauth:token-type:offline-access-token",
+      expiring: 1,
+    });
+  });
+
+  it("migrateNonExpiringShopifyOfflineToken requests expiring offline token migration", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: "shpat_new",
+          scope: "read_orders",
+          expires_in: 86_400,
+          refresh_token: "shrt_new",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    await migrateNonExpiringShopifyOfflineToken({
+      shopDomain: "demo.myshopify.com",
+      apiKey: "k",
+      apiSecret: "s",
+      nonExpiringAccessToken: "shpat_legacy",
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const call = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(call[1].body as string);
+    expect(body).toMatchObject({
+      client_id: "k",
+      client_secret: "s",
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: "shpat_legacy",
+      subject_token_type:
+        "urn:shopify:params:oauth:token-type:offline-access-token",
+      requested_token_type:
+        "urn:shopify:params:oauth:token-type:offline-access-token",
+      expiring: 1,
+    });
+  });
+
+  it("ensureFreshShopifyAccessToken refuses legacy rows without refresh metadata", async () => {
+    const m = await createMerchant();
+    const integration = await Integration.create({
+      merchantId: m._id,
+      provider: "shopify",
+      accountKey: "legacy.myshopify.com",
+      status: "connected",
+      credentials: {
+        apiKey: encryptSecret("k"),
+        apiSecret: encryptSecret("s"),
+        siteUrl: "legacy.myshopify.com",
+        accessToken: encryptSecret("legacy-token"),
+      },
+    });
+
+    try {
+      await ensureFreshShopifyAccessToken(integration);
+      throw new Error("expected migration-required error");
+    } catch (err) {
+      expect(isShopifyTokenMigrationRequiredError(err)).toBe(true);
+    }
   });
 
   it("exchangeShopifyCode throws on non-2xx", async () => {
@@ -467,6 +571,8 @@ describe("integrations router + connectors", () => {
         apiKey: encryptSecret("k"),
         apiSecret: encryptSecret("s"),
         accessToken: encryptSecret("shpat_poll"),
+        refreshToken: encryptSecret("shrt_poll"),
+        accessTokenExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
         siteUrl: "poll.myshopify.com",
       },
       webhookSecret: encryptSecret("ws"),

@@ -29,6 +29,11 @@ import {
   revokeShopifyAccessToken,
 } from "../../lib/integrations/shopify.js";
 import {
+  ensureFreshShopifyAccessToken,
+  isShopifyTokenMigrationRequiredError,
+  SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+} from "../../lib/integrations/shopify-token-refresh.js";
+import {
   deleteWooWebhooks,
   registerWooWebhooks,
 } from "../../lib/integrations/woocommerce.js";
@@ -65,6 +70,25 @@ function decryptSafe(payload: string): string {
   } catch {
     return "";
   }
+}
+
+async function markShopifyTokenMigrationRequired(integration: {
+  _id: Types.ObjectId;
+}) {
+  await Integration.updateOne(
+    { _id: integration._id },
+    {
+      $set: {
+        status: "error",
+        "health.ok": false,
+        "health.lastError": SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+        "health.lastCheckedAt": new Date(),
+        lastSyncStatus: "error",
+        lastError: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+      },
+      $inc: { errorCount: 1 },
+    },
+  );
 }
 
 /**
@@ -592,6 +616,18 @@ export const integrationsRouter = router({
         "accessToken" in input &&
         input.accessToken
       ) {
+        try {
+          await ensureFreshShopifyAccessToken(integration);
+        } catch (err) {
+          if (!isShopifyTokenMigrationRequiredError(err)) {
+            throw err;
+          }
+          await markShopifyTokenMigrationRequired(integration);
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+          });
+        }
         const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/shopify/${String(integration._id)}`;
         try {
           const reg = await registerShopifyWebhooks({
@@ -775,6 +811,36 @@ export const integrationsRouter = router({
         return { ok: true, detail: "no live test for this provider" };
       }
       const adapter = adapterFor(integration.provider as IntegrationProvider);
+      if (integration.provider === "shopify") {
+        try {
+          await ensureFreshShopifyAccessToken(integration);
+        } catch (err) {
+          if (!isShopifyTokenMigrationRequiredError(err)) {
+            throw err;
+          }
+          await markShopifyTokenMigrationRequired(integration);
+          void writeAudit({
+            merchantId,
+            actorId: merchantId,
+            action: "integration.test",
+            subjectType: "integration",
+            subjectId: integration._id,
+            meta: {
+              provider: integration.provider,
+              ok: false,
+              latencyMs: 0,
+              autoDisconnected: false,
+              reason: "shopify_token_migration_required",
+            },
+          });
+          return {
+            ok: false,
+            detail: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+            latencyMs: 0,
+            autoDisconnected: false,
+          };
+        }
+      }
       const creds = decryptCreds(integration.credentials ?? {});
       const startedAt = Date.now();
       const result = await adapter.testConnection(creds);
@@ -970,6 +1036,22 @@ export const integrationsRouter = router({
         return { ok: true, count: 0, sample: [] };
       }
       const adapter = adapterFor(integration.provider as IntegrationProvider);
+      if (integration.provider === "shopify") {
+        try {
+          await ensureFreshShopifyAccessToken(integration);
+        } catch (err) {
+          if (!isShopifyTokenMigrationRequiredError(err)) {
+            throw err;
+          }
+          await markShopifyTokenMigrationRequired(integration);
+          return {
+            ok: false,
+            count: 0,
+            sample: [],
+            error: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+          };
+        }
+      }
       const creds = decryptCreds(integration.credentials ?? {});
       const result = await adapter.fetchSampleOrders(creds, input.limit);
       return result;
@@ -1209,9 +1291,24 @@ export const integrationsRouter = router({
       let remoteRevoke: RemoteRevokeOutcome = null;
 
       if (existing.provider === "shopify") {
+        let canUseStoredToken = true;
+        try {
+          await ensureFreshShopifyAccessToken(existing);
+        } catch (err) {
+          canUseStoredToken = false;
+          remoteRevoke = {
+            ok: false,
+            kind: isShopifyTokenMigrationRequiredError(err)
+              ? "shopify_token_migration_required"
+              : "token_refresh_failed",
+            detail: isShopifyTokenMigrationRequiredError(err)
+              ? "stored token needs expiring-token migration; skipping remote revoke"
+              : (err as Error).message.slice(0, 200),
+          };
+        }
         const stored = (existing.credentials as Record<string, string | undefined> | undefined)
           ?.accessToken;
-        if (stored) {
+        if (stored && canUseStoredToken) {
           let token: string | null = null;
           try {
             token = decryptSecret(stored);
@@ -1240,7 +1337,7 @@ export const integrationsRouter = router({
               };
             }
           }
-        } else {
+        } else if (!stored) {
           remoteRevoke = {
             ok: false,
             kind: "no_access_token",
@@ -1411,9 +1508,23 @@ export const integrationsRouter = router({
           message: "Access token missing — disconnect and reconnect.",
         });
       }
+      try {
+        await ensureFreshShopifyAccessToken(integration);
+      } catch (err) {
+        if (!isShopifyTokenMigrationRequiredError(err)) {
+          throw err;
+        }
+        await markShopifyTokenMigrationRequired(integration);
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+        });
+      }
       let accessToken: string;
       try {
-        accessToken = decryptSecret(accessTokenEnc);
+        const freshAccessTokenEnc =
+          integration.credentials?.accessToken ?? accessTokenEnc;
+        accessToken = decryptSecret(freshAccessTokenEnc);
       } catch {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",

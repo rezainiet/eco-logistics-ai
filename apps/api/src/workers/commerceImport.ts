@@ -3,7 +3,11 @@ import { Types } from "mongoose";
 import { ImportJob, Integration, type IntegrationProvider } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
-import { ensureFreshShopifyAccessToken } from "../lib/integrations/shopify-token-refresh.js";
+import {
+  ensureFreshShopifyAccessToken,
+  isShopifyTokenMigrationRequiredError,
+  SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+} from "../lib/integrations/shopify-token-refresh.js";
 import { decryptSecret } from "../lib/crypto.js";
 import { ingestNormalizedOrder } from "../server/ingest.js";
 import type { IntegrationCredentials } from "../lib/integrations/types.js";
@@ -95,6 +99,27 @@ export async function processCommerceImport(
     try {
       await ensureFreshShopifyAccessToken(integration);
     } catch (err) {
+      if (isShopifyTokenMigrationRequiredError(err)) {
+        jobRow.status = "failed";
+        jobRow.lastError = SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE;
+        jobRow.finishedAt = new Date();
+        await jobRow.save();
+        await Integration.updateOne(
+          { _id: integration._id },
+          {
+            $set: {
+              status: "error",
+              "health.ok": false,
+              "health.lastError": SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+              "health.lastCheckedAt": new Date(),
+              lastSyncStatus: "error",
+              lastError: SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+            },
+            $inc: { errorCount: 1 },
+          },
+        );
+        return { imported: 0, duplicates: 0, failed: 1, scanned: 0 };
+      }
       console.warn("[commerce-import] shopify token rotation failed", {
         integrationId: String(integration._id),
         err: (err as Error).message.slice(0, 200),

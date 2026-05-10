@@ -3,6 +3,32 @@ import type { Document, Types } from "mongoose";
 import { decryptSecret, encryptSecret } from "../crypto.js";
 import { refreshShopifyAccessToken } from "./shopify.js";
 
+export const SHOPIFY_TOKEN_MIGRATION_REQUIRED =
+  "shopify_token_migration_required";
+
+export class ShopifyTokenMigrationRequiredError extends Error {
+  readonly code = SHOPIFY_TOKEN_MIGRATION_REQUIRED;
+
+  constructor(message = "Shopify token migration required") {
+    super(message);
+    this.name = "ShopifyTokenMigrationRequiredError";
+  }
+}
+
+export function isShopifyTokenMigrationRequiredError(
+  err: unknown,
+): err is ShopifyTokenMigrationRequiredError {
+  return (
+    err instanceof ShopifyTokenMigrationRequiredError ||
+    (typeof err === "object" &&
+      err !== null &&
+      (err as { code?: unknown }).code === SHOPIFY_TOKEN_MIGRATION_REQUIRED)
+  );
+}
+
+export const SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE =
+  "Shopify token migration required: stored token is legacy non-expiring offline token metadata. Reconnect or run the expiring-token migration.";
+
 /**
  * Lazily rotate a Shopify access token before any Admin API call.
  *
@@ -79,7 +105,12 @@ export async function ensureFreshShopifyAccessToken(
   // Without a shop domain we can't hit Shopify's token endpoint at all
   // — abort cleanly.
   const shopDomain = integration.accountKey ?? creds.siteUrl ?? null;
-  if (!needsRefresh || !creds.refreshToken || !shopDomain) {
+  if (!creds.refreshToken || expiresAt === null) {
+    throw new ShopifyTokenMigrationRequiredError(
+      SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+    );
+  }
+  if (!needsRefresh || !shopDomain) {
     return { accessToken, refreshed: false };
   }
 

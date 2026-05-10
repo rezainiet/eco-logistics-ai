@@ -363,6 +363,7 @@ export async function exchangeShopifyCode(args: {
         client_id: args.apiKey,
         client_secret: args.apiSecret,
         code: args.code,
+        expiring: 1,
       }),
     },
     "exchangeShopifyCode",
@@ -497,6 +498,7 @@ export async function exchangeSessionTokenForOfflineToken(args: {
         // refresh path; not a fit for ConfirmX worker-driven imports.
         requested_token_type:
           "urn:shopify:params:oauth:token-type:offline-access-token",
+        expiring: 1,
       }),
     },
     "exchangeSessionTokenForOfflineToken",
@@ -516,6 +518,69 @@ export async function exchangeSessionTokenForOfflineToken(args: {
   if (!json.access_token) {
     throw new IntegrationError(
       "shopify token exchange: response missing access_token",
+    );
+  }
+  return {
+    accessToken: json.access_token,
+    scope: json.scope ?? "",
+    expiresIn:
+      typeof json.expires_in === "number" ? json.expires_in : undefined,
+    refreshToken:
+      typeof json.refresh_token === "string" ? json.refresh_token : undefined,
+  };
+}
+
+/**
+ * One-way migration from Shopify's legacy non-expiring offline token
+ * to a modern expiring offline token. Shopify revokes the original
+ * token on successful exchange, so this helper is intentionally not
+ * called from request paths; use it only from an operator-controlled
+ * canary/dry-run migration workflow.
+ */
+export async function migrateNonExpiringShopifyOfflineToken(args: {
+  shopDomain: string;
+  nonExpiringAccessToken: string;
+  apiKey: string;
+  apiSecret: string;
+  fetchImpl?: typeof fetch;
+}): Promise<ShopifyOAuthExchangeResult> {
+  const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const fetcher = args.fetchImpl ?? fetch;
+  const res = await fetchWithTimeout(
+    fetcher,
+    `https://${shop}/admin/oauth/access_token`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: args.apiKey,
+        client_secret: args.apiSecret,
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        subject_token: args.nonExpiringAccessToken,
+        subject_token_type:
+          "urn:shopify:params:oauth:token-type:offline-access-token",
+        requested_token_type:
+          "urn:shopify:params:oauth:token-type:offline-access-token",
+        expiring: 1,
+      }),
+    },
+    "migrateNonExpiringShopifyOfflineToken",
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new IntegrationError(
+      `shopify token migration ${res.status}: ${body.slice(0, 200)}`,
+    );
+  }
+  const json = (await res.json()) as {
+    access_token?: string;
+    scope?: string;
+    expires_in?: number;
+    refresh_token?: string;
+  };
+  if (!json.access_token) {
+    throw new IntegrationError(
+      "shopify token migration: response missing access_token",
     );
   }
   return {
