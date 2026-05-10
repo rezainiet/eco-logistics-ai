@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,7 +10,9 @@ import {
   Loader2,
   PlayCircle,
   RefreshCw,
+  ShieldAlert,
   ShieldX,
+  Wifi,
   X,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -78,6 +81,23 @@ type IssueRow = {
   processedAt: Date | string | null;
 };
 
+type IntegrationIssue = {
+  integrationId: string;
+  provider: string;
+  providerLabel: string | null;
+  providerAccountKey: string | null;
+  kind:
+    | "credentials_failing"
+    | "webhook_not_registered"
+    | "sync_failing"
+    | "degraded"
+    | "no_imports_yet";
+  severity: "critical" | "warning";
+  message: string;
+  detail: string | null;
+  lastCheckedAt: Date | string | null;
+};
+
 export default function IssuesPage() {
   const [activeReason, setActiveReason] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -116,10 +136,12 @@ export default function IssuesPage() {
 
   const rows = (issues.data?.rows ?? []) as IssueRow[];
   const reasonsCount = (issues.data?.reasonsCount ?? {}) as Record<string, number>;
+  const integrationIssues = (issues.data?.integrationIssues ?? []) as IntegrationIssue[];
   const totalStuck = useMemo(
     () => Object.values(reasonsCount).reduce((s, n) => s + n, 0),
     [reasonsCount],
   );
+  const totalIssuesAll = totalStuck + integrationIssues.length;
 
   // Selection helpers
   const allSelected = rows.length > 0 && selected.size === rows.length;
@@ -233,15 +255,15 @@ export default function IssuesPage() {
           <h1 className="flex items-center gap-2 text-2xl font-semibold text-fg">
             <ShieldX className="h-6 w-6 text-warning" />
             Issues
-            {totalStuck > 0 ? (
+            {totalIssuesAll > 0 ? (
               <span className="rounded-full bg-warning-subtle px-2 py-0.5 text-xs font-medium text-warning">
-                {totalStuck}
+                {totalIssuesAll}
               </span>
             ) : null}
           </h1>
           <p className="mt-1 text-sm text-fg-subtle">
-            Orders that didn't ingest cleanly. Fix the cause in your storefront,
-            then replay — or mark resolved if they don't need to ingest.
+            Connection health and orders that didn't ingest cleanly. Fix the
+            cause in your storefront or reconnect, then replay.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -283,6 +305,10 @@ export default function IssuesPage() {
         </div>
       </header>
 
+      {integrationIssues.length > 0 ? (
+        <IntegrationHealthSection issues={integrationIssues} />
+      ) : null}
+
       <ReasonTabs
         reasonsCount={reasonsCount}
         active={activeReason}
@@ -298,7 +324,7 @@ export default function IssuesPage() {
           <CardTitle className="text-base">
             {activeReason
               ? `${REASON_LABELS[activeReason] ?? activeReason} (${rows.length})`
-              : `All issues (${rows.length})`}
+              : `Order ingest issues (${rows.length})`}
           </CardTitle>
           {rows.length > 0 ? (
             <div className="flex items-center gap-2 text-xs text-fg-muted">
@@ -318,7 +344,11 @@ export default function IssuesPage() {
               <Loader2 className="h-5 w-5 animate-spin" />
             </div>
           ) : rows.length === 0 ? (
-            <EmptyState />
+            integrationIssues.length === 0 ? (
+              <EmptyState />
+            ) : (
+              <IngestEmptyState />
+            )
           ) : (
             <ul className="space-y-3">
               {rows.map((row) => (
@@ -576,10 +606,114 @@ function EmptyState() {
       <CheckCircle2 className="h-10 w-10 text-success" />
       <p className="text-sm font-medium text-fg">All caught up</p>
       <p className="max-w-sm text-xs text-fg-muted">
-        Every order is ingesting cleanly. New issues will appear here when an
-        order can't be processed automatically.
+        Connections are healthy and every order is ingesting cleanly. New
+        issues will appear here when something needs your attention.
       </p>
     </div>
+  );
+}
+
+/** Empty state for the inbox-rows card when only integration health is broken. */
+function IngestEmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-2 py-10 text-center">
+      <CheckCircle2 className="h-8 w-8 text-success" />
+      <p className="text-sm font-medium text-fg">No stuck orders</p>
+      <p className="max-w-sm text-xs text-fg-muted">
+        Resolve the connection issue above to start ingesting orders again.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Top-of-page surface for connection-level health failures: bad credentials,
+ * un-registered webhooks, repeatedly-failing syncs. Each row links straight
+ * to the integration card so the merchant can reconnect or rotate creds in
+ * one click. Distinct from the inbox-row list because the fix lives on the
+ * integration, not on individual orders.
+ */
+function IntegrationHealthSection({
+  issues,
+}: {
+  issues: IntegrationIssue[];
+}) {
+  return (
+    <Card className="border-warning-border bg-warning-subtle/40">
+      <CardHeader className="flex-row items-center justify-between">
+        <CardTitle className="flex items-center gap-2 text-base text-warning">
+          <ShieldAlert className="h-4 w-4" />
+          Connection issues ({issues.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2">
+          {issues.map((issue) => (
+            <IntegrationIssueCard key={issue.integrationId + issue.kind} issue={issue} />
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  );
+}
+
+function IntegrationIssueCard({ issue }: { issue: IntegrationIssue }) {
+  const Icon =
+    issue.kind === "webhook_not_registered"
+      ? Wifi
+      : issue.kind === "sync_failing"
+        ? RefreshCw
+        : issue.kind === "no_imports_yet"
+          ? AlertTriangle
+          : ShieldAlert;
+  const tone =
+    issue.severity === "critical"
+      ? "border-danger-border bg-danger-subtle text-danger"
+      : "border-warning-border bg-warning-subtle text-warning";
+  return (
+    <li className="rounded-md border border-stroke/10 bg-surface p-3">
+      <div className="flex items-start gap-3">
+        <span
+          className={`mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border ${tone}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <div className="flex-1 space-y-1">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="text-sm font-medium text-fg">
+                {issue.providerLabel ?? issue.providerAccountKey ?? issue.provider}
+              </span>
+              <span className="text-2xs uppercase tracking-wide text-fg-muted">
+                {issue.provider}
+              </span>
+            </div>
+            <span
+              className={`rounded-full px-2 py-0.5 text-2xs font-medium ${
+                issue.severity === "critical"
+                  ? "bg-danger-subtle text-danger"
+                  : "bg-warning-subtle text-warning"
+              }`}
+            >
+              {issue.severity === "critical" ? "Action required" : "Warning"}
+            </span>
+          </div>
+          <p className="text-sm text-fg">{issue.message}</p>
+          {issue.detail ? (
+            <p className="text-xs text-fg-muted">{issue.detail}</p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Link
+              href="/dashboard/settings/integrations"
+              className="inline-flex items-center gap-1 rounded-md border border-stroke/12 bg-surface px-2.5 py-1 text-2xs font-medium text-fg hover:bg-surface-raised"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open integration
+            </Link>
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
 

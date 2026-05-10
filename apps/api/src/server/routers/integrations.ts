@@ -2105,6 +2105,175 @@ export const integrationsRouter = router({
         integrations.map((i) => [String(i._id), i]),
       );
 
+      // Integration-level health issues. The merchant's "Issues" page
+      // previously only counted dead-lettered inbox rows, so a broken
+      // connection (e.g. Shopify Admin API rejecting the access token,
+      // webhook registration failing during install, credential test
+      // returning 403) showed "All caught up" while every order import
+      // silently 403'd. Roll these up here so the UI can surface them
+      // at the top of the list with first-class fix actions.
+      //
+      // We deliberately exclude integrations the merchant has explicitly
+      // paused (`pausedAt` set) or torn down (`status: "disconnected"`).
+      // Those are intentional states — surfacing them as "issues" would
+      // be noise. We also exclude `pending` rows: those are mid-install
+      // and have no health signal yet.
+      const healthCandidates = await Integration.find({
+        merchantId,
+        status: { $in: ["connected", "error"] },
+        pausedAt: { $in: [null, undefined] },
+        ...(input.integrationId &&
+        Types.ObjectId.isValid(input.integrationId)
+          ? { _id: new Types.ObjectId(input.integrationId) }
+          : {}),
+      })
+        .select(
+          "_id provider accountKey label status health webhookStatus lastError lastSyncStatus errorCount degraded lastWebhookAt lastImportAt connectedAt counts",
+        )
+        .lean();
+
+      type IntegrationIssueKind =
+        | "credentials_failing"
+        | "webhook_not_registered"
+        | "sync_failing"
+        | "degraded"
+        | "no_imports_yet";
+
+      const integrationIssues: Array<{
+        integrationId: string;
+        provider: string;
+        providerLabel: string | null;
+        providerAccountKey: string | null;
+        kind: IntegrationIssueKind;
+        severity: "critical" | "warning";
+        message: string;
+        detail: string | null;
+        lastCheckedAt: Date | null;
+      }> = [];
+
+      const NO_IMPORT_GRACE_MS = 24 * 60 * 60 * 1000; // 24h
+      const nowMs = Date.now();
+
+      for (const it of healthCandidates) {
+        const providerLabel = it.label ?? null;
+        const providerAccountKey = it.accountKey ?? null;
+        const base = {
+          integrationId: String(it._id),
+          provider: it.provider,
+          providerLabel,
+          providerAccountKey,
+        };
+
+        // 1. Hard credential failure — the most important issue to
+        //    surface, because every downstream sync/webhook will fail
+        //    until the merchant reconnects or rotates the token.
+        const healthOk = it.health?.ok ?? true;
+        if (!healthOk || it.status === "error") {
+          integrationIssues.push({
+            ...base,
+            kind: "credentials_failing",
+            severity: "critical",
+            message:
+              "Connection isn't authenticating with " +
+              (it.provider === "shopify"
+                ? "Shopify"
+                : it.provider === "woocommerce"
+                  ? "WooCommerce"
+                  : it.provider) +
+              ".",
+            detail:
+              it.health?.lastError ??
+              it.lastError ??
+              "Reconnect the integration to mint a fresh access token.",
+            lastCheckedAt: it.health?.lastCheckedAt ?? null,
+          });
+          continue;
+        }
+
+        // 2. The system flipped this row to "stop trying recovery" after
+        //    repeated alert-worker retries. Treat it as a critical issue
+        //    even if `health.ok` hasn't been refreshed.
+        if (it.degraded) {
+          integrationIssues.push({
+            ...base,
+            kind: "degraded",
+            severity: "critical",
+            message: "Connection is degraded — automated recovery gave up.",
+            detail:
+              it.lastError ??
+              "Reconnect from the integrations page to restore service.",
+            lastCheckedAt: it.health?.lastCheckedAt ?? null,
+          });
+          continue;
+        }
+
+        // 3. Connected but no webhook subscriptions on the upstream.
+        //    The merchant won't receive real-time order events; new
+        //    orders will only land via polling fallback (slow / partial).
+        const webhookRegistered = it.webhookStatus?.registered ?? false;
+        if (!webhookRegistered) {
+          integrationIssues.push({
+            ...base,
+            kind: "webhook_not_registered",
+            severity: "critical",
+            message: "Real-time order updates aren't subscribed.",
+            detail:
+              it.webhookStatus?.lastError ??
+              "We couldn't register webhooks during install. Reconnect to retry.",
+            lastCheckedAt: it.health?.lastCheckedAt ?? null,
+          });
+          continue;
+        }
+
+        // 4. Recent sync failed (lastSyncStatus === "error") even though
+        //    creds + webhooks are still good. Usually a transient
+        //    upstream outage; surface as a warning so the merchant
+        //    knows the latest poll didn't land.
+        if (it.lastSyncStatus === "error") {
+          integrationIssues.push({
+            ...base,
+            kind: "sync_failing",
+            severity: "warning",
+            message: "Latest sync didn't complete.",
+            detail:
+              it.lastError ??
+              "Try the Sync now button on the integration card.",
+            lastCheckedAt: it.health?.lastCheckedAt ?? null,
+          });
+          continue;
+        }
+
+        // 5. Connected for >24h but no orders ever imported. Could be
+        //    a quiet store, but also catches the "credentials valid,
+        //    webhook subscribed, but the install never minted a working
+        //    polling cursor" failure mode that's otherwise invisible.
+        const ordersImported =
+          (it as { counts?: { ordersImported?: number } }).counts?.ordersImported ?? 0;
+        const connectedAtMs = it.connectedAt
+          ? new Date(it.connectedAt as Date).getTime()
+          : null;
+        if (
+          ordersImported === 0 &&
+          !it.lastWebhookAt &&
+          !it.lastImportAt &&
+          connectedAtMs !== null &&
+          nowMs - connectedAtMs > NO_IMPORT_GRACE_MS
+        ) {
+          integrationIssues.push({
+            ...base,
+            kind: "no_imports_yet",
+            severity: "warning",
+            message: "No orders have imported since you connected.",
+            detail:
+              "If your store has had orders, try Sync now or place a test order to verify the pipeline.",
+            lastCheckedAt: it.health?.lastCheckedAt ?? null,
+          });
+          continue;
+        }
+      }
+
+      const integrationIssuesCount = integrationIssues.length;
+
       return {
         rows: rows.map((r) => {
           const meta = integrationById.get(String(r.integrationId));
@@ -2128,6 +2297,8 @@ export const integrationsRouter = router({
         }),
         reasonsCount,
         total: rows.length,
+        integrationIssues,
+        integrationIssuesCount,
       };
     }),
 
