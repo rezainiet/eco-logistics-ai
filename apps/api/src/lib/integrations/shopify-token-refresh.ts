@@ -38,6 +38,12 @@ const DEFAULT_LEAD_MS = 5 * 60 * 1000;
 // that here so we can accept the live document without a cast.
 type IntegrationLike = Document & {
   _id: Types.ObjectId;
+  // For Shopify, the shop domain (`shop.myshopify.com`) is stored on
+  // `accountKey`, NOT on `credentials.siteUrl`. WooCommerce uses
+  // `credentials.siteUrl`. We read `accountKey` first, falling back
+  // to `siteUrl`, so this helper works for both — though by name it
+  // is Shopify-specific and call sites only invoke it for shopify.
+  accountKey?: string | null;
   credentials?: {
     apiKey?: string | null;
     apiSecret?: string | null;
@@ -68,7 +74,12 @@ export async function ensureFreshShopifyAccessToken(
     options.force === true ||
     (expiresAt !== null && expiresAt - Date.now() <= leadMs);
 
-  if (!needsRefresh || !creds.refreshToken || !creds.siteUrl) {
+  // Prefer accountKey (Shopify install path stores shop.myshopify.com
+  // there) and fall back to credentials.siteUrl (legacy/Woo path).
+  // Without a shop domain we can't hit Shopify's token endpoint at all
+  // — abort cleanly.
+  const shopDomain = integration.accountKey ?? creds.siteUrl ?? null;
+  if (!needsRefresh || !creds.refreshToken || !shopDomain) {
     return { accessToken, refreshed: false };
   }
 
@@ -93,7 +104,7 @@ export async function ensureFreshShopifyAccessToken(
   let result;
   try {
     result = await refreshShopifyAccessToken({
-      shopDomain: creds.siteUrl,
+      shopDomain,
       apiKey,
       apiSecret,
       refreshToken,

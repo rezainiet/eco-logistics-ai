@@ -2623,6 +2623,14 @@ export const integrationsRouter = router({
         scopes: string[];
         installedFrom: string;
         createdAt: number;
+        // Modern Token Access framework: Shopify ships an `expires_in` +
+        // `refresh_token` alongside the access token. The OAuth callback
+        // stashes both into the Redis claim; we MUST round-trip them
+        // into the Integration row here, otherwise the rotation helper
+        // has nothing to refresh against and the merchant's token dies
+        // after 24h with no recovery.
+        expiresIn?: number;
+        refreshToken?: string;
       };
       let claim: Claim;
       try {
@@ -2666,12 +2674,27 @@ export const integrationsRouter = router({
       }
 
       const now = new Date();
-      const credentialsPayload: Record<string, string> = {
+      // Persist refreshToken (encrypted) + accessTokenExpiresAt so the
+      // commerce-import worker's ensureFreshShopifyAccessToken call can
+      // rotate the access token before each Admin API call. Without
+      // this round-trip, modern Shopify installs lose the refresh
+      // token at claim time and degrade to legacy non-expiring
+      // behaviour after 24h — which Shopify now rejects with a 403 on
+      // every Admin endpoint.
+      const credentialsPayload: Record<string, string | Date> = {
         apiKey: encryptSecret(env.SHOPIFY_APP_API_KEY ?? ""),
         apiSecret: encryptSecret(env.SHOPIFY_APP_API_SECRET ?? ""),
         siteUrl: shop,
         accessToken: encryptSecret(claim.accessToken),
       };
+      if (typeof claim.refreshToken === "string" && claim.refreshToken) {
+        credentialsPayload.refreshToken = encryptSecret(claim.refreshToken);
+      }
+      if (typeof claim.expiresIn === "number") {
+        credentialsPayload.accessTokenExpiresAt = new Date(
+          Date.now() + claim.expiresIn * 1000,
+        );
+      }
 
       const integration = await Integration.findOneAndUpdate(
         { merchantId, provider: "shopify", accountKey: shop },
