@@ -652,7 +652,9 @@ export const integrationsRouter = router({
             { _id: integration._id },
             {
               $set: {
-                "webhookStatus.registered": reg.registered.length > 0,
+                // Healthy only on full registration — see comment in
+                // shopify-install.ts; partial success masks order-blind state.
+                "webhookStatus.registered": reg.allRegistered,
                 "webhookStatus.lastError":
                   reg.errors.length > 0
                     ? reg.errors.join("; ").slice(0, 500)
@@ -1537,7 +1539,7 @@ export const integrationsRouter = router({
         accessToken,
         callbackUrl,
       });
-      const allRegistered = reg.errors.length === 0;
+      const allRegistered = reg.allRegistered;
       // The `subscriptions` field on `webhookStatus` is required by
       // the Mongoose schema (added when Woo's symmetric disconnect
       // started persisting per-topic IDs). Shopify doesn't use it,
@@ -1545,7 +1547,7 @@ export const integrationsRouter = router({
       // empty/missing value rather than fabricating a default —
       // matches the pattern in `retryWooWebhooks` below.
       integration.webhookStatus = {
-        registered: reg.registered.length > 0,
+        registered: reg.allRegistered,
         lastEventAt: integration.webhookStatus?.lastEventAt,
         failures: integration.webhookStatus?.failures ?? 0,
         lastError:

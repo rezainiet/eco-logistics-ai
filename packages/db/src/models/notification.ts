@@ -43,6 +43,14 @@ export const NOTIFICATION_KINDS = [
    * `alert.fired` audit row.
    */
   "admin.alert",
+  /**
+   * Shopify forwarded a `customers/data_request` for one of the
+   * merchant's customers. Per the processor / controller relationship,
+   * the merchant is responsible for replying to the customer within 30
+   * days; we surface the request so they know to act. Fired from
+   * server/webhooks/shopify-gdpr.ts.
+   */
+  "gdpr.data_request_received",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];

@@ -25,6 +25,12 @@ export const QUEUE_NAMES = {
   awbReconcile: "awb-reconcile",
   /** Polling fallback for upstream order sync — runs alongside webhooks. */
   orderSync: "order-sync",
+  /**
+   * GDPR / CCPA retention sweep — daily pseudonymisation of customer
+   * PII on records older than CUSTOMER_DATA_RETENTION_DAYS. Required by
+   * Shopify Protected Customer Data § "Apply retention periods".
+   */
+  customerDataRetention: "customer-data-retention",
   /** DLQ replay sweeper — drains PendingJob rows back onto BullMQ. */
   pendingJobReplay: "pending-job-replay",
 } as const;

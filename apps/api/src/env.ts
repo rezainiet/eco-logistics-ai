@@ -60,6 +60,18 @@ const schema = z
     // Tracking sync schedule (minutes). 0 disables the repeatable job.
     TRACKING_SYNC_INTERVAL_MIN: z.coerce.number().int().min(0).max(1440).default(60),
     TRACKING_SYNC_BATCH: z.coerce.number().int().min(1).max(500).default(100),
+    // Customer-PII retention sweep. Orders, calls, and identity-pivoted
+    // rows older than this are pseudonymised / hard-deleted on the
+    // daily sweep. 365d is the conventional "we keep one tax year"
+    // default; tighten with caution — analytics and dispute lookups
+    // span this window. Interval 0 disables the repeatable sweep.
+    CUSTOMER_DATA_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
+    CUSTOMER_DATA_RETENTION_INTERVAL_MIN: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(10080)
+      .default(1440),
     // "1" forces in-memory mock transport for all courier adapters. Auto-on in
     // test env. Useful for local dev when real sandbox credentials aren't handy.
     COURIER_MOCK: z

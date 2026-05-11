@@ -20,23 +20,25 @@ export const metadata: Metadata = {
  *     mechanism for customer / shop data deletion.
  *   - The contact email actually exists.
  *
- * TODO[brand] before flipping to Public Distribution:
- *   - Confirm `_brand.legalName` resolves to the registered legal
- *     entity (currently the placeholder "ConfirmX Technologies Ltd."
- *     in @ecom/branding/defaults.ts).
- *   - Confirm `_brand.privacyEmail` is a working inbox — reviewers
- *     test delivery.
- *   - If your jurisdiction requires a physical-address disclosure
- *     (BD/EU/CA), add it under § 9 Contact.
- *   - Bump the "Last updated" line to the actual policy review date,
- *     not the dynamic today() (currently dynamic for dev convenience).
+ * TODO[brand] before flipping the Shopify app to Public Distribution:
+ *   1. Set the real registered legal entity in
+ *      packages/branding/src/defaults.ts `legalName` (currently the
+ *      placeholder "ConfirmX Technologies Ltd.").
+ *   2. Provision the `privacyEmail` inbox so reviewer test-mails are
+ *      received (defaults.ts: "privacy@confirmx.ai").
+ *   3. If your jurisdiction (BD/EU/CA) requires a physical-address
+ *      disclosure, add it under § 9 Contact.
+ *   4. Bump POLICY_LAST_UPDATED below to the real policy review date
+ *      on every material change. Reviewers compare it against § 8.
  */
+const POLICY_LAST_UPDATED = "2026-05-11";
+
 export default function PrivacyPolicyPage() {
   return (
     <article className="prose prose-invert max-w-none">
       <h1 className="text-3xl font-semibold tracking-tight">Privacy Policy</h1>
       <p className="text-sm text-fg-subtle">
-        Last updated: {new Date().toISOString().split("T")[0]}
+        Last updated: {POLICY_LAST_UPDATED}
       </p>
 
       <section className="mt-8 space-y-4 text-sm leading-relaxed text-fg-muted">

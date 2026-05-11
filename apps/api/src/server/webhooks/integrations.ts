@@ -884,7 +884,10 @@ shopifyOauthRouter.get(
       lastCheckedAt: now,
     };
     integration.webhookStatus = {
-      registered: reg.registered.length > 0,
+      // Only "healthy" when EVERY required topic registered. A partial
+      // success (only app/uninstalled, missing orders/*) is a silent
+      // order-blind state — flagging it healthy hides the breakage.
+      registered: reg.allRegistered,
       lastEventAt: integration.webhookStatus?.lastEventAt,
       failures: integration.webhookStatus?.failures ?? 0,
       lastError:

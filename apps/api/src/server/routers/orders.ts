@@ -1571,6 +1571,28 @@ export const ordersRouter = router({
         () => Order.countDocuments(q),
       );
 
+      // Shopify Protected Customer Data § "Keep an access log" — list
+      // surfaces leak customer name/phone/email/address for up to N rows
+      // per call. Record actor + filter signature + page size so a
+      // reviewer can reconstruct who saw what.
+      if (page.length > 0) {
+        void writeAudit({
+          merchantId,
+          actorId: new Types.ObjectId(ctx.user.id),
+          actorEmail: ctx.user.email,
+          actorType: "merchant",
+          action: "pii.read",
+          subjectType: "merchant",
+          subjectId: merchantId,
+          meta: {
+            surface: "orders.listOrders",
+            count: page.length,
+            filterKey: countFilterKey,
+            phoneFilter: input.phone ? "set" : "unset",
+          },
+        });
+      }
+
       return {
         total,
         nextCursor,
@@ -1624,6 +1646,23 @@ export const ordersRouter = router({
         merchantId,
       }).lean();
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+
+      // Shopify Protected Customer Data § "Keep an access log" — every
+      // single-order read surfaces customer name/phone/email/address, so
+      // we record who read what. Fire-and-forget; never blocks the read.
+      void writeAudit({
+        merchantId,
+        actorId: new Types.ObjectId(ctx.user.id),
+        actorEmail: ctx.user.email,
+        actorType: "merchant",
+        action: "pii.read",
+        subjectType: "order",
+        subjectId: order._id,
+        meta: {
+          surface: "orders.getOrder",
+          fields: ["customer.name", "customer.phone", "customer.email", "customer.address"],
+        },
+      });
 
       const events = [...(order.logistics?.trackingEvents ?? [])].sort(
         (a, b) => new Date(a.at).getTime() - new Date(b.at).getTime(),

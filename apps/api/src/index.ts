@@ -72,6 +72,10 @@ import {
   scheduleOrderSync,
 } from "./workers/orderSync.worker.js";
 import {
+  registerCustomerDataRetentionWorker,
+  scheduleCustomerDataRetention,
+} from "./workers/customerDataRetention.worker.js";
+import {
   startPendingJobReplayWorker,
   ensureRepeatableSweep,
 } from "./workers/pendingJobReplay.js";
@@ -217,6 +221,10 @@ async function main() {
     // pulled in. Absence of this worker is the canonical "silent revenue
     // hole" failure mode; it was previously declared but not wired.
     registerOrderSyncWorker();
+    // GDPR / Shopify Protected Customer Data retention sweep. Daily by
+    // default; pseudonymises Order + CallLog PII older than the
+    // configured window, hard-deletes identity-pivoted scratch rows.
+    registerCustomerDataRetentionWorker();
     // Dead-letter replay sweeper. The worker is idempotent — registerWorker
     // returns the existing instance if one is already bound to this queue,
     // so a hot-reload or duplicate boot path can't double-register.
@@ -236,6 +244,8 @@ async function main() {
     // schedule. Default cadence is 5 min (DEFAULT_INTERVAL_MS in the
     // worker file).
     await scheduleOrderSync();
+    // Customer-PII retention sweep. Idempotent re-schedule like the rest.
+    await scheduleCustomerDataRetention();
     // Repeatable sweep tick. BullMQ keys repeat jobs by hash of (name, repeat
     // opts), so calling this on every boot does NOT create duplicate cron
     // entries — the second call is a no-op against the same key.

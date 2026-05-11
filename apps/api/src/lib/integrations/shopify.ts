@@ -779,7 +779,19 @@ export async function registerShopifyWebhooks(args: {
   callbackUrl: string;
   topics?: string[];
   fetchImpl?: typeof fetch;
-}): Promise<{ registered: string[]; errors: string[] }> {
+}): Promise<{
+  registered: string[];
+  errors: string[];
+  /**
+   * True only when EVERY requested topic ended up subscribed (counting
+   * 422 "already exists" as success). False if any topic errored.
+   * Callers must use this to gate `webhookStatus.registered` — flipping
+   * the flag on partial success caused the dashboard to claim healthy
+   * while order webhooks were silently rejected by Protected Customer
+   * Data gating.
+   */
+  allRegistered: boolean;
+}> {
   const fetcher = args.fetchImpl ?? fetch;
   const shop = args.shopDomain.replace(/^https?:\/\//, "").replace(/\/$/, "");
   // Default topic set:
@@ -860,7 +872,7 @@ export async function registerShopifyWebhooks(args: {
       errors.push(`${topic}: ${(err as Error).message}`);
     }
   }
-  return { registered, errors };
+  return { registered, errors, allRegistered: errors.length === 0 };
 }
 
 export type ShopifyShopInfo = {

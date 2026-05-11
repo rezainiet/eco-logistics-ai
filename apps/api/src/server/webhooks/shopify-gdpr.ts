@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Integration } from "@ecom/db";
 import { Types } from "mongoose";
 import { writeAudit } from "../../lib/audit.js";
+import { dispatchNotification } from "../../lib/notifications.js";
 import { env } from "../../env.js";
 import {
   redactCustomer,
@@ -220,12 +221,54 @@ shopifyGdprWebhookRouter.post(
       // Per Shopify's spec, our job is to make the merchant aware so
       // THEY can respond to the customer (we are the data processor;
       // the merchant is the controller). We don't email the customer
-      // directly. The audit row above is the proof of receipt; an
-      // operator-facing notification flow can be wired later if we
-      // want a friendlier surface than reading the audit log.
+      // directly. The audit row above proves receipt; the in-app
+      // notification below gives the merchant a visible nudge so the
+      // 30-day SLA doesn't slip while the request sits in an audit log
+      // they never look at.
+      let notified = false;
+      if (merchantId) {
+        try {
+          const customerId = payload.customer
+            ? (payload.customer as { id?: number | string }).id ?? null
+            : null;
+          const dataRequestId =
+            (payload as { data_request?: { id?: number | string } })
+              .data_request?.id ?? null;
+          const result = await dispatchNotification({
+            merchantId,
+            kind: "gdpr.data_request_received",
+            severity: "warning",
+            title: "Shopify forwarded a customer data request",
+            body:
+              "A customer has asked you for the data you hold on them. " +
+              "Per GDPR/CCPA, you have 30 days to respond. The request " +
+              "is recorded in your audit trail; reply to the customer " +
+              "directly from your Shopify admin.",
+            subjectType: "integration",
+            meta: {
+              shopDomain,
+              customerId,
+              dataRequestId,
+            },
+            // One inbox row per (data_request id) — Shopify can retry
+            // delivery; we don't want N duplicates if it does.
+            dedupeKey: dataRequestId
+              ? `gdpr_data_request:${shopDomain ?? "unknown"}:${dataRequestId}`
+              : undefined,
+          });
+          notified = result.inAppCreated;
+        } catch (err) {
+          console.error(
+            "[shopify-gdpr] notification dispatch failed",
+            (err as Error).message,
+          );
+        }
+      }
       dispatchSummary = {
-        kind: "noted",
-        note: "Audit-logged for merchant fulfilment; no automated redaction expected.",
+        kind: notified ? "notified" : "noted",
+        note: notified
+          ? "Merchant notified in-app; no automated redaction expected."
+          : "Audit-logged for merchant fulfilment; merchant not resolvable or notify failed.",
       };
     } else if (topic === "customers/redact") {
       if (!merchantId) {
