@@ -7,6 +7,7 @@ import { Merchant, MERCHANT_COUNTRIES, MERCHANT_LANGUAGES, PHONE_RE, Integration
 import { env } from "../env.js";
 import {
   exchangeSessionTokenForOfflineToken,
+  registerShopifyWebhooks,
   verifyShopifyAppBridgeSessionToken,
 } from "../lib/integrations/shopify.js";
 import { encryptSecret } from "../lib/crypto.js";
@@ -18,9 +19,9 @@ import {
 import {
   buildPasswordResetEmail,
   buildVerifyEmail,
-  sendEmail,
   webUrl,
 } from "../lib/email.js";
+import { enqueueEmail } from "../workers/email.worker.js";
 import { writeAudit } from "../lib/audit.js";
 import { sendPasswordResetAlertSms } from "../lib/sms/index.js";
 import {
@@ -205,7 +206,14 @@ async function fireVerificationEmail(merchant: {
     businessName: merchant.businessName,
     verifyUrl,
   });
-  await sendEmail({
+  // Enqueue rather than send-inline: signup HTTP response no longer
+  // blocks on Resend HTTP latency (typically 100–500ms). The hash
+  // prefix correlates the send with this specific token mint so a
+  // spam-clicked "resend verify" within the BullMQ retention window
+  // mints a new token (new correlation id) and queues a fresh email
+  // — repeated clicks for the same token collapse on `jobId`.
+  await enqueueEmail({
+    correlationId: `verify:${String(merchant._id)}:${hash.slice(0, 12)}`,
     to: merchant.email,
     subject: tpl.subject,
     html: tpl.html,
@@ -472,13 +480,20 @@ authRouter.post("/request-reset", passwordResetLimiter, async (req, res) => {
       resetUrl,
       ip: req.ip ?? null,
     });
-    void sendEmail({
+    // Enqueue (durable + retried). Correlated on the token hash so
+    // rapid double-clicks on "Send reset link" collapse to one Resend
+    // call, but a genuinely new reset request (new token) enqueues
+    // afresh. The HTTP response stays the timing-invariant 200.
+    void enqueueEmail({
+      correlationId: `reset:${String(merchant._id)}:${hash.slice(0, 12)}`,
       to: merchant.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
       tag: "password_reset",
-    }).catch((err) => console.error("[auth] reset email send failed", (err as Error).message));
+    }).catch((err) =>
+      console.error("[auth] reset email enqueue failed", (err as Error).message),
+    );
 
     // Side-channel SMS alert (BD merchants live on their phones). Never
     // includes the reset link itself — that stays in email — only a
@@ -811,9 +826,25 @@ authRouter.post("/shopify/exchange", async (req, res) => {
     ) {
       credentialsPayload.refreshToken = encryptSecret(exchange.refreshToken);
     }
-    if (typeof exchange.expiresIn === "number") {
+    // Range-check expiresIn before persisting. Shopify documents a
+    // typical 24h lifetime for expiring offline tokens; a value under
+    // 60 seconds is almost certainly a protocol error and would trip
+    // the lazy-refresh path on the very next API call, hot-looping
+    // until Shopify rate-limits us. Reject the field entirely in that
+    // case — the next API call falls back to the non-expiring code
+    // path and we'll pick up a fresh expiresAt on the next exchange.
+    if (
+      typeof exchange.expiresIn === "number" &&
+      Number.isFinite(exchange.expiresIn) &&
+      exchange.expiresIn >= 60
+    ) {
       credentialsPayload.accessTokenExpiresAt = new Date(
         Date.now() + exchange.expiresIn * 1000,
+      );
+    } else if (typeof exchange.expiresIn === "number") {
+      console.warn(
+        "[auth/shopify/exchange] suspicious expiresIn — not persisting",
+        { shop, expiresIn: exchange.expiresIn },
       );
     }
 
@@ -840,6 +871,63 @@ authRouter.post("/shopify/exchange", async (req, res) => {
       },
       { upsert: true, new: true },
     );
+
+    // Auto-register Shopify webhooks for this fresh embedded install.
+    // Without this, the integration sits "connected" but Shopify never
+    // POSTs to /api/integrations/webhook/shopify/{id} — order delivery
+    // would silently fall back to the 5-min poll worker (up to 5 min
+    // of delay). Mirrors the public OAuth callback's registration.
+    //
+    // Failures DON'T block the exchange (the token is still valid for
+    // polling-mode imports); webhookStatus.lastError gets the detail
+    // so the dashboard can show a yellow "Retry webhooks" banner.
+    const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/shopify/${String(upserted._id)}`;
+    try {
+      const reg = await registerShopifyWebhooks({
+        shopDomain: shop,
+        accessToken: exchange.accessToken,
+        callbackUrl,
+      });
+      console.log("[auth/shopify/exchange] webhooks registered", {
+        shop,
+        integrationId: String(upserted._id),
+        allRegistered: reg.allRegistered,
+        registered: reg.registered,
+        errors: reg.errors,
+      });
+      await Integration.updateOne(
+        { _id: upserted._id },
+        {
+          $set: {
+            // Healthy only on FULL registration — partial success
+            // (e.g. orders/* registered but app/uninstalled failed)
+            // is an order-blind state if we flip it true.
+            "webhookStatus.registered": reg.allRegistered,
+            "webhookStatus.lastError":
+              reg.errors.length > 0
+                ? reg.errors.join("; ").slice(0, 500)
+                : null,
+          },
+        },
+      );
+    } catch (err) {
+      // Never fail the exchange on registration. The merchant can hit
+      // retryShopifyWebhooks from the dashboard or operate in polling
+      // mode if Shopify Admin API is briefly unreachable.
+      console.warn(
+        "[auth/shopify/exchange] webhook registration threw",
+        { shop, err: (err as Error).message?.slice(0, 200) },
+      );
+      await Integration.updateOne(
+        { _id: upserted._id },
+        {
+          $set: {
+            "webhookStatus.registered": false,
+            "webhookStatus.lastError": (err as Error).message.slice(0, 500),
+          },
+        },
+      );
+    }
 
     console.log("[auth/shopify/exchange] auto-provisioned", {
       shop,

@@ -103,7 +103,18 @@ const isProd = process.env.NODE_ENV === "production";
  *     violation to stdout for ops to investigate before we flip
  *     the header to enforce.
  */
-function buildCspReportOnly() {
+/**
+ * Shopify-Admin iframe origins that must be allowed in
+ * `frame-ancestors` so the embedded surface can render inside Shopify
+ * Admin. Shopify Admin lives at admin.shopify.com but also embeds via
+ * the per-shop *.myshopify.com origin in legacy paths.
+ */
+const SHOPIFY_FRAME_ANCESTORS = [
+  "https://admin.shopify.com",
+  "https://*.myshopify.com",
+];
+
+function buildCsp({ frameAncestors, allowShopifyScripts }) {
   const apiOrigin = (() => {
     const raw = process.env.NEXT_PUBLIC_API_URL ?? "";
     if (!raw) return null;
@@ -128,15 +139,25 @@ function buildCspReportOnly() {
   if (apiOrigin) connectSrc.push(apiOrigin);
   if (sentryOrigin) connectSrc.push(sentryOrigin);
 
+  const scriptSrc = ["'self'", "'unsafe-inline'", "'unsafe-eval'"];
+  if (allowShopifyScripts) {
+    scriptSrc.push("https://cdn.shopify.com");
+  }
+
+  const frameAncestorsDirective =
+    frameAncestors && frameAncestors.length > 0
+      ? `frame-ancestors ${frameAncestors.join(" ")}`
+      : "frame-ancestors 'none'";
+
   const directives = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    `script-src ${scriptSrc.join(" ")}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     `connect-src ${connectSrc.join(" ")}`,
     "frame-src 'self' data:",
-    "frame-ancestors 'none'",
+    frameAncestorsDirective,
     "form-action 'self'",
     "base-uri 'self'",
     "object-src 'none'",
@@ -161,7 +182,46 @@ const COMMON_HEADERS = [
   // the violation stream is clean.
   {
     key: "Content-Security-Policy-Report-Only",
-    value: buildCspReportOnly(),
+    value: buildCsp({ frameAncestors: null, allowShopifyScripts: false }),
+  },
+  ...(isProd
+    ? [
+        {
+          key: "Strict-Transport-Security",
+          value: "max-age=31536000; includeSubDomains",
+        },
+      ]
+    : []),
+];
+
+/**
+ * Header set for the embedded Shopify surface (`/embedded/*`). Differs
+ * from the strict default in two ways:
+ *
+ *   1. `X-Frame-Options` is dropped — Shopify Admin iframes us, and
+ *      a `DENY` header would refuse the frame at the browser level.
+ *   2. CSP `frame-ancestors` lists the Shopify Admin origins so modern
+ *      browsers (which prefer CSP over XFO) also permit the embed.
+ *      Script-src additionally allows the App Bridge CDN so the
+ *      runtime loads.
+ *
+ * Everything else (HSTS in prod, nosniff, Permissions-Policy, CSP
+ * Report-Only) stays identical to COMMON_HEADERS.
+ */
+const EMBEDDED_HEADERS = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value:
+      "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()",
+  },
+  {
+    key: "Content-Security-Policy-Report-Only",
+    value: buildCsp({
+      frameAncestors: SHOPIFY_FRAME_ANCESTORS,
+      allowShopifyScripts: true,
+    }),
   },
   ...(isProd
     ? [
@@ -192,6 +252,14 @@ const nextConfig = {
         // headers stay; they don't interfere with iframing.
         source: "/track/:path*",
         headers: COMMON_HEADERS.filter((h) => h.key !== "X-Frame-Options"),
+      },
+      {
+        // /embedded/* lives inside the Shopify Admin iframe. Drops
+        // X-Frame-Options and relaxes CSP frame-ancestors to the
+        // Shopify Admin origins; also allows the App Bridge CDN
+        // script. Phase D cutover requirement.
+        source: "/embedded/:path*",
+        headers: EMBEDDED_HEADERS,
       },
       {
         source: "/:path*",

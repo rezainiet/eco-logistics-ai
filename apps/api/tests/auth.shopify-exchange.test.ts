@@ -221,11 +221,22 @@ describe("POST /auth/shopify/exchange", () => {
   );
 
   conditional(
-    "returns 404 no_integration_for_shop when no Integration row matches the verified shop",
+    "attempts auto-provision (Token Exchange) when no Integration row matches the verified shop",
     async () => {
-      // Mint a valid token for a shop that has no Integration row in
-      // Mongo. The verifier passes, then the lookup fails, and we
-      // expect a structured 404 the SPA can act on.
+      // Phase C C7 swapped the old Phase-B 404 contract for an
+      // auto-provision branch: when no Integration is found for the
+      // verified shop, the endpoint POSTs to Shopify's Token
+      // Exchange endpoint (accounts.shopify.com/.../access_token) to
+      // mint an offline token and provision a fresh
+      // Merchant+Integration on the fly.
+      //
+      // In this test environment we can't mock Shopify's network,
+      // so the Token Exchange fails and the handler returns 502
+      // `token_exchange_failed` with the verified shop in the body.
+      // What we're asserting here is the contract:
+      //   - the no-integration branch DID NOT short-circuit with 404,
+      //   - the verifier passed (otherwise we'd see 401),
+      //   - the shop made it through to the auto-provision attempt.
       const shop = "phase-b-no-integration.myshopify.com";
       const token = mintSessionToken({
         shop,
@@ -235,12 +246,9 @@ describe("POST /auth/shopify/exchange", () => {
       const r = await postJson(`${baseUrl}/auth/shopify/exchange`, {
         sessionToken: token,
       });
-      expect(r.status).toBe(404);
-      expect(r.body.error).toBe("no_integration_for_shop");
+      expect(r.status).toBe(502);
+      expect(r.body.error).toBe("token_exchange_failed");
       expect(r.body.shop).toBe(shop);
-      expect(r.body.installUrl).toBe(
-        `/api/shopify/install?shop=${encodeURIComponent(shop)}`,
-      );
     },
   );
 
@@ -331,7 +339,7 @@ describe("POST /auth/shopify/exchange", () => {
   );
 
   conditional(
-    "skips integrations whose status is disconnected (treated as no_integration_for_shop)",
+    "skips integrations whose status is disconnected and re-attempts auto-provision",
     async () => {
       const shop = "phase-b-disconnected.myshopify.com";
       const merchant = await createMerchant({
@@ -343,10 +351,13 @@ describe("POST /auth/shopify/exchange", () => {
         provider: "shopify",
         accountKey: shop,
         // Disconnected = merchant explicitly tore down the connection.
-        // Surfacing this as "auto-login me anyway" would let a stale
-        // session token revive a dead integration. Phase B treats it
-        // the same as "no integration" — Phase C re-evaluates whether
-        // disconnect should be a re-provision trigger.
+        // Phase C re-evaluated this: a disconnected row should NOT
+        // short-circuit the embedded-auth path either — instead, the
+        // handler ignores it (the lookup filters disconnected out)
+        // and falls through to the auto-provision branch. In tests
+        // that branch can't reach Shopify, so we see 502
+        // token_exchange_failed; in production it mints a fresh
+        // offline token and a new Integration row.
         status: "disconnected",
         label: `Shopify · ${shop}`,
         disconnectedAt: new Date(),
@@ -360,8 +371,9 @@ describe("POST /auth/shopify/exchange", () => {
       const r = await postJson(`${baseUrl}/auth/shopify/exchange`, {
         sessionToken: token,
       });
-      expect(r.status).toBe(404);
-      expect(r.body.error).toBe("no_integration_for_shop");
+      expect(r.status).toBe(502);
+      expect(r.body.error).toBe("token_exchange_failed");
+      expect(r.body.shop).toBe(shop);
     },
   );
 });

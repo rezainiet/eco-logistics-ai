@@ -53,6 +53,104 @@ async function fetchWithTimeout(
 }
 
 /**
+ * Retry policy for outbound Admin API calls. Shopify's leaky-bucket
+ * limiter returns 429 with a `Retry-After` header (seconds) when the
+ * shop's request bucket is empty. Transient 5xx (502/503/504) means
+ * the Admin API itself is hiccuping — usually clears in <2s.
+ *
+ * Three attempts is enough to clear a typical rate-limit window
+ * without compounding latency for the caller. Anything beyond that
+ * (e.g. a sustained spike) means the merchant's app is under load
+ * and we should fail the call so the worker can backlog properly.
+ */
+const SHOPIFY_RETRY_MAX_ATTEMPTS = Number(
+  process.env.SHOPIFY_RETRY_MAX_ATTEMPTS ?? 3,
+);
+const SHOPIFY_RETRY_BASE_DELAY_MS = Number(
+  process.env.SHOPIFY_RETRY_BASE_DELAY_MS ?? 500,
+);
+const SHOPIFY_RETRY_MAX_DELAY_MS = Number(
+  process.env.SHOPIFY_RETRY_MAX_DELAY_MS ?? 8_000,
+);
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+/**
+ * Parse a Shopify `Retry-After` header. The spec allows both
+ * integer seconds and an HTTP-date; in practice Shopify always
+ * sends integer seconds. Falls back to null on unparseable input
+ * so the caller can apply exponential backoff instead.
+ */
+function parseRetryAfterMs(raw: string | null): number | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  const asNumber = Number(trimmed);
+  if (Number.isFinite(asNumber) && asNumber >= 0) {
+    // Clamp at the configured ceiling — a hostile or malformed
+    // header could otherwise hang the worker for minutes.
+    return Math.min(asNumber * 1000, SHOPIFY_RETRY_MAX_DELAY_MS);
+  }
+  const asDate = Date.parse(trimmed);
+  if (Number.isFinite(asDate)) {
+    return Math.min(
+      Math.max(asDate - Date.now(), 0),
+      SHOPIFY_RETRY_MAX_DELAY_MS,
+    );
+  }
+  return null;
+}
+
+/**
+ * Wraps fetchWithTimeout with retry-on-429-and-5xx. Honors
+ * `Retry-After` when Shopify supplies it; otherwise uses exponential
+ * backoff seeded at `SHOPIFY_RETRY_BASE_DELAY_MS`. Network/timeout
+ * errors are NOT retried — those bubble up so the caller (or its
+ * BullMQ job retry policy) decides.
+ *
+ * Returns the final Response (which may still be a non-2xx if the
+ * server didn't clear after all retries) — the caller is responsible
+ * for interpreting it via `res.ok`.
+ */
+async function fetchShopifyWithBackoff(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  opName: string,
+  timeoutMs: number = SHOPIFY_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const maxAttempts = Math.max(1, SHOPIFY_RETRY_MAX_ATTEMPTS);
+  let lastRes: Response | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await fetchWithTimeout(fetchImpl, url, init, opName, timeoutMs);
+    if (res.ok || !isRetryableStatus(res.status)) {
+      return res;
+    }
+    lastRes = res;
+    // Drain the body before discarding the response so the underlying
+    // connection can be reused — fetch keeps the socket open until
+    // either the body is consumed or the response is garbage-collected.
+    await res.text().catch(() => undefined);
+    if (attempt >= maxAttempts) break;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
+    const backoffMs =
+      retryAfterMs ??
+      Math.min(
+        SHOPIFY_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1),
+        SHOPIFY_RETRY_MAX_DELAY_MS,
+      );
+    // Light jitter to avoid synchronized retry storms when multiple
+    // workers hit the same shop simultaneously.
+    const jitter = Math.floor(Math.random() * 100);
+    await new Promise((r) => setTimeout(r, backoffMs + jitter));
+  }
+  // All attempts exhausted with a retryable status — return the last
+  // response so the caller can surface its body in the error.
+  return lastRes ?? (await fetchWithTimeout(fetchImpl, url, init, opName, timeoutMs));
+}
+
+/**
  * Shopify connector.
  *
  * `apiKey`        — App API key (public; identifies the partner app)
@@ -80,7 +178,7 @@ async function callShopify<T>(
   if (!creds.accessToken) {
     throw new IntegrationError("shopify: accessToken missing — complete OAuth first");
   }
-  const res = await fetchWithTimeout(
+  const res = await fetchShopifyWithBackoff(
     fetch,
     `${shopBase(creds)}${path}`,
     {
@@ -96,6 +194,14 @@ async function callShopify<T>(
   );
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    // Rate-limit-specific error surface lets BullMQ workers tell
+    // "shop bucket exhausted, back off the sync cadence" apart from
+    // a generic 5xx so observability dashboards can chart them.
+    if (res.status === 429) {
+      throw new IntegrationError(
+        `shopify rate limit (429) — exhausted retries: ${body.slice(0, 200)}`,
+      );
+    }
     throw new IntegrationError(`shopify ${res.status}: ${body.slice(0, 200)}`);
   }
   return (await res.json()) as T;
@@ -816,7 +922,7 @@ export async function registerShopifyWebhooks(args: {
   // on the POST below — handled gracefully there.
   let existing: Set<string> = new Set();
   try {
-    const listRes = await fetchWithTimeout(
+    const listRes = await fetchShopifyWithBackoff(
       fetcher,
       `https://${shop}/admin/api/2024-04/webhooks.json?address=${encodeURIComponent(args.callbackUrl)}`,
       {
@@ -841,7 +947,7 @@ export async function registerShopifyWebhooks(args: {
       continue;
     }
     try {
-      const res = await fetchWithTimeout(
+      const res = await fetchShopifyWithBackoff(
         fetcher,
         `https://${shop}/admin/api/2024-04/webhooks.json`,
         {
