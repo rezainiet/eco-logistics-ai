@@ -429,10 +429,24 @@ export default function IntegrationsPage() {
       );
       setOpenProvider(null);
       if (data.status === "connected") {
+        // Carry the one-time plaintext webhook secret (initial create
+        // OR confirmOverwrite rotation) so the modal can render the
+        // copy panel. We tag the reason from the request shape — the
+        // `confirmOverwrite` flag in variables means this success
+        // came out of the rotate-on-reconnect branch.
+        const variablesAny = variables as { confirmOverwrite?: boolean };
+        const dataAny = data as { webhookSecret?: string };
+        const secretReason: "initial" | "rotated" | undefined = dataAny.webhookSecret
+          ? variablesAny.confirmOverwrite === true
+            ? "rotated"
+            : "initial"
+          : undefined;
         setSuccessState({
           integrationId: data.id,
           shop: null,
           provider: variables.provider as ProviderKey,
+          webhookSecret: dataAny.webhookSecret,
+          secretReason,
         });
       }
     },
@@ -642,10 +656,19 @@ export default function IntegrationsPage() {
   // did it" moment with a single big CTA to import their last 25 orders.
   // Set when the OAuth callback lands AND when the simple connect flow
   // completes for a non-Shopify provider that goes straight to "connected".
+  //
+  // `webhookSecret` is the one-time plaintext reveal the API surfaces on
+  // first creation OR on a confirmOverwrite reconnect (in which case the
+  // secret was rotated in lockstep with the credentials). `secretReason`
+  // distinguishes the two so the modal copy can warn the merchant
+  // appropriately — a rotation means their old webhook URL secret is
+  // dead and they must update the CMS NOW.
   const [successState, setSuccessState] = useState<{
     integrationId: string | null;
     shop: string | null;
     provider: ProviderKey;
+    webhookSecret?: string;
+    secretReason?: "initial" | "rotated";
   } | null>(null);
 
   // Pick up the redirect from the Shopify OAuth callback. Strips the search
@@ -1895,12 +1918,110 @@ function ShopifyInstallFallback({
  * to import their last 25 orders + reassurance that future orders will
  * arrive automatically.
  */
+/**
+ * Webhook secret reveal panel — shown ONCE when the API surfaces a
+ * plaintext secret. Two reasons:
+ *
+ *   - "initial": fresh integration just created. Merchant needs the
+ *     secret to configure their CMS webhook endpoint. Calm copy.
+ *   - "rotated": confirmOverwrite reconnect rotated the secret. The
+ *     OLD secret is now dead — any webhook still signed with it will
+ *     fail HMAC verification on the next delivery. URGENT copy +
+ *     warning styling so the merchant updates their CMS immediately.
+ *
+ * The plaintext is NEVER surfaced again by any other API path; if
+ * the merchant dismisses without copying, they must call the
+ * explicit rotate mutation to mint a fresh one.
+ */
+function WebhookSecretRevealPanel({
+  secret,
+  reason,
+}: {
+  secret: string;
+  reason: "initial" | "rotated";
+}) {
+  const isRotation = reason === "rotated";
+  const handleCopy = () => {
+    try {
+      navigator.clipboard.writeText(secret);
+      toast.success(
+        isRotation
+          ? "New secret copied — paste it into your CMS webhook config now"
+          : "Webhook secret copied",
+      );
+    } catch {
+      toast.error("Couldn't copy automatically — select the secret and copy manually");
+    }
+  };
+
+  const containerClasses = isRotation
+    ? "rounded-lg border border-warning/40 bg-warning/8 p-4"
+    : "rounded-lg border border-brand/30 bg-brand/8 p-4";
+
+  return (
+    <div className={containerClasses}>
+      <div className="flex items-start gap-2">
+        {isRotation ? (
+          <AlertTriangle
+            className="mt-0.5 h-4 w-4 shrink-0 text-warning"
+            aria-hidden
+          />
+        ) : (
+          <ShieldCheck
+            className="mt-0.5 h-4 w-4 shrink-0 text-brand"
+            aria-hidden
+          />
+        )}
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-fg">
+            {isRotation
+              ? "Your webhook secret was rotated — copy it now"
+              : "Your webhook secret"}
+          </p>
+          <p className="mt-1 text-xs text-fg-muted">
+            {isRotation
+              ? "The previous secret is no longer valid. Any webhooks signed with the old secret will fail until you paste this new value into your CMS webhook configuration. This is the ONLY time we'll show it in plaintext."
+              : "Paste this into your CMS webhook configuration so future deliveries verify against our endpoint. This is the only time we'll show it in plaintext — use the rotate button later if you need a fresh one."}
+          </p>
+        </div>
+      </div>
+      <div className="mt-3 flex items-stretch gap-2">
+        <code
+          className="flex-1 rounded-md border border-border bg-bg-subtle px-3 py-2 text-xs font-mono break-all"
+          // The merchant should be able to triple-click to select the
+          // whole value; `select-all` isn't a real Tailwind class, but
+          // user-select-all is the underlying CSS. Inline style for the
+          // browsers that need it.
+          style={{ userSelect: "all" }}
+        >
+          {secret}
+        </code>
+        <Button
+          type="button"
+          size="sm"
+          variant={isRotation ? "default" : "outline"}
+          onClick={handleCopy}
+        >
+          <Copy className="mr-1 h-3.5 w-3.5" />
+          Copy
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ConnectionSuccessDialog({
   state,
   onClose,
   onImport,
 }: {
-  state: { integrationId: string | null; shop: string | null; provider: ProviderKey } | null;
+  state: {
+    integrationId: string | null;
+    shop: string | null;
+    provider: ProviderKey;
+    webhookSecret?: string;
+    secretReason?: "initial" | "rotated";
+  } | null;
   onClose: () => void;
   onImport: (integrationId: string) => void;
 }) {
@@ -1972,6 +2093,13 @@ function ConnectionSuccessDialog({
                 Import your last 25 orders
               </Button>
             </div>
+          ) : null}
+
+          {state.webhookSecret ? (
+            <WebhookSecretRevealPanel
+              secret={state.webhookSecret}
+              reason={state.secretReason ?? "initial"}
+            />
           ) : null}
 
           <ul className="space-y-2 text-xs text-fg-muted">

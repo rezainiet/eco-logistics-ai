@@ -2,11 +2,14 @@ import express, { type Request, type Response } from "express";
 import { Types } from "mongoose";
 import {
   Integration,
+  Merchant,
   Notification,
   Order,
   type IntegrationProvider,
 } from "@ecom/db";
 import { markOrderDeleted } from "../../lib/integrations/order-tombstone.js";
+import { buildCourierCancelRequiredEmail, webUrl } from "../../lib/email.js";
+import { enqueueEmail } from "../../workers/email.worker.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
 import { enqueueInboundWebhook } from "../ingest.js";
@@ -347,8 +350,9 @@ integrationsWebhookRouter.post(
         // doesn't create a second notification. The unique partial
         // index on (merchantId, dedupeKey) collapses repeats.
         const dedupeKey = `order.courier_cancel_required:${String(liveOrder._id)}`;
+        let notificationInserted = false;
         try {
-          await Notification.updateOne(
+          const upd = await Notification.updateOne(
             { merchantId: integration.merchantId, dedupeKey },
             {
               $setOnInsert: {
@@ -372,6 +376,12 @@ integrationsWebhookRouter.post(
             },
             { upsert: true },
           );
+          // upsertedCount=1 means THIS call inserted the row. Any
+          // other result (modifiedCount=0, matched=1) means a prior
+          // delivery already created the row — we must NOT re-fan-out
+          // the email on a webhook retry, even though the in-app
+          // notification is idempotent.
+          notificationInserted = (upd.upsertedCount ?? 0) > 0;
         } catch (err) {
           // Never fail the webhook on a notification write error —
           // we'd rather miss the merchant-facing alert than lose
@@ -380,6 +390,47 @@ integrationsWebhookRouter.post(
             orderId: String(liveOrder._id),
             err: (err as Error).message.slice(0, 200),
           });
+        }
+
+        // Email fan-out, gated on the upsert having actually inserted.
+        // In-app alerts assume the merchant has the dashboard open;
+        // out-of-shift merchants need the email to act before the
+        // courier reaches the pickup address. Lookup the merchant
+        // email once we know we're sending — cheap because the
+        // gate above is already idempotent across retries.
+        if (notificationInserted) {
+          try {
+            const merchant = await Merchant.findById(integration.merchantId)
+              .select("email businessName")
+              .lean();
+            if (merchant?.email) {
+              const tpl = buildCourierCancelRequiredEmail({
+                businessName: merchant.businessName ?? merchant.email,
+                courier: liveOrder.logistics?.courier ?? null,
+                trackingNumber:
+                  liveOrder.logistics?.trackingNumber ?? null,
+                orderUrl: webUrl(`/dashboard/orders/${String(liveOrder._id)}`),
+              });
+              await enqueueEmail({
+                // Correlated on (orderId) so a webhook retry that
+                // also slips past the notification gate (rare —
+                // e.g. a Mongo write that flipped the notification
+                // before its outer try caught the error) STILL gets
+                // collapsed at the BullMQ jobId layer.
+                correlationId: `courier_cancel:${String(liveOrder._id)}`,
+                to: merchant.email,
+                subject: tpl.subject,
+                html: tpl.html,
+                text: tpl.text,
+                tag: "courier_cancel_required",
+              });
+            }
+          } catch (err) {
+            console.warn("[woo-webhook] courier_cancel_email_failed", {
+              orderId: String(liveOrder._id),
+              err: (err as Error).message.slice(0, 200),
+            });
+          }
         }
       }
       console.log("[woo-webhook] order.deleted", {

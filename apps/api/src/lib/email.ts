@@ -316,6 +316,39 @@ export function buildTrialEndingEmail(args: {
 }
 
 /**
+ * Critical alert when a merchant trashes an order upstream (Woo
+ * `order.deleted`) AFTER a courier AWB has already been issued. BD
+ * courier adapters don't expose a REST cancel, so the merchant must
+ * call the courier hotline directly — every minute they don't is a
+ * minute closer to a wasted delivery + RTO charge. Sent in parallel
+ * with the in-app Notification of the same kind; dashboard users
+ * get the alert, off-shift users get the email.
+ */
+export function buildCourierCancelRequiredEmail(args: {
+  businessName: string;
+  courier: string | null;
+  trackingNumber: string | null;
+  orderUrl: string;
+  branding?: BrandingConfig;
+}): { subject: string; html: string; text: string } {
+  const b = resolveBranding(args.branding);
+  const courier = args.courier ?? "your courier";
+  const tracking = args.trackingNumber ?? "(no AWB)";
+  const subject = `Cancel courier pickup — ${courier} ${tracking}`.trim();
+  const html = renderLayout({
+    branding: b,
+    heading: "Call the courier — order trashed after AWB issued",
+    body: `<p>Hi ${escapeHtml(args.businessName)} — an order in your store was trashed AFTER a courier AWB was already issued. ${escapeHtml(b.name)} flipped the local row to cancelled, but the courier still has the parcel out for pickup or delivery.</p>
+    <p><strong>What you need to do right now:</strong> call <strong>${escapeHtml(courier)}</strong> and reference AWB <strong>${escapeHtml(tracking)}</strong> to cancel pickup. If you skip this, you'll get an RTO charge (and a wasted courier slot).</p>
+    <p style="color:#64748b;font-size:13px">BD courier APIs don't expose REST cancel endpoints, so a phone call is the only path. We surface this email immediately on the trash event so you have the most time to act.</p>`,
+    cta: { label: "Open the order", href: args.orderUrl },
+    footer: `Have questions? Reply to this email or open the order page: ${args.orderUrl}`,
+  });
+  const text = `Order trashed after AWB issued. Call ${courier} for AWB ${tracking} to cancel pickup. Order: ${args.orderUrl}`;
+  return { subject, html, text };
+}
+
+/**
  * Reconnect prompt for a Shopify integration that still uses legacy
  * non-expiring tokens. Sent once per integration every N days by the
  * shopifyReconnectNudge sweep; the cooldown lives on the Integration
