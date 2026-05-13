@@ -877,6 +877,18 @@ export const integrationsRouter = router({
         // real value, or rotateWebhookSecret to mint a new one.
         webhookSecret?: string;
         webhookSecretPreview: string;
+        /**
+         * Why a plaintext `webhookSecret` is being surfaced in this
+         * response. Two cases — distinguishing them lets the dashboard
+         * pick the right copy (calm "your initial secret" vs urgent
+         * "your previous secret is no longer valid"):
+         *   - "initial"  fresh integration just inserted.
+         *   - "rotated"  reconnect with confirmOverwrite rotated the
+         *                secret in lockstep with the credential refresh.
+         * Absent when no plaintext is being surfaced (race-loser,
+         * non-rotating reconnect, etc.).
+         */
+        secretReason?: "initial" | "rotated";
         plaintextApiKey?: string;
         apiKeyPreview?: string;
         installUrl?: string;
@@ -902,6 +914,12 @@ export const integrationsRouter = router({
         webhookSecretPlaintext
       ) {
         result.webhookSecret = webhookSecretPlaintext;
+        // Initial insert wins precedence over rotation when both
+        // somehow read as true (cannot happen today — wasRotated is
+        // gated on `!isNewIntegration` — but the ordering is the
+        // safe default if the gates ever drift).
+        result.secretReason =
+          isNewIntegration && wasActuallyInserted ? "initial" : "rotated";
       }
       if (input.provider === "custom_api") {
         result.apiKeyPreview = maskSecretPayload(credentialsPayload.apiKey);

@@ -430,23 +430,23 @@ export default function IntegrationsPage() {
       setOpenProvider(null);
       if (data.status === "connected") {
         // Carry the one-time plaintext webhook secret (initial create
-        // OR confirmOverwrite rotation) so the modal can render the
-        // copy panel. We tag the reason from the request shape — the
-        // `confirmOverwrite` flag in variables means this success
-        // came out of the rotate-on-reconnect branch.
-        const variablesAny = variables as { confirmOverwrite?: boolean };
-        const dataAny = data as { webhookSecret?: string };
-        const secretReason: "initial" | "rotated" | undefined = dataAny.webhookSecret
-          ? variablesAny.confirmOverwrite === true
-            ? "rotated"
-            : "initial"
-          : undefined;
+        // OR confirmOverwrite rotation) and the API-supplied reason
+        // so the modal can render the copy panel with the right copy.
+        // We used to derive `secretReason` from
+        // `variables.confirmOverwrite` here — works in practice but
+        // relies on the convention "API rotates iff confirmOverwrite
+        // is true" rather than a type-checked invariant. Reading
+        // `data.secretReason` directly closes that gap.
+        const dataAny = data as {
+          webhookSecret?: string;
+          secretReason?: "initial" | "rotated";
+        };
         setSuccessState({
           integrationId: data.id,
           shop: null,
           provider: variables.provider as ProviderKey,
           webhookSecret: dataAny.webhookSecret,
-          secretReason,
+          secretReason: dataAny.secretReason,
         });
       }
     },

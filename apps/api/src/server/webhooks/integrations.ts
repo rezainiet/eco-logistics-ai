@@ -10,6 +10,7 @@ import {
 import { markOrderDeleted } from "../../lib/integrations/order-tombstone.js";
 import { buildCourierCancelRequiredEmail, webUrl } from "../../lib/email.js";
 import { enqueueEmail } from "../../workers/email.worker.js";
+import { sendCriticalAlertSms } from "../../lib/sms/index.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
 import { enqueueInboundWebhook } from "../ingest.js";
@@ -392,18 +393,37 @@ integrationsWebhookRouter.post(
           });
         }
 
-        // Email fan-out, gated on the upsert having actually inserted.
-        // In-app alerts assume the merchant has the dashboard open;
-        // out-of-shift merchants need the email to act before the
-        // courier reaches the pickup address. Lookup the merchant
-        // email once we know we're sending — cheap because the
-        // gate above is already idempotent across retries.
+        // Email + SMS fan-out, gated on the upsert having actually
+        // inserted. In-app alerts assume the merchant has the
+        // dashboard open; email covers off-shift merchants reading
+        // email; SMS covers merchants who are driving / off-screen /
+        // away from a workstation. BD merchants in particular are
+        // SMS-first — a courier dispatch race in Dhaka traffic
+        // resolves in minutes, well below the email-open latency
+        // tail. Cost of an extra SMS for a true positive is
+        // negligible vs. an RTO charge for the parcel.
+        //
+        // Single merchant lookup serves both channels — cheap
+        // because the gate is already idempotent across retries.
         if (notificationInserted) {
+          let merchant: {
+            email?: string | null;
+            businessName?: string | null;
+            phone?: string | null;
+          } | null = null;
           try {
-            const merchant = await Merchant.findById(integration.merchantId)
-              .select("email businessName")
+            merchant = await Merchant.findById(integration.merchantId)
+              .select("email businessName phone")
               .lean();
-            if (merchant?.email) {
+          } catch (err) {
+            console.warn("[woo-webhook] courier_cancel_merchant_lookup_failed", {
+              orderId: String(liveOrder._id),
+              err: (err as Error).message.slice(0, 200),
+            });
+          }
+
+          if (merchant?.email) {
+            try {
               const tpl = buildCourierCancelRequiredEmail({
                 businessName: merchant.businessName ?? merchant.email,
                 courier: liveOrder.logistics?.courier ?? null,
@@ -424,12 +444,38 @@ integrationsWebhookRouter.post(
                 text: tpl.text,
                 tag: "courier_cancel_required",
               });
+            } catch (err) {
+              console.warn("[woo-webhook] courier_cancel_email_failed", {
+                orderId: String(liveOrder._id),
+                err: (err as Error).message.slice(0, 200),
+              });
             }
-          } catch (err) {
-            console.warn("[woo-webhook] courier_cancel_email_failed", {
-              orderId: String(liveOrder._id),
-              err: (err as Error).message.slice(0, 200),
-            });
+          }
+
+          if (merchant?.phone) {
+            try {
+              // Short, single-segment body — sendCriticalAlertSms
+              // prepends the brand and clampBody at 160 chars. The
+              // courier name + AWB are the actionable bits; the
+              // merchant already knows their orders' upstream IDs
+              // from the dashboard / Woo admin, so we don't repeat
+              // the order number.
+              const courier = liveOrder.logistics?.courier ?? "courier";
+              const awb = liveOrder.logistics?.trackingNumber ?? "";
+              const body = awb
+                ? `Order trashed in Woo after AWB issued. Call ${courier} now to cancel AWB ${awb} or you'll get an RTO charge.`
+                : `Order trashed in Woo after a courier pickup was already issued. Call ${courier} now to cancel or you'll get an RTO charge.`;
+              await sendCriticalAlertSms(merchant.phone, body, {
+                tag: "courier_cancel_required",
+              });
+            } catch (err) {
+              // SMS is best-effort — never block / fail on it. The
+              // email + in-app notification already landed.
+              console.warn("[woo-webhook] courier_cancel_sms_failed", {
+                orderId: String(liveOrder._id),
+                err: (err as Error).message.slice(0, 200),
+              });
+            }
           }
         }
       }
