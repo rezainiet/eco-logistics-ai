@@ -11,6 +11,7 @@
     "seed": "tsx src/scripts/seed.ts",
     "seed:wipe": "tsx src/scripts/seed.ts --wipe",
     "db:sync-indexes": "tsx src/scripts/syncIndexes.ts",
+    "verify:prod-readiness": "tsx src/scripts/verifyProdReadiness.ts",
     "verify:delivery-reliability": "tsx src/scripts/verifyDeliveryReliability.ts",
     "reconcile:delivery-reliability": "tsx src/scripts/reconcileDeliveryReliability.ts",
     "repair:delivery-reliability": "tsx src/scripts/repairDeliveryReliability.ts",
