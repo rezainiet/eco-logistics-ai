@@ -1128,4 +1128,73 @@ export const adminObservabilityRouter = router({
       generatedAt: new Date(),
     };
   }),
+
+  /**
+   * List Shopify integrations whose stored credentials predate the
+   * expiring-token rollout (no `refreshToken` and no
+   * `accessTokenExpiresAt`). These integrations work in best-effort
+   * mode — every Admin API call may surface a 403 if Shopify rejects
+   * the legacy non-expiring token. Surfacing them here lets ops
+   * proactively reach out to affected merchants with a "reconnect
+   * required" prompt before order ingest goes silently broken.
+   *
+   * Read-only query — no migration is performed. The expected next
+   * step after this list is an operator-driven email campaign or
+   * an in-app banner; either is out of scope here.
+   */
+  legacyShopifyTokens: adminProcedure
+    .input(
+      z
+        .object({
+          limit: z.number().int().min(1).max(500).default(100),
+        })
+        .default({ limit: 100 }),
+    )
+    .query(async ({ input }) => {
+      const rows = await Integration.find({
+        provider: "shopify",
+        status: { $in: ["connected", "error"] },
+        $or: [
+          { "credentials.refreshToken": { $in: [null, undefined, ""] } },
+          { "credentials.accessTokenExpiresAt": { $in: [null, undefined] } },
+        ],
+      })
+        .select("_id merchantId accountKey status connectedAt lastError health webhookStatus")
+        .sort({ connectedAt: 1 })
+        .limit(input.limit)
+        .lean();
+
+      // Pull merchant emails for the operator's outreach list. Cheap
+      // because we already have the bounded id set from the previous
+      // query — no full-collection scan.
+      const merchantIds = rows
+        .map((r) => r.merchantId)
+        .filter((id): id is Types.ObjectId => !!id);
+      const merchants = await Merchant.find({ _id: { $in: merchantIds } })
+        .select("_id email businessName")
+        .lean();
+      const merchantById = new Map(
+        merchants.map((m) => [String(m._id), m]),
+      );
+
+      return {
+        count: rows.length,
+        rows: rows.map((r) => {
+          const merchant = merchantById.get(String(r.merchantId));
+          return {
+            integrationId: String(r._id),
+            merchantId: String(r.merchantId),
+            merchantEmail: merchant?.email ?? null,
+            merchantName: merchant?.businessName ?? null,
+            shopDomain: r.accountKey,
+            status: r.status,
+            connectedAt: r.connectedAt ?? null,
+            lastError: r.lastError ?? null,
+            webhookRegistered: r.webhookStatus?.registered ?? false,
+            healthOk: r.health?.ok ?? null,
+          };
+        }),
+        generatedAt: new Date(),
+      };
+    }),
 });

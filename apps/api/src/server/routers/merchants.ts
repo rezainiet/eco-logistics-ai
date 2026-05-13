@@ -758,6 +758,27 @@ export const merchantsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const merchantId = new Types.ObjectId(ctx.user.id);
+
+      // Rate-limit: erasures are irreversible (pseudonymisation can't
+      // be undone) AND a compromised merchant token could otherwise
+      // run a loop that wipes the merchant's own customer base
+      // faster than support could intervene. Cap at a burst of 20
+      // with a slow refill (~one every 3 minutes sustained); that's
+      // generous for legitimate single-request workflows yet tight
+      // enough to keep an attacker visible. Same Redis-backed token
+      // bucket the BullMQ queues use.
+      const bucket = await consumeMerchantTokens(
+        "gdpr-redact",
+        String(merchantId),
+        { capacity: 20, refillPerSecond: 1 / 180 },
+      );
+      if (!bucket.allowed) {
+        throw new TRPCError({
+          code: "TOO_MANY_REQUESTS",
+          message: `Too many redaction requests in a short window. Please retry in ${Math.ceil(bucket.retryAfterMs / 1000)}s.`,
+        });
+      }
+
       const normalizedPhone = input.phone ? normalizePhone(input.phone) : null;
       const identifiers: {
         email?: string;

@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { Types } from "mongoose";
 import { Integration, Order, type IntegrationProvider } from "@ecom/db";
+import { markOrderDeleted } from "../../lib/integrations/order-tombstone.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
 import { enqueueInboundWebhook } from "../ingest.js";
@@ -296,6 +297,15 @@ integrationsWebhookRouter.post(
     // shape to normalise; the audit trail lives in the order's status
     // change + the courier-handoff record (if any) that preceded it.
     if (provider === "woocommerce" && topic === "order.deleted") {
+      // Write the tombstone FIRST so an order.created delivery still
+      // in the BullMQ inbox can't race past us and resurrect this
+      // order. ingest path consults the tombstone before calling
+      // ingestNormalizedOrder; on a hit it short-circuits to
+      // succeeded-skip without creating the row.
+      await markOrderDeleted({
+        integrationId: integration._id as Types.ObjectId,
+        externalId,
+      });
       const flipped = await Order.updateOne(
         {
           merchantId: integration.merchantId,

@@ -30,6 +30,33 @@
 const isProd = process.env.NODE_ENV === "production";
 
 /**
+ * Enforce CSP rather than just report violations. Off by default so a
+ * fresh deploy stays in Report-Only mode (browsers log violations to
+ * /api/csp-report without blocking the resource). Operators flip
+ * `CSP_ENFORCED=true` on the environment ONCE the violation stream
+ * has been clean for a few days — this is the safe rollout pattern
+ * the original CSP comment documents.
+ *
+ * Recognised truthy values: "true", "1", "yes", "on" (any casing).
+ * Anything else (including unset) leaves Report-Only.
+ */
+const CSP_ENFORCED = (() => {
+  const raw = (process.env.CSP_ENFORCED ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "yes" || raw === "on";
+})();
+
+/**
+ * Resolves to the header NAME used to ship CSP. When CSP_ENFORCED is
+ * true we use the enforcing variant; otherwise the browser logs
+ * violations to /api/csp-report but does NOT block the resource.
+ * Same policy body either way — the only difference is whether
+ * browsers act on it.
+ */
+const CSP_HEADER_NAME = CSP_ENFORCED
+  ? "Content-Security-Policy"
+  : "Content-Security-Policy-Report-Only";
+
+/**
  * Content-Security-Policy — REPORT-ONLY rollout.
  *
  * Strategy: ship a permissive-but-real policy in `Report-Only` mode
@@ -175,13 +202,13 @@ const COMMON_HEADERS = [
     value:
       "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()",
   },
-  // CSP rolls out in Report-Only mode first. Browsers report violations
-  // without blocking resources — gives ops a few days of production
-  // traffic to validate the policy before flipping to enforce. Switch
-  // header name to `Content-Security-Policy` (drop "-Report-Only") once
-  // the violation stream is clean.
+  // CSP header NAME flips based on the CSP_ENFORCED env var so the
+  // enforcement rollout doesn't require a redeploy — set
+  // `CSP_ENFORCED=true` on the environment once the violation
+  // report stream is clean for a few production days. The policy
+  // body is identical either way.
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: CSP_HEADER_NAME,
     value: buildCsp({ frameAncestors: null, allowShopifyScripts: false }),
   },
   ...(isProd
@@ -217,7 +244,7 @@ const EMBEDDED_HEADERS = [
       "camera=(), microphone=(), geolocation=(), payment=(), interest-cohort=()",
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    key: CSP_HEADER_NAME,
     value: buildCsp({
       frameAncestors: SHOPIFY_FRAME_ANCESTORS,
       allowShopifyScripts: true,

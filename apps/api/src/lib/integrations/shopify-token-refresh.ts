@@ -162,7 +162,19 @@ type IntegrationLike = Document & {
 
 export async function ensureFreshShopifyAccessToken(
   integration: IntegrationLike,
-  options: { leadMs?: number; force?: boolean } = {},
+  options: {
+    leadMs?: number;
+    force?: boolean;
+    /**
+     * When true, throw `ShopifyTokenMigrationRequiredError` for legacy
+     * installs that have an accessToken but no refresh credentials.
+     * Default: false (best-effort — return the existing token and let
+     * the Admin API surface a 403 if Shopify rejects it). Set to true
+     * in background workers that should fail loud rather than burn a
+     * Shopify API call with a known-stale token.
+     */
+    requireRefreshable?: boolean;
+  } = {},
 ): Promise<{ accessToken: string; refreshed: boolean }> {
   const creds = integration.credentials ?? {};
   const accessTokenEnc = creds.accessToken;
@@ -184,10 +196,35 @@ export async function ensureFreshShopifyAccessToken(
   // Without a shop domain we can't hit Shopify's token endpoint at all
   // — abort cleanly.
   const shopDomain = integration.accountKey ?? creds.siteUrl ?? null;
+
+  // Legacy install path: integration has an accessToken but no
+  // refreshToken / expiresAt (custom-app installs, or Shopify
+  // installs that predate the expiring-token rollout). Previously
+  // this threw ShopifyTokenMigrationRequiredError, which blocked
+  // every downstream call — reconnect, importOrders, webhook retry —
+  // for these integrations. The product impact: any merchant who
+  // installed before Phase B got "stuck" until they disconnected
+  // and re-installed.
+  //
+  // New behaviour: return the existing accessToken in best-effort
+  // mode. If Shopify is genuinely rejecting non-expiring tokens, the
+  // first Admin API call surfaces a 403 — which the merchant sees
+  // as a clear, actionable "reconnect required" banner instead of
+  // a hard-precondition failure on every interaction. Operators can
+  // proactively surface this state via the admin "legacy Shopify
+  // tokens" query (see adminLegacyShopifyTokens).
+  //
+  // Callers that NEED a guaranteed-fresh token (e.g. background
+  // sync workers that should fail loud rather than make a call with
+  // a known-stale token) can pass `requireRefreshable: true` to
+  // restore the throw.
   if (!creds.refreshToken || expiresAt === null) {
-    throw new ShopifyTokenMigrationRequiredError(
-      SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
-    );
+    if (options.requireRefreshable === true) {
+      throw new ShopifyTokenMigrationRequiredError(
+        SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+      );
+    }
+    return { accessToken, refreshed: false };
   }
   if (!needsRefresh || !shopDomain) {
     return { accessToken, refreshed: false };

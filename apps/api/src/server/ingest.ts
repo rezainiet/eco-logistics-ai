@@ -25,6 +25,7 @@ import { releaseQuota, reserveQuota } from "../lib/usage.js";
 import { getPlan } from "../lib/plans.js";
 import { invalidate } from "../lib/cache.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
+import { wasOrderDeleted } from "../lib/integrations/order-tombstone.js";
 import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
 import { computeAddressQuality } from "../lib/address-intelligence.js";
 import { extractThana } from "../lib/thana-lexicon.js";
@@ -644,6 +645,30 @@ export async function processWebhookOnce(args: {
     };
   }
 
+  // Tombstone check: an order.deleted delivery for this same
+  // (integrationId, externalId) may have arrived AHEAD of this
+  // order.created/updated worker tick. Without this guard the create
+  // would resurrect a row the merchant trashed in Woo seconds ago.
+  // 24h TTL on the tombstone covers every realistic race window.
+  if (
+    await wasOrderDeleted({
+      integrationId: args.integrationId,
+      externalId: args.externalId,
+    })
+  ) {
+    await WebhookInbox.updateOne(
+      { _id: inboxRow._id },
+      {
+        $set: {
+          status: "succeeded",
+          processedAt: new Date(),
+          lastError: "tombstoned_after_delete",
+        },
+      },
+    );
+    return { ok: true };
+  }
+
   const result = await ingestNormalizedOrder(args.normalized, {
     merchantId: args.merchantId,
     source: args.source,
@@ -838,6 +863,24 @@ export async function replayWebhookInbox(args: {
       skipReason: normalized.reason,
       error: `needs_attention: ${normalized.reason}`,
     };
+  }
+
+  // Tombstone check on replay too. The retry worker may pick this row
+  // up minutes after an order.deleted intercept; without the same
+  // guard, replay would re-create the row the merchant trashed in
+  // the meantime.
+  if (
+    await wasOrderDeleted({
+      integrationId: inbox.integrationId as Types.ObjectId,
+      externalId: inbox.externalId,
+    })
+  ) {
+    inbox.status = "succeeded";
+    inbox.processedAt = new Date();
+    inbox.nextRetryAt = undefined;
+    inbox.lastError = "tombstoned_after_delete";
+    await inbox.save();
+    return { ok: true, status: "succeeded", attempts: inbox.attempts ?? 0 };
   }
 
   const result = await ingestNormalizedOrder(normalized, {

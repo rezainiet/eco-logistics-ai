@@ -447,7 +447,17 @@ describe("integrations router + connectors", () => {
     });
   });
 
-  it("ensureFreshShopifyAccessToken refuses legacy rows without refresh metadata", async () => {
+  it("ensureFreshShopifyAccessToken returns legacy token best-effort by default, throws when requireRefreshable is set", async () => {
+    // P0 fix: legacy integrations (accessToken without refreshToken /
+    // expiresAt) no longer block every downstream call with
+    // ShopifyTokenMigrationRequiredError. The helper now returns the
+    // stored token best-effort; the actual Admin API surfaces a 403
+    // if Shopify rejects non-expiring tokens, and the merchant sees
+    // a "reconnect" banner instead of being stuck.
+    //
+    // Background workers that must fail loud rather than make a call
+    // with a known-stale token can opt back into the throw by passing
+    // `requireRefreshable: true`.
     const m = await createMerchant();
     const integration = await Integration.create({
       merchantId: m._id,
@@ -462,8 +472,16 @@ describe("integrations router + connectors", () => {
       },
     });
 
+    // Default: best-effort — returns the stored token, no refresh attempted.
+    const best = await ensureFreshShopifyAccessToken(integration);
+    expect(best.accessToken).toBe("legacy-token");
+    expect(best.refreshed).toBe(false);
+
+    // Strict mode: throws so a worker can fail the job loudly.
     try {
-      await ensureFreshShopifyAccessToken(integration);
+      await ensureFreshShopifyAccessToken(integration, {
+        requireRefreshable: true,
+      });
       throw new Error("expected migration-required error");
     } catch (err) {
       expect(isShopifyTokenMigrationRequiredError(err)).toBe(true);
