@@ -51,6 +51,18 @@ export const NOTIFICATION_KINDS = [
    * server/webhooks/shopify-gdpr.ts.
    */
   "gdpr.data_request_received",
+  /**
+   * The merchant trashed an order in the upstream platform (Woo
+   * `order.deleted`, Shopify `orders/cancelled`) AFTER a courier AWB
+   * was already issued. We flip the local Order to `cancelled` but
+   * the courier still has the parcel out for delivery; the merchant
+   * must call the courier directly to cancel pickup or accept the
+   * RTO. BD courier adapters (Pathao/RedX/Steadfast) don't expose a
+   * REST cancel endpoint, so manual intervention is the only path.
+   * Severity=critical because letting this slip risks a real-money
+   * RTO + a wasted courier slot.
+   */
+  "order.courier_cancel_required",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];

@@ -150,6 +150,14 @@ const integrationSchema = new Schema(
     pausedAt: { type: Date },
     pausedReason: { type: String, trim: true, maxlength: 200 },
     pausedBy: { type: Schema.Types.ObjectId, ref: "User" },
+    /**
+     * Last time the reconnect-nudge sweep emailed the merchant about
+     * this integration. Gates the cooldown so the same merchant isn't
+     * spammed across daily sweeps. Currently only the
+     * `shopifyReconnectNudge` worker writes here; future per-provider
+     * nudges can reuse the same field.
+     */
+    lastReconnectNudgeAt: { type: Date },
   },
   { timestamps: true },
 );

@@ -375,9 +375,24 @@ export const integrationsRouter = router({
 
       // Reuse the existing webhookSecret on reconnect so that any signed
       // webhooks already configured in the merchant's CMS keep validating.
-      // A fresh secret is minted only on first creation; rotation is
-      // explicit via rotateWebhookSecret.
-      const webhookSecretPlaintext = isNewIntegration
+      // A fresh secret is minted only on first creation OR when the
+      // merchant explicitly opts in via `confirmOverwrite` — a confirmed
+      // reconnect is the merchant signalling "credentials are
+      // compromised / I want a fresh start", so rotating the webhook
+      // secret in lockstep is the conservative move (no value in
+      // leaving a known shared secret alive when the API keys are
+      // being rotated alongside it). Explicit rotation is still
+      // available via the rotateWebhookSecret mutation for routine
+      // hygiene rotations that don't require a full reconnect.
+      // `confirmOverwrite` only exists on the shopify + woocommerce
+      // input schemas; custom_api / csv don't have it. Narrow via
+      // `"confirmOverwrite" in input` so TS keeps the discriminated
+      // union sound.
+      const confirmOverwrite =
+        "confirmOverwrite" in input && input.confirmOverwrite === true;
+      const shouldRotateWebhookSecret =
+        isNewIntegration || confirmOverwrite;
+      const webhookSecretPlaintext = shouldRotateWebhookSecret
         ? randomBytes(32).toString("base64")
         : null;
       const status = input.provider === "shopify" && !("accessToken" in input && input.accessToken)
@@ -453,8 +468,25 @@ export const integrationsRouter = router({
         provider: input.provider,
         accountKey,
       };
-      if (webhookSecretPlaintext) {
+      if (webhookSecretPlaintext && isNewIntegration) {
+        // New row: keep webhookSecret in `$setOnInsert` so concurrent
+        // inserters can't overwrite each other's ciphertext (see the
+        // race-safety comment above).
         setOnInsertPayload.webhookSecret = encryptSecret(webhookSecretPlaintext);
+      } else if (
+        webhookSecretPlaintext &&
+        !isNewIntegration &&
+        confirmOverwrite
+      ) {
+        // Reconnect with explicit overwrite intent: rotate the
+        // webhook secret in lockstep with the credential refresh.
+        // Lives in `$set` because the row already exists — `$setOnInsert`
+        // wouldn't fire on the UPDATE branch. No race-safety concern
+        // here: confirmOverwrite is a merchant-intent flag, not a
+        // background path, so multiple callers racing this on the
+        // SAME accountKey is already user-error (and either one wins
+        // the final state cleanly).
+        setPayload.webhookSecret = encryptSecret(webhookSecretPlaintext);
       }
 
       // E11000 from the partial unique on `(merchantId, provider)` for
@@ -537,6 +569,27 @@ export const integrationsRouter = router({
             webhookSecretPlaintext;
         } catch {
           wasActuallyInserted = false;
+        }
+      }
+      // Reconnect-with-overwrite rotation: the row already existed,
+      // but we just wrote a fresh webhookSecret via `$set`. Surface
+      // the plaintext to THIS caller so they can update their CMS
+      // configs. The same equality check confirms our rotation
+      // landed (vs. a sibling reconnect racing us — last writer
+      // wins, only that caller's plaintext is canonical).
+      let wasRotated = false;
+      if (
+        !isNewIntegration &&
+        confirmOverwrite &&
+        webhookSecretPlaintext &&
+        integration.webhookSecret
+      ) {
+        try {
+          wasRotated =
+            decryptSecret(integration.webhookSecret as string) ===
+            webhookSecretPlaintext;
+        } catch {
+          wasRotated = false;
         }
       }
 
@@ -841,9 +894,13 @@ export const integrationsRouter = router({
         // We must NOT mark `revealedOnce: true` here or claim plaintext
         // ownership for the loser — their plaintext doesn't match the
         // canonical ciphertext on disk.
-        revealedOnce: isNewIntegration && wasActuallyInserted,
+        revealedOnce:
+          (isNewIntegration && wasActuallyInserted) || wasRotated,
       };
-      if (isNewIntegration && wasActuallyInserted && webhookSecretPlaintext) {
+      if (
+        ((isNewIntegration && wasActuallyInserted) || wasRotated) &&
+        webhookSecretPlaintext
+      ) {
         result.webhookSecret = webhookSecretPlaintext;
       }
       if (input.provider === "custom_api") {
@@ -860,6 +917,24 @@ export const integrationsRouter = router({
           subjectType: "integration",
           subjectId: integration._id,
           meta: { provider: input.provider, reason: "initial_creation" },
+        });
+      }
+      if (wasRotated) {
+        // Audit the rotation under the existing
+        // `integration.webhook_secret_rotated` action so the dashboard's
+        // audit feed treats this the same as an explicit rotation.
+        // Reason distinguishes confirmed-reconnect rotations from
+        // routine ones triggered via the rotate mutation.
+        void writeAudit({
+          merchantId,
+          actorId: merchantId,
+          action: "integration.webhook_secret_rotated",
+          subjectType: "integration",
+          subjectId: integration._id,
+          meta: {
+            provider: input.provider,
+            reason: "reconnect_overwrite",
+          },
         });
       }
       if (

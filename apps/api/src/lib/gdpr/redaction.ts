@@ -82,6 +82,128 @@ export interface CustomerIdentifiers {
 const REDACTED = "[redacted]";
 
 /**
+ * Count rows that WOULD be touched by redactCustomer without writing
+ * anything. Exposed so the merchant dashboard can render a confirmation
+ * preview ("This will redact 12 orders, 4 call logs…") before the
+ * merchant commits to the irreversible erasure. Mirrors the matcher
+ * exactly — same orMatches, same fallback to orderIds — so the preview
+ * count is the same number the real sweep will touch.
+ *
+ * Returns the same `RedactionResult[]` shape as redactCustomer but
+ * populated with `matched` (not `deleted` / `redacted`) so the
+ * dashboard can distinguish a preview from a receipt.
+ */
+export async function previewRedactCustomer(args: {
+  merchantId: Types.ObjectId;
+  identifiers: CustomerIdentifiers;
+}): Promise<RedactionResult[]> {
+  const { merchantId, identifiers } = args;
+  const results: RedactionResult[] = [];
+  const orMatches: Record<string, unknown>[] = [];
+  if (identifiers.email) {
+    orMatches.push({ "customer.email": identifiers.email });
+    orMatches.push({ email: identifiers.email });
+  }
+  if (identifiers.phone) {
+    orMatches.push({ "customer.phone": identifiers.phone });
+    orMatches.push({ customerPhone: identifiers.phone });
+    orMatches.push({ phone: identifiers.phone });
+  }
+  if (identifiers.shopifyCustomerId) {
+    orMatches.push({
+      "externalIds.shopifyCustomerId": identifiers.shopifyCustomerId,
+    });
+  }
+  if (
+    orMatches.length === 0 &&
+    (!identifiers.orderIds || identifiers.orderIds.length === 0)
+  ) {
+    return [{ collection: "(none)", matched: 0 }];
+  }
+
+  const baseFilter = {
+    merchantId,
+    ...(orMatches.length > 0 ? { $or: orMatches } : {}),
+  };
+
+  const orderFilter =
+    identifiers.orderIds && identifiers.orderIds.length > 0
+      ? {
+          merchantId,
+          $or: [
+            ...orMatches,
+            {
+              _id: {
+                $in: identifiers.orderIds
+                  .filter(Types.ObjectId.isValid)
+                  .map((id) => new Types.ObjectId(id)),
+              },
+            },
+            { externalOrderId: { $in: identifiers.orderIds } },
+          ],
+        }
+      : baseFilter;
+
+  // countDocuments is cheap on indexed merchantId scopes; we never
+  // expose this query to unbounded merchant input (the schema caps
+  // orderIds in the caller).
+  results.push({
+    collection: "Order",
+    matched: await Order.countDocuments(orderFilter),
+  });
+  results.push({
+    collection: "CallLog",
+    matched: await CallLog.countDocuments(baseFilter),
+  });
+  results.push({
+    collection: "RecoveryTask",
+    matched: await RecoveryTask.countDocuments(baseFilter),
+  });
+  results.push({
+    collection: "TrackingSession",
+    matched: await TrackingSession.countDocuments(baseFilter),
+  });
+
+  if (identifiers.orderIds && identifiers.orderIds.length > 0) {
+    const oids = identifiers.orderIds
+      .filter(Types.ObjectId.isValid)
+      .map((id) => new Types.ObjectId(id));
+    results.push({
+      collection: "WebhookInbox",
+      matched:
+        oids.length > 0
+          ? await WebhookInbox.countDocuments({
+              merchantId,
+              resolvedOrderId: { $in: oids },
+            })
+          : 0,
+    });
+  } else {
+    results.push({ collection: "WebhookInbox", matched: 0 });
+  }
+
+  // AuditLog count mirrors the real sweep's gate: only counted when
+  // a specific order set is named (otherwise we don't touch audit).
+  if (identifiers.orderIds && identifiers.orderIds.length > 0) {
+    const matchedOrderIds = await Order.find(orderFilter).distinct("_id");
+    if (matchedOrderIds.length > 0) {
+      results.push({
+        collection: "AuditLog",
+        matched: await AuditLog.countDocuments({
+          merchantId,
+          subjectType: "order",
+          subjectId: { $in: matchedOrderIds },
+        }),
+      });
+    } else {
+      results.push({ collection: "AuditLog", matched: 0 });
+    }
+  }
+
+  return results;
+}
+
+/**
  * Pseudonymise a single customer's PII across all merchant collections
  * without breaking analytics rows that the merchant legitimately owns
  * (the order itself, the call log entry, etc.).

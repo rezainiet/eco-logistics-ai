@@ -18,6 +18,14 @@ export const QUEUE_NAMES = {
   cartRecovery: "cart-recovery",
   trialReminder: "trial-reminder",
   subscriptionGrace: "subscription-grace",
+  /**
+   * Periodic sweep that nudges merchants whose Shopify integration
+   * still has legacy non-expiring tokens (pre-Phase B). Sends a
+   * one-shot "please reconnect" email per integration, gated by a
+   * per-integration `lastReconnectNudgeAt` cooldown so the same
+   * merchant isn't spammed across sweeps.
+   */
+  shopifyReconnectNudge: "shopify-reconnect-nudge",
   automationBook: "automation-book",
   automationWatchdog: "automation-watchdog",
   automationSms: "automation-sms",
@@ -33,6 +41,14 @@ export const QUEUE_NAMES = {
   customerDataRetention: "customer-data-retention",
   /** DLQ replay sweeper — drains PendingJob rows back onto BullMQ. */
   pendingJobReplay: "pending-job-replay",
+  /**
+   * Transactional email. Pre-rendered HTML/text payloads delivered via
+   * Resend by `workers/email.worker.ts`. Event-driven (no schedule),
+   * idempotent via `jobId = email:<correlationId>`. The worker is also
+   * what handles dead-letter replay for email failures — every other
+   * queue's PendingJob row is drained by the generic replay sweeper.
+   */
+  email: "email",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

@@ -24,6 +24,7 @@ import {
 import { shopifyInstallRouter } from "./server/webhooks/shopify-install.js";
 import { shopifyGdprWebhookRouter } from "./server/webhooks/shopify-gdpr.js";
 import { stripeWebhookRouter } from "./server/webhooks/stripe.js";
+import { resendWebhookRouter } from "./server/webhooks/resend.js";
 import { courierWebhookRouter } from "./server/webhooks/courier.js";
 import { smsInboundWebhookRouter } from "./server/webhooks/sms-inbound.js";
 import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
@@ -64,6 +65,10 @@ import {
   scheduleSubscriptionGrace,
 } from "./workers/subscriptionGrace.js";
 import {
+  registerShopifyReconnectNudgeWorker,
+  scheduleShopifyReconnectNudge,
+} from "./workers/shopifyReconnectNudge.js";
+import {
   registerAwbReconcileWorker,
   scheduleAwbReconcile,
 } from "./workers/awbReconcile.js";
@@ -79,6 +84,7 @@ import {
   startPendingJobReplayWorker,
   ensureRepeatableSweep,
 } from "./workers/pendingJobReplay.js";
+import { registerEmailWorker } from "./workers/email.worker.js";
 
 /**
  * Parse the `TRUSTED_PROXIES` env into the value Express's `trust proxy`
@@ -170,6 +176,8 @@ async function main() {
         ImportJob,
         CustomerReliability,
         AddressReliability,
+        EmailEvent,
+        EmailSuppression,
       } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
         ["Order", Order as unknown as { syncIndexes: () => Promise<unknown> }],
@@ -184,6 +192,12 @@ async function main() {
         // `docs/audits/final-production-readiness-report.md §3.2`.
         ["CustomerReliability", CustomerReliability as unknown as { syncIndexes: () => Promise<unknown> }],
         ["AddressReliability", AddressReliability as unknown as { syncIndexes: () => Promise<unknown> }],
+        // Email observability — unique index on EmailEvent.eventId is the
+        // Svix-idempotency boundary; unique on EmailSuppression.address is
+        // the suppression dedupe. TTL on EmailEvent.createdAt requires
+        // syncIndexes to actually materialize the expireAfterSeconds.
+        ["EmailEvent", EmailEvent as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["EmailSuppression", EmailSuppression as unknown as { syncIndexes: () => Promise<unknown> }],
       ];
       for (const [name, model] of models) {
         try {
@@ -209,11 +223,20 @@ async function main() {
     registerCommerceImportWorker();
     registerAutomationBookWorker();
     registerAutomationSmsWorker();
+    // Transactional email outbound. Event-driven (no schedule). Auth,
+    // billing, and admin-alert callsites enqueue via `enqueueEmail()`;
+    // BullMQ retries with exponential backoff and the generic replay
+    // sweeper picks up any Redis-outage dead-letters.
+    registerEmailWorker();
     registerAutomationStaleWorker();
     registerAutomationWatchdogWorker();
     registerCartRecoveryWorker();
     registerTrialReminderWorker();
     registerSubscriptionGraceWorker();
+    // Nudges merchants whose Shopify integration still carries
+    // legacy non-expiring tokens to reconnect. Daily sweep, 7-day
+    // per-integration cooldown.
+    registerShopifyReconnectNudgeWorker();
     registerAwbReconcileWorker();
     // Polling fallback for upstream order sync — runs alongside webhooks
     // so a merchant whose webhook delivery silently breaks (uninstall +
@@ -234,6 +257,7 @@ async function main() {
     await scheduleCartRecovery();
     await scheduleTrialReminder();
     await scheduleSubscriptionGrace();
+    await scheduleShopifyReconnectNudge();
     await scheduleAutomationStaleSweep();
     await scheduleAutomationWatchdog();
     await scheduleAwbReconcile();
@@ -368,6 +392,10 @@ async function main() {
   // Stripe webhook MUST mount before any JSON parser — verifyStripeWebhook
   // signs over raw bytes, so `express.raw` lives inside the router.
   app.use("/api/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
+  // Resend transactional-email event ingestion. Svix-signed payloads,
+  // idempotent on `svix-id`, persists `EmailEvent` rows and drives the
+  // `EmailSuppression` list.
+  app.use("/api/webhooks/resend", webhookLimiter, resendWebhookRouter);
   app.use("/api/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
   // Shopify OAuth completion handler — install URLs from
   // `integrations.connect({provider:"shopify"})` redirect here. GET-only,

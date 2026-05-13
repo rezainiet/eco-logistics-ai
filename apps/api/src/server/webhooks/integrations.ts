@@ -1,6 +1,11 @@
 import express, { type Request, type Response } from "express";
 import { Types } from "mongoose";
-import { Integration, Order, type IntegrationProvider } from "@ecom/db";
+import {
+  Integration,
+  Notification,
+  Order,
+  type IntegrationProvider,
+} from "@ecom/db";
 import { markOrderDeleted } from "../../lib/integrations/order-tombstone.js";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
@@ -306,19 +311,83 @@ integrationsWebhookRouter.post(
         integrationId: integration._id as Types.ObjectId,
         externalId,
       });
+      // Look up the live order BEFORE flipping so we can detect an
+      // in-flight courier handoff. If logistics.trackingNumber is
+      // set + order.status is active, the parcel is already out the
+      // door — flipping our row to cancelled doesn't recall it from
+      // the courier. We notify the merchant so they can call the
+      // courier hotline; BD couriers don't expose a REST cancel.
+      // Note: order.status lives on the `order` sub-doc per the
+      // schema, NOT at the top level — easy mistake; the model has
+      // both an `order` sub-doc (status, cod, total) and various
+      // sibling sub-docs at the same nesting.
+      const liveOrder = await Order.findOne({
+        merchantId: integration.merchantId,
+        "source.externalId": externalId,
+      })
+        .select("_id order.status logistics.courier logistics.trackingNumber")
+        .lean();
       const flipped = await Order.updateOne(
         {
           merchantId: integration.merchantId,
           "source.externalId": externalId,
-          status: { $nin: ["cancelled", "rto", "delivered"] },
+          "order.status": { $nin: ["cancelled", "rto", "delivered"] },
         },
-        { $set: { status: "cancelled" } },
+        { $set: { "order.status": "cancelled" } },
       );
+      const wasFlipped = flipped.modifiedCount > 0;
+      const liveStatus = liveOrder?.order?.status;
+      const hasActiveCourier =
+        wasFlipped &&
+        !!liveOrder?.logistics?.trackingNumber &&
+        liveStatus !== "delivered" &&
+        liveStatus !== "rto";
+      if (hasActiveCourier && liveOrder?._id) {
+        // De-dup on the order id so a duplicate webhook delivery
+        // doesn't create a second notification. The unique partial
+        // index on (merchantId, dedupeKey) collapses repeats.
+        const dedupeKey = `order.courier_cancel_required:${String(liveOrder._id)}`;
+        try {
+          await Notification.updateOne(
+            { merchantId: integration.merchantId, dedupeKey },
+            {
+              $setOnInsert: {
+                merchantId: integration.merchantId,
+                kind: "order.courier_cancel_required",
+                severity: "critical",
+                title: `Cancel courier pickup — ${liveOrder.logistics?.courier ?? "courier"} ${liveOrder.logistics?.trackingNumber ?? ""}`.trim(),
+                body:
+                  "An order was trashed in WooCommerce after a courier AWB was issued. Call the courier directly to cancel pickup or you'll get an RTO charge.",
+                link: `/dashboard/orders/${String(liveOrder._id)}`,
+                subjectType: "order",
+                subjectId: liveOrder._id,
+                meta: {
+                  courier: liveOrder.logistics?.courier ?? null,
+                  trackingNumber: liveOrder.logistics?.trackingNumber ?? null,
+                  externalId,
+                  source: "woocommerce_order_deleted",
+                },
+                dedupeKey,
+              },
+            },
+            { upsert: true },
+          );
+        } catch (err) {
+          // Never fail the webhook on a notification write error —
+          // we'd rather miss the merchant-facing alert than lose
+          // the cancel itself (which has already landed).
+          console.warn("[woo-webhook] courier_cancel_notification_failed", {
+            orderId: String(liveOrder._id),
+            err: (err as Error).message.slice(0, 200),
+          });
+        }
+      }
       console.log("[woo-webhook] order.deleted", {
         integrationId: String(integration._id),
         merchantId: String(integration.merchantId),
         externalId,
-        flipped: flipped.modifiedCount > 0,
+        flipped: wasFlipped,
+        courierCancelRequired: hasActiveCourier,
       });
       return res.status(200).json({ ok: true });
     }

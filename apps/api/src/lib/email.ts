@@ -2,6 +2,7 @@ import {
   getBrandingSync,
   type BrandingConfig,
 } from "@ecom/branding";
+import { EmailSuppression } from "@ecom/db";
 import { env } from "../env.js";
 
 /**
@@ -42,7 +43,54 @@ export interface EmailDeliveryResult {
   ok: boolean;
   id?: string;
   skipped?: boolean;
+  /**
+   * Reason the send was skipped, when `skipped: true`. Stable string
+   * keys so callers and tests can branch:
+   *   - "no_api_key"     dev mode without RESEND_API_KEY
+   *   - "suppressed_bounce_hard"  recipient on the bounce suppression list
+   *   - "suppressed_complaint"    recipient on the complaint suppression list
+   */
+  skipReason?:
+    | "no_api_key"
+    | "suppressed_bounce_hard"
+    | "suppressed_complaint";
   error?: string;
+}
+
+/** Local-part masked for log lines. First 2 chars + `***@domain`. */
+function maskEmailForLog(addr: string): string {
+  const at = addr.indexOf("@");
+  if (at <= 0) return "***";
+  return `${addr.slice(0, Math.min(2, at))}***${addr.slice(at)}`;
+}
+
+/**
+ * Pre-send suppression check. Returns the suppression row when the
+ * recipient is on the bounce/complaint list, otherwise null. A Mongo
+ * blip here does NOT block sends — better to risk a single bounce than
+ * to hold up every transactional flow on a transient lookup failure.
+ */
+async function lookupSuppression(
+  to: string,
+): Promise<{ reason: "bounce_hard" | "complaint" } | null> {
+  try {
+    const row = await EmailSuppression.findOne({
+      address: to.toLowerCase().trim(),
+    })
+      .select("reason")
+      .lean();
+    if (!row) return null;
+    return { reason: row.reason as "bounce_hard" | "complaint" };
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        evt: "email.suppression.lookup_failed",
+        to: maskEmailForLog(to),
+        error: (err as Error).message?.slice(0, 200),
+      }),
+    );
+    return null;
+  }
 }
 
 function resolveBranding(b?: BrandingConfig): BrandingConfig {
@@ -53,6 +101,29 @@ function fromAddress(branding?: BrandingConfig): string {
   if (env.EMAIL_FROM) return env.EMAIL_FROM;
   const b = resolveBranding(branding);
   return `${b.email.senderName} <${b.email.senderAddress}>`;
+}
+
+/**
+ * Resolve the `Reply-To` header for a given branding context. The
+ * transactional sender always lives on the dedicated `send.*` subdomain
+ * (no inbox), so every template footer that promises "Reply to this
+ * email" depends on this header pointing at a real, monitored inbox
+ * (typically `support@<apex>`).
+ *
+ * Precedence:
+ *   1. Per-call branding override (`opts.branding.email.replyTo`)
+ *   2. Default branding (`getBrandingSync().email.replyTo`)
+ *
+ * Returns `undefined` when no Reply-To is configured — at which point
+ * we omit the field entirely so Resend doesn't get an empty header.
+ * Mail clients then default to the From address, which on `send.*`
+ * is a black hole — that's the failure shape we want operators to
+ * notice in staging rather than ship silently to production.
+ */
+function replyToAddress(branding?: BrandingConfig): string | undefined {
+  const raw = resolveBranding(branding).email.replyTo;
+  const trimmed = raw?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
 export function webUrl(path: string): string {
@@ -75,7 +146,31 @@ export async function sendEmail(
       `[email:dev] to=${msg.to} subject="${msg.subject}" tag=${msg.tag ?? "-"}\n` +
         `${msg.text ?? msg.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 400)}`,
     );
-    return { ok: true, skipped: true };
+    return { ok: true, skipped: true, skipReason: "no_api_key" };
+  }
+
+  // Suppression gate. Addresses we've seen bounce-hard or be reported
+  // as spam never re-hit Resend — repeated sends harm sender reputation
+  // and (post-Feb 2024) trip Gmail / Yahoo bulk-sender enforcement. The
+  // worker treats `skipped: true` as success so retries don't fire.
+  const suppression = await lookupSuppression(msg.to);
+  if (suppression) {
+    console.warn(
+      JSON.stringify({
+        evt: "email.suppressed",
+        tag: msg.tag,
+        to: maskEmailForLog(msg.to),
+        reason: suppression.reason,
+      }),
+    );
+    return {
+      ok: true,
+      skipped: true,
+      skipReason:
+        suppression.reason === "bounce_hard"
+          ? "suppressed_bounce_hard"
+          : "suppressed_complaint",
+    };
   }
   try {
     const res = await fetch(RESEND_ENDPOINT, {
@@ -87,6 +182,11 @@ export async function sendEmail(
       body: JSON.stringify({
         from: fromAddress(opts.branding),
         to: [msg.to],
+        // Resend accepts a string OR an array. We pass a string; the field
+        // is omitted by JSON.stringify when undefined so Resend never sees
+        // an empty `reply_to` (which would otherwise be stamped as the
+        // literal string "undefined" — observed in their HTTP handler).
+        reply_to: replyToAddress(opts.branding),
         subject: msg.subject,
         html: msg.html,
         text: msg.text,
@@ -212,6 +312,33 @@ export function buildTrialEndingEmail(args: {
     footer: `Need help deciding? Reply to this email or open the billing page: ${args.billingUrl}`,
   });
   const text = `Your ${b.name} trial ends in ${args.daysLeft} day(s). Choose a plan: ${args.pricingUrl}`;
+  return { subject, html, text };
+}
+
+/**
+ * Reconnect prompt for a Shopify integration that still uses legacy
+ * non-expiring tokens. Sent once per integration every N days by the
+ * shopifyReconnectNudge sweep; the cooldown lives on the Integration
+ * row (`lastReconnectNudgeAt`) so the same merchant isn't spammed.
+ */
+export function buildShopifyReconnectEmail(args: {
+  businessName: string;
+  shopDomain: string;
+  integrationsUrl: string;
+  branding?: BrandingConfig;
+}): { subject: string; html: string; text: string } {
+  const b = resolveBranding(args.branding);
+  const subject = `Action required: reconnect your Shopify store ${args.shopDomain}`;
+  const html = renderLayout({
+    branding: b,
+    heading: "Reconnect your Shopify store",
+    body: `<p>Hi ${escapeHtml(args.businessName)} — Shopify is phasing out the non-expiring access tokens your store (${escapeHtml(args.shopDomain)}) was installed with. Until you reconnect, every order may eventually fail to sync into ${escapeHtml(b.name)}.</p>
+    <p>The fix is a one-time, two-click reconnect: open Integrations, click <strong>Reconnect</strong> on your Shopify row, and approve the Shopify OAuth screen. Your order history, courier links, and fraud history all stay intact.</p>
+    <p style="color:#64748b;font-size:13px">If you've already reconnected, you can ignore this email — the next sweep will pick up the fresh credentials and the reminder won't repeat.</p>`,
+    cta: { label: "Reconnect Shopify", href: args.integrationsUrl },
+    footer: `Need help? Reply to this email or open the integrations page: ${args.integrationsUrl}`,
+  });
+  const text = `Shopify is phasing out non-expiring tokens. Reconnect your store ${args.shopDomain}: ${args.integrationsUrl}`;
   return { subject, html, text };
 }
 

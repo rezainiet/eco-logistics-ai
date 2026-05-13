@@ -17,7 +17,10 @@ import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
 import { sendSms } from "../../lib/sms/index.js";
 import { consumeMerchantTokens } from "../../lib/merchantRateLimit.js";
-import { redactCustomer } from "../../lib/gdpr/redaction.js";
+import {
+  previewRedactCustomer,
+  redactCustomer,
+} from "../../lib/gdpr/redaction.js";
 import { normalizePhone } from "../../lib/phone.js";
 
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
@@ -751,6 +754,17 @@ export const merchantsRouter = router({
         .object({
           email: z.string().email().optional(),
           phone: z.string().min(7).max(20).optional(),
+          /**
+           * Preview mode. When true, returns per-collection counts of
+           * the rows that WOULD be touched without writing anything.
+           * The dashboard uses this to render a confirmation modal
+           * ("This will redact 12 orders, 4 call logs…") so the
+           * merchant doesn't trigger an irreversible erasure on a
+           * mistyped phone number. Dry-runs still consume the rate
+           * limit bucket (a much smaller cost) so an attacker can't
+           * use preview as a free reconnaissance tool.
+           */
+          dryRun: z.boolean().optional(),
         })
         .refine((v) => Boolean(v.email || v.phone), {
           message: "provide at least one of email, phone",
@@ -766,7 +780,11 @@ export const merchantsRouter = router({
       // with a slow refill (~one every 3 minutes sustained); that's
       // generous for legitimate single-request workflows yet tight
       // enough to keep an attacker visible. Same Redis-backed token
-      // bucket the BullMQ queues use.
+      // bucket the BullMQ queues use. Dry-runs are charged the same
+      // cost as real runs — preview is cheaper for us than the real
+      // sweep, but it's still PII-fishing surface that an attacker
+      // could otherwise abuse to enumerate which phones/emails are
+      // attached to which merchant.
       const bucket = await consumeMerchantTokens(
         "gdpr-redact",
         String(merchantId),
@@ -797,6 +815,20 @@ export const merchantsRouter = router({
         identifiers.phone = input.phone.trim();
       }
 
+      // Dry-run short-circuit: return counts without touching data,
+      // and skip the audit log (we audit the COMMIT, not previews).
+      if (input.dryRun) {
+        const preview = await previewRedactCustomer({
+          merchantId,
+          identifiers,
+        });
+        return {
+          ok: true,
+          dryRun: true,
+          results: preview,
+        };
+      }
+
       const results = await redactCustomer({
         merchantId,
         identifiers,
@@ -824,6 +856,7 @@ export const merchantsRouter = router({
 
       return {
         ok: true,
+        dryRun: false,
         results,
       };
     }),
