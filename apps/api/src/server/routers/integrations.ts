@@ -36,6 +36,7 @@ import {
 import {
   deleteWooWebhooks,
   registerWooWebhooks,
+  wooAdapter,
 } from "../../lib/integrations/woocommerce.js";
 import type { IntegrationCredentials } from "../../lib/integrations/types.js";
 import {
@@ -559,6 +560,89 @@ export const integrationsRouter = router({
         authStrategy?: "basic" | "querystring";
       } | null = null;
       if (input.provider === "woocommerce" && status === "connected") {
+        // Inline credential test BEFORE webhook registration: catch
+        // bad keys, scope-only keys, and Cloudflare-stripped Authorization
+        // headers at the moment of connect rather than at the first
+        // webhook delivery. Without this, a merchant pasting write-only
+        // or expired keys lands in "status=connected" and only discovers
+        // the failure when orders silently stop ingesting.
+        let resolvedAuthStrategy: "basic" | "querystring" | undefined;
+        try {
+          const testRes = await wooAdapter.testConnection({
+            siteUrl: input.siteUrl,
+            consumerKey: input.consumerKey,
+            consumerSecret: input.consumerSecret,
+          });
+          if (testRes.authStrategy) {
+            resolvedAuthStrategy = testRes.authStrategy;
+          }
+          if (!testRes.ok) {
+            // Reject the connect with the upstream error so the merchant
+            // sees the failure inline. The Integration row was just
+            // upserted — flip it to "error" with the detail so the
+            // dashboard renders the "Re-enter credentials" banner. We
+            // intentionally don't delete the row: the merchant may want
+            // to retry with corrected keys, and the row's webhookSecret
+            // should stay stable across retries.
+            await Integration.updateOne(
+              { _id: integration._id },
+              {
+                $set: {
+                  status: "error",
+                  lastError: (testRes.detail ?? "woo connection test failed").slice(0, 500),
+                  errorCount: 1,
+                  health: {
+                    ok: false,
+                    lastError: (testRes.detail ?? "woo connection test failed").slice(0, 500),
+                    lastCheckedAt: new Date(),
+                  },
+                  ...(resolvedAuthStrategy
+                    ? { "credentials.authStrategy": resolvedAuthStrategy }
+                    : {}),
+                },
+              },
+            );
+            // Surface the failure category so the SPA can map kind=auth /
+            // kind=scope to specific copy ("invalid keys" vs "missing
+            // read:orders").
+            throw new TRPCError({
+              code: testRes.kind === "auth" || testRes.kind === "scope"
+                ? "UNAUTHORIZED"
+                : "BAD_REQUEST",
+              message:
+                testRes.kind === "scope"
+                  ? `Your WooCommerce keys are missing the read:orders permission. ${testRes.detail ?? ""}`.trim()
+                  : testRes.kind === "auth"
+                    ? `WooCommerce rejected the credentials. ${testRes.detail ?? ""}`.trim()
+                    : `WooCommerce connection test failed: ${testRes.detail ?? "unknown error"}`,
+            });
+          }
+        } catch (err) {
+          // TRPCError already shaped above; re-raise. Anything else
+          // (network / unexpected) gets repackaged so the failure path
+          // stays uniform for the SPA.
+          if (err instanceof TRPCError) throw err;
+          await Integration.updateOne(
+            { _id: integration._id },
+            {
+              $set: {
+                status: "error",
+                lastError: (err as Error).message.slice(0, 500),
+                errorCount: 1,
+                health: {
+                  ok: false,
+                  lastError: (err as Error).message.slice(0, 500),
+                  lastCheckedAt: new Date(),
+                },
+              },
+            },
+          );
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `WooCommerce connection test failed: ${(err as Error).message.slice(0, 200)}`,
+          });
+        }
+
         const callbackUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/integrations/webhook/woocommerce/${String(integration._id)}`;
         try {
           wooWebhookSummary = await registerWooWebhooks({
@@ -567,23 +651,35 @@ export const integrationsRouter = router({
             consumerSecret: input.consumerSecret,
             callbackUrl,
             webhookSecret,
+            // Pass the auth strategy resolved by the inline test so the
+            // first webhook subscription attempt uses the wire form that
+            // actually survives the merchant's proxy stack.
+            authStrategy: resolvedAuthStrategy,
           });
           // Persist the auth strategy that the first authenticated
           // call resolved. Stored as plaintext metadata on the
           // credentials blob (it isn't a secret) so all subsequent
           // calls — disconnect, retryWooWebhooks, fetchSample, the
-          // import worker — pass it to wooFetch and skip the
+          // import worker — pass it to callWoo and skip the
           // Basic→querystring escalation probe.
           const persistSet: Record<string, unknown> = {
-            "webhookStatus.registered": wooWebhookSummary.registered.length > 0,
+            // Healthy only on FULL registration. A partial result (some
+            // topics rejected) is order-blind for the missing topic — we
+            // flag it via lastError + leave the boolean false so the
+            // dashboard shows the yellow "Retry webhooks" banner.
+            "webhookStatus.registered":
+              wooWebhookSummary.errors.length === 0 &&
+              wooWebhookSummary.registered.length > 0,
             "webhookStatus.lastError":
               wooWebhookSummary.errors.length > 0
                 ? wooWebhookSummary.errors.join("; ").slice(0, 500)
                 : null,
             "webhookStatus.subscriptions": wooWebhookSummary.registered,
           };
-          if (wooWebhookSummary.authStrategy) {
-            persistSet["credentials.authStrategy"] = wooWebhookSummary.authStrategy;
+          const strategyToPersist =
+            wooWebhookSummary.authStrategy ?? resolvedAuthStrategy;
+          if (strategyToPersist) {
+            persistSet["credentials.authStrategy"] = strategyToPersist;
           }
           await Integration.updateOne(
             { _id: integration._id },

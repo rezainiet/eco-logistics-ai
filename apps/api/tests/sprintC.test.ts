@@ -388,7 +388,7 @@ describe("Sprint C — Shopify auto-webhook registration", () => {
 });
 
 describe("Sprint C — Woo auto-webhook registration", () => {
-  it("posts order.created + order.updated to /wp-json/wc/v3/webhooks", async () => {
+  it("posts order.created, order.updated, and order.deleted to /wp-json/wc/v3/webhooks", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, init });
@@ -409,13 +409,19 @@ describe("Sprint C — Woo auto-webhook registration", () => {
     // so the disconnect path can DELETE /webhooks/{id} symmetrically.
     // We assert on the topic projection — the id is whatever the WC
     // POST response carries (here 0, since the mock returns "{}").
+    // order.deleted joined the default set so trashed Woo orders flip
+    // to "cancelled" in our system instead of leaving stale rows.
     const topics = result.registered.map((s) => s.topic);
     expect(topics).toEqual(
-      expect.arrayContaining(["order.created", "order.updated"]),
+      expect.arrayContaining([
+        "order.created",
+        "order.updated",
+        "order.deleted",
+      ]),
     );
     expect(result.errors).toEqual([]);
     const posts = calls.filter((c) => c.init?.method === "POST");
-    expect(posts.length).toBe(2);
+    expect(posts.length).toBe(3);
     expect(posts[0]!.url).toContain("/wp-json/wc/v3/webhooks");
     const body = JSON.parse((posts[0]!.init!.body ?? "{}") as string);
     expect(body.delivery_url).toContain("/api/integrations/webhook/woocommerce/x");

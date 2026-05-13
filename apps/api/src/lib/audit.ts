@@ -55,6 +55,7 @@ type AuditAction =
   | "branding.reset"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
+  | "merchant.gdpr_redact_customer"
   | "pii.read"
   | "tracking.identified"
   | "auth.signup"

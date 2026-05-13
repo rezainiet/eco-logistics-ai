@@ -80,6 +80,16 @@ export function isNormalizationSkip(
  */
 export type ConnectionTestKind =
   | "auth_rejected"
+  /** Credentials parse + auth, but the granted permissions don't
+   *  include what the adapter needs (e.g. Woo keys without
+   *  `read:orders`). Distinct from `auth_rejected` because the fix
+   *  is "re-issue keys with the right scope", not "fix the keys". */
+  | "scope"
+  /** Synonym for auth_rejected the Woo adapter emits when the probe
+   *  resolves but the verification call returns 401/403. Kept as a
+   *  separate variant so dashboards can surface "Cloudflare stripped
+   *  Authorization" copy specifically when the probe also failed. */
+  | "auth"
   | "transient"
   | "timeout"
   | "unknown";

@@ -17,6 +17,8 @@ import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
 import { sendSms } from "../../lib/sms/index.js";
 import { consumeMerchantTokens } from "../../lib/merchantRateLimit.js";
+import { redactCustomer } from "../../lib/gdpr/redaction.js";
+import { normalizePhone } from "../../lib/phone.js";
 
 const PHONE_RE = /^\+?[0-9]{7,15}$/;
 
@@ -715,6 +717,93 @@ export const merchantsRouter = router({
         velocityWindowMin: fc.velocityWindowMin ?? 10,
         historyHalfLifeDays: fc.historyHalfLifeDays ?? 30,
         alertOnPendingReview: fc.alertOnPendingReview ?? true,
+      };
+    }),
+
+  /**
+   * Merchant-triggered GDPR redaction for a specific customer.
+   *
+   * Shopify integrations get this for free via the mandatory
+   * `customers/redact` webhook — Shopify pushes the trigger when a
+   * shopper exercises their erasure right. WooCommerce sends no such
+   * webhook, so a Woo merchant who receives an erasure request would
+   * have no way to redact a specific customer's PII short of waiting
+   * for the age-based `customerPiiSweep` to age the order out.
+   *
+   * This mutation closes that gap. It accepts the customer's email
+   * and/or phone (at least one required), normalises the phone to
+   * E.164, then calls the same `redactCustomer` library function the
+   * Shopify webhook uses — so the redaction footprint (which
+   * collections are touched, what fields are replaced with
+   * `[redacted]`) is identical across providers.
+   *
+   * Returns the per-collection counts so the dashboard can show
+   * "12 orders, 4 call logs, 3 recovery tasks redacted" as a
+   * receipt the merchant can forward to the requester.
+   *
+   * Audit-logged with the actor's email + the hashed identifiers
+   * (we deliberately don't store the raw phone/email in the audit
+   * meta — that would re-leak the PII we just redacted).
+   */
+  redactCustomer: protectedProcedure
+    .input(
+      z
+        .object({
+          email: z.string().email().optional(),
+          phone: z.string().min(7).max(20).optional(),
+        })
+        .refine((v) => Boolean(v.email || v.phone), {
+          message: "provide at least one of email, phone",
+        }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = new Types.ObjectId(ctx.user.id);
+      const normalizedPhone = input.phone ? normalizePhone(input.phone) : null;
+      const identifiers: {
+        email?: string;
+        phone?: string;
+      } = {};
+      if (input.email) identifiers.email = input.email.trim().toLowerCase();
+      if (normalizedPhone) identifiers.phone = normalizedPhone;
+
+      // If the merchant gave us a phone we couldn't normalise we still
+      // run with the raw form so we don't silently fail their request,
+      // but we log the divergence so support can investigate weird
+      // matches. The redaction library matches on exact string equality
+      // — the cost of running with un-normalised input is "fewer rows
+      // touched", not "wrong rows touched".
+      if (input.phone && !normalizedPhone) {
+        identifiers.phone = input.phone.trim();
+      }
+
+      const results = await redactCustomer({
+        merchantId,
+        identifiers,
+      });
+
+      // Audit: hash the identifiers so the audit row itself doesn't
+      // re-introduce the PII we just removed. SHA-256 is sufficient
+      // for "the same customer was redacted twice" correlation.
+      const { createHash } = await import("node:crypto");
+      const hashId = (raw: string) =>
+        createHash("sha256").update(raw).digest("hex").slice(0, 16);
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        action: "merchant.gdpr_redact_customer",
+        subjectType: "merchant",
+        subjectId: merchantId,
+        meta: {
+          source: "merchant_dashboard",
+          emailHash: identifiers.email ? hashId(identifiers.email) : null,
+          phoneHash: identifiers.phone ? hashId(identifiers.phone) : null,
+          results,
+        },
+      });
+
+      return {
+        ok: true,
+        results,
       };
     }),
 });

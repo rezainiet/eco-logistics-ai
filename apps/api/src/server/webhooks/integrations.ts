@@ -1,6 +1,6 @@
 import express, { type Request, type Response } from "express";
 import { Types } from "mongoose";
-import { Integration, type IntegrationProvider } from "@ecom/db";
+import { Integration, Order, type IntegrationProvider } from "@ecom/db";
 import { adapterFor, hasAdapter } from "../../lib/integrations/index.js";
 import { decryptSecret, encryptSecret } from "../../lib/crypto.js";
 import { enqueueInboundWebhook } from "../ingest.js";
@@ -279,6 +279,38 @@ integrationsWebhookRouter.post(
 
     if (!externalId) {
       return res.status(400).json({ ok: false, error: "missing external id" });
+    }
+
+    // Control-plane intercept: order.deleted is fired by WooCommerce
+    // when a merchant trashes an order in the WP admin. Without this,
+    // our system keeps showing the order as still-active (pending /
+    // confirmed / shipped, whatever it was) until manual cleanup. Flip
+    // to "cancelled" so dashboards reflect the merchant's intent, and
+    // do NOT run it through the normal ingest path (which expects a
+    // full order payload with shipping address / line items — Woo's
+    // delete payload is typically just `{ id, force_delete }`).
+    //
+    // Idempotent: a duplicate delivery flips a "cancelled" → "cancelled"
+    // which is a no-op under the status guard. We deliberately skip
+    // the inbox + ingest pipeline because the payload has no order
+    // shape to normalise; the audit trail lives in the order's status
+    // change + the courier-handoff record (if any) that preceded it.
+    if (provider === "woocommerce" && topic === "order.deleted") {
+      const flipped = await Order.updateOne(
+        {
+          merchantId: integration.merchantId,
+          "source.externalId": externalId,
+          status: { $nin: ["cancelled", "rto", "delivered"] },
+        },
+        { $set: { status: "cancelled" } },
+      );
+      console.log("[woo-webhook] order.deleted", {
+        integrationId: String(integration._id),
+        merchantId: String(integration.merchantId),
+        externalId,
+        flipped: flipped.modifiedCount > 0,
+      });
+      return res.status(200).json({ ok: true });
     }
 
     // Stamp the inbox row in `received` state. The unique index collapses
