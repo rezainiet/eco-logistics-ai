@@ -33,6 +33,7 @@ import { isEmbedded } from "@/lib/embedded";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -273,6 +274,15 @@ export default function IntegrationsPage() {
   const entitlements = trpc.integrations.getEntitlements.useQuery();
   const [openProvider, setOpenProvider] = useState<ProviderKey | null>(null);
   const [inspectId, setInspectId] = useState<string | null>(null);
+  // Disconnect is destructive in a way a COD merchant feels immediately:
+  // new orders silently stop syncing. It was a one-click icon button —
+  // exactly the accidental-mistake guardrail Phase 4 calls for. Gate it
+  // behind the app-standard ConfirmDialog like every other destructive
+  // action (reject, reconnect-overwrite).
+  const [pendingDisconnect, setPendingDisconnect] = useState<{
+    id: string;
+    provider: string;
+  } | null>(null);
   const utils = trpc.useUtils();
 
   // The OAuth callback redirects with `?warning=` carrying semicolon-
@@ -1089,7 +1099,12 @@ export default function IntegrationsPage() {
                         size="sm"
                         variant="ghost"
                         disabled={disconnect.isPending}
-                        onClick={() => disconnect.mutate({ id: it.id })}
+                        onClick={() =>
+                          setPendingDisconnect({
+                            id: it.id,
+                            provider: it.provider,
+                          })
+                        }
                         // Icon-only destructive action — without an
                         // accessible name, screen readers announce it as
                         // just "button" and Playwright's role/name queries
@@ -1339,6 +1354,33 @@ export default function IntegrationsPage() {
           }
           connect.mutate({ ...payload, confirmOverwrite: true });
           setReconnectPrompt(null);
+        }}
+      />
+
+      <ConfirmDialog
+        open={pendingDisconnect !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingDisconnect(null);
+        }}
+        title="Disconnect this store?"
+        description={
+          <>
+            New orders from{" "}
+            <span className="font-medium">
+              {pendingDisconnect?.provider}
+            </span>{" "}
+            will stop syncing into ConfirmX until you reconnect. Orders
+            already imported, and their tracking, are unaffected. You can
+            reconnect any time.
+          </>
+        }
+        confirmLabel="Disconnect"
+        destructive
+        loading={disconnect.isPending}
+        onConfirm={() => {
+          if (!pendingDisconnect) return;
+          disconnect.mutate({ id: pendingDisconnect.id });
+          setPendingDisconnect(null);
         }}
       />
     </div>
