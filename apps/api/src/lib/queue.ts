@@ -7,6 +7,7 @@ import {
   DEFAULT_BUCKET_BUDGETS,
   type BucketConfig,
 } from "./merchantRateLimit.js";
+import { captureException } from "./telemetry.js";
 
 export const QUEUE_NAMES = {
   tracking: "tracking-sync",
@@ -123,10 +124,56 @@ export function registerWorker<T = unknown, R = unknown>(
       );
     }
   });
-  w.on("failed", (job, err) =>
-    console.error(`[worker:${name}] job ${job?.id} failed:`, err.message),
-  );
-  w.on("error", (err) => console.error(`[worker:${name}]`, err));
+  // Worker job failure → structured log + telemetry. Previously this was
+  // a bare console.error string: invisible unless someone was tailing
+  // Railway logs at the right second. Now it emits a greppable JSON line
+  // AND routes to telemetry (no-op when SENTRY_DSN is unset), with
+  // enough context to action it without the logs: which queue, which
+  // job, how many attempts, and whether BullMQ has now exhausted retries
+  // (final=true ⇒ the work is lost / dead-lettered, the urgent case).
+  w.on("failed", (job, err) => {
+    const attemptsMade = job?.attemptsMade ?? 0;
+    const maxAttempts = job?.opts?.attempts ?? 1;
+    const final = attemptsMade >= maxAttempts;
+    const merchantId =
+      job && typeof job.data === "object" && job.data
+        ? (job.data as { merchantId?: unknown }).merchantId
+        : undefined;
+    console.error(
+      JSON.stringify({
+        evt: "worker.job_failed",
+        queue: name,
+        jobId: job?.id,
+        jobName: job?.name,
+        attemptsMade,
+        maxAttempts,
+        final,
+        merchantId: typeof merchantId === "string" ? merchantId : undefined,
+        error: err.message,
+      }),
+    );
+    captureException(err, {
+      level: final ? "error" : "warning",
+      tags: {
+        source: "worker",
+        queue: name,
+        jobId: String(job?.id ?? "unknown"),
+        final: String(final),
+      },
+    });
+  });
+  // Worker-level error (e.g. Redis connection drop) — not tied to a job.
+  // This is an infrastructure signal; always capture it.
+  w.on("error", (err) => {
+    console.error(
+      JSON.stringify({
+        evt: "worker.error",
+        queue: name,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    captureException(err, { tags: { source: "worker_error", queue: name } });
+  });
   _workers.set(name, w as Worker);
   return w;
 }
