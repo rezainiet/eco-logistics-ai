@@ -748,6 +748,11 @@ export default function FraudReviewPage() {
                 <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
                   <Button
                     className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
+                    title={
+                      !callConfigured.data?.configured
+                        ? "In-app calling isn't enabled for your account yet — call the customer from your phone and use Verify / No answer to record the outcome."
+                        : undefined
+                    }
                     disabled={
                       !callConfigured.data?.configured || initiateCall.isPending
                     }
@@ -802,6 +807,15 @@ export default function FraudReviewPage() {
                     {reject.isPending ? "Rejecting…" : "Reject"}
                   </Button>
                 </div>
+                {!callConfigured.data?.configured ? (
+                  <p className="text-xs text-fg-subtle">
+                    In-app calling isn&apos;t enabled for your account yet.
+                    Call the customer from your phone, then use{" "}
+                    <span className="font-medium text-fg-muted">Verify</span> or{" "}
+                    <span className="font-medium text-fg-muted">No answer</span>{" "}
+                    to record what happened.
+                  </p>
+                ) : null}
               </>
             )}
           </CardContent>

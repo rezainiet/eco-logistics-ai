@@ -59,7 +59,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
         "Connect Shopify or WooCommerce. New orders will flow in automatically — no copy-paste needed.",
       done: state.hasStoreConnected,
       ctaLabel: "Connect store",
-      ctaHref: "/dashboard/integrations",
+      ctaHref: "/dashboard/settings/integrations",
     },
     {
       key: "import_orders",
@@ -72,7 +72,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
       // merchant lands on the row that has the "Import recent" button. If
       // they're still on CSV / manual, send them to the orders page.
       ctaHref: state.hasStoreConnected
-        ? "/dashboard/integrations"
+        ? "/dashboard/settings/integrations"
         : "/dashboard/orders?new=1",
     },
     {
@@ -82,7 +82,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
         "Add Steadfast, Pathao, RedX, or another supported BD courier. We will use these to book pickups for you.",
       done: state.hasCourier,
       ctaLabel: "Add courier",
-      ctaHref: "/dashboard/settings?tab=couriers",
+      ctaHref: "/dashboard/settings/couriers",
     },
     {
       key: "enable_automation",
@@ -91,7 +91,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
         "Pick a mode (manual / semi-auto / full auto). Low-risk orders auto-confirm; high-risk orders go to your review queue.",
       done: state.automationOn,
       ctaLabel: "Enable automation",
-      ctaHref: "/dashboard/settings?tab=automation",
+      ctaHref: "/dashboard/settings/automation",
     },
     {
       key: "test_sms",
