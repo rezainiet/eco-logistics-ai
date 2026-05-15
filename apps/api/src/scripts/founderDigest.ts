@@ -1,6 +1,10 @@
 import mongoose from "mongoose";
 import { ImportJob, Merchant, Order } from "@ecom/db";
 import { connectDb } from "../lib/db.js";
+import {
+  classifyMerchantHealth,
+  type MerchantHealth,
+} from "../lib/merchant-health.js";
 
 /**
  * Daily founder digest — per merchant, from data that already exists.
@@ -30,6 +34,13 @@ function ageHuman(d: Date | string | null | undefined): string {
   if (h < 48) return `${h}h`;
   return `${Math.floor(h / 24)}d`;
 }
+function hoursSince(d: Date | null | undefined): number | null {
+  return d ? (Date.now() - new Date(d).getTime()) / 3_600_000 : null;
+}
+function daysSince(d: Date | null | undefined): number | null {
+  const h = hoursSince(d);
+  return h === null ? null : Math.floor(h / 24);
+}
 
 interface MerchantRow {
   merchant: string;
@@ -41,6 +52,8 @@ interface MerchantRow {
   confirmAttempts7d: number;
   failedImports: number;
   lastOrderAge: string;
+  status: MerchantHealth;
+  reason: string;
 }
 
 async function main(): Promise<void> {
@@ -100,19 +113,33 @@ async function main(): Promise<void> {
       ImportJob.countDocuments({ merchantId, status: "failed" }),
     ]);
 
+    const replyRate7d =
+      confirmAttempts7d > 0
+        ? Math.round((replied7d / confirmAttempts7d) * 100)
+        : null;
+    const health = classifyMerchantHealth({
+      accountAgeDays: daysSince(m.createdAt) ?? 0,
+      ordersAllTime,
+      lastOrderAgeDays: daysSince(lastOrderDoc?.createdAt),
+      pending,
+      oldestPendingAgeHours: hoursSince(oldestPendingDoc?.createdAt),
+      confirmAttempts7d,
+      replyRate7dPct: replyRate7d,
+      failedImports,
+    });
+
     rows.push({
       merchant: m.businessName ?? String(merchantId),
       ordersAllTime,
       orders24h,
       pending,
       oldestPendingAge: ageHuman(oldestPendingDoc?.createdAt),
-      replyRate7d:
-        confirmAttempts7d > 0
-          ? Math.round((replied7d / confirmAttempts7d) * 100)
-          : null,
+      replyRate7d,
       confirmAttempts7d,
       failedImports,
       lastOrderAge: ageHuman(lastOrderDoc?.createdAt),
+      status: health.status,
+      reason: health.reason,
     });
   }
 
@@ -123,19 +150,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Unhealthy first — the founder reads top-down and stops when the
+  // ⚠ lines run out.
+  const order: MerchantHealth[] = [
+    "onboarding_stuck",
+    "sync_issues",
+    "queue_neglected",
+    "low_confirmation",
+    "inactive",
+    "healthy",
+  ];
+  rows.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+  const needAttention = rows.filter((r) => r.status !== "healthy").length;
+
   console.log(`=== ConfirmX founder digest — ${new Date().toISOString()} ===`);
-  console.log(`${merchants.length} merchant(s). Reply-rate window = 7d.\n`);
+  console.log(
+    `${merchants.length} merchant(s) · ${needAttention} need attention. ` +
+      `Reply-rate window = 7d.\n`,
+  );
   for (const r of rows) {
-    const flags: string[] = [];
-    if (r.ordersAllTime === 0) flags.push("NO ORDERS EVER");
-    if (r.lastOrderAge.endsWith("d") && parseInt(r.lastOrderAge) >= 7)
-      flags.push("INACTIVE");
-    if (r.oldestPendingAge.endsWith("d")) flags.push("QUEUE STALE");
-    if (r.replyRate7d !== null && r.confirmAttempts7d >= 5 && r.replyRate7d < 15)
-      flags.push("LOW REPLY");
-    if (r.failedImports > 0) flags.push("IMPORT FAILED");
+    const tag =
+      r.status === "healthy" ? "  ok" : `  ⚠ ${r.status.toUpperCase()}`;
     console.log(
-      `• ${r.merchant}\n` +
+      `• ${r.merchant} —${tag}\n` +
+        (r.status !== "healthy" ? `    ${r.reason}\n` : "") +
         `    orders: ${r.ordersAllTime} all / ${r.orders24h} in 24h · last ${r.lastOrderAge} ago\n` +
         `    queue: ${r.pending} pending · oldest ${r.oldestPendingAge}\n` +
         `    reply rate 7d: ${
@@ -143,12 +181,11 @@ async function main(): Promise<void> {
             ? "n/a (no confirmations sent)"
             : `${r.replyRate7d}% of ${r.confirmAttempts7d}`
         }\n` +
-        `    failed imports: ${r.failedImports}` +
-        (flags.length ? `\n    ⚠ ${flags.join(" · ")}` : ""),
+        `    failed imports: ${r.failedImports}`,
     );
   }
   console.log(
-    "\nWork the ⚠ lines first. 'LOW REPLY' is the canary: customers" +
+    "\nWork the ⚠ lines first. LOW_CONFIRMATION is the canary: customers" +
       "\naren't engaging the SMS — that's the product thesis under test.",
   );
 }
