@@ -297,6 +297,12 @@ export default function FraudReviewPage() {
   const items: QueueItem[] = (queue.data?.items ?? []) as QueueItem[];
   const total = queue.data?.total ?? 0;
   const today = stats.data?.today ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
+  // Queue-aging nudge. An unworked confirmation order doesn't sit still —
+  // it gets booked/shipped unconfirmed and comes back as RTO. Surfacing
+  // the oldest age turns "I'll get to it" into "this is costing me now".
+  const oldestAgeH = stats.data?.oldestPendingAgeHours ?? null;
+  const showAging = total > 0 && oldestAgeH !== null && oldestAgeH >= 12;
+  const agingSevere = oldestAgeH !== null && oldestAgeH >= 24;
 
   // Plan-gate: order verification is on Growth and above. The API
   // correctly throws FORBIDDEN with "fraud review is not available on
@@ -316,6 +322,28 @@ export default function FraudReviewPage() {
         title="Order verification queue"
         description="Confirm COD orders that need a quick check before booking the courier."
       />
+
+      {showAging ? (
+        <div
+          role="status"
+          className={`flex items-start gap-2.5 rounded-lg border p-3 text-sm ${
+            agingSevere
+              ? "border-danger-border bg-danger-subtle text-danger"
+              : "border-warning-border bg-warning-subtle text-warning"
+          }`}
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p>
+            <span className="font-semibold">
+              {total} order{total === 1 ? "" : "s"} waiting
+            </span>{" "}
+            — oldest has been unworked for{" "}
+            <span className="font-semibold tabular-nums">{oldestAgeH}h</span>.
+            Orders left here get booked unconfirmed and come back as RTO.
+            Work the top of the queue first.
+          </p>
+        </div>
+      ) : null}
 
       {lastRejected ? (
         // Sticky so the affordance survives long-scroll review sessions —
