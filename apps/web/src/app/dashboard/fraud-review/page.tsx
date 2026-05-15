@@ -133,6 +133,19 @@ const LEVEL_CLASS: Record<QueueItem["level"], string> = {
  * `reviewStatus.replace("_"," ")`) keeps the wording a merchant sees
  * identical everywhere: "Pending call", not "pending_call".
  */
+/**
+ * Turn an internal status enum into calm, consistent merchant text:
+ * every underscore, Title Case. "out_for_delivery" -> "Out For
+ * Delivery", not "out for delivery". Keeps the perimeter free of raw
+ * snake_case leaking to a non-technical operator.
+ */
+function humanizeStatus(s: string): string {
+  return s
+    .split("_")
+    .map((w) => (w ? w[0]!.toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
 function reviewBadgeFor(status: QueueItem["reviewStatus"]) {
   if (status === "not_required") {
     return {
@@ -568,7 +581,7 @@ export default function FraudReviewPage() {
                   />
                   <InfoRow
                     label="Order status"
-                    value={detail.data.status.replace("_", " ")}
+                    value={humanizeStatus(detail.data.status)}
                   />
                 </div>
 
