@@ -22,6 +22,10 @@ Run/verify these before onboarding the first merchant.
       clean-checkout footgun — apps fail to import `@ecom/*` otherwise).
 - [ ] `npm --workspace apps/api run verify:prod-readiness` is green
       (env + infra + index checks).
+- [ ] Branch protection on `main` configured with the three required
+      checks (`API strict build`, `Web typecheck`, `API tests`) and
+      squash-only merge — see `docs/CI.md`. (Closes the "no CI gate"
+      risk: PR #2 auto-merged instantly because none existed.)
 - [ ] Required env vars set in prod: `JWT_SECRET`, `COURIER_ENC_KEY`,
       `MONGODB_URI`, `REDIS_URL`, `SHOPIFY_API_SECRET`,
       `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
