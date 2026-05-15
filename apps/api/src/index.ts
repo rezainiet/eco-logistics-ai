@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import { randomUUID } from "node:crypto";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { env } from "./env.js";
 import mongoose from "mongoose";
@@ -445,12 +446,35 @@ async function main() {
       res: import("express").Response,
       _next: import("express").NextFunction,
     ) => {
-      console.error(`[api] unhandled ${req.method} ${req.path}:`, err.message);
+      // Correlation id: honour an upstream/proxy-provided x-request-id,
+      // otherwise mint one. It goes into the log line, the telemetry
+      // tags, AND the 500 response body — so when a beta merchant says
+      // "it broke", the founder can ask for the requestId and jump
+      // straight to the matching log/Sentry event instead of guessing.
+      const inbound = req.header("x-request-id");
+      const requestId =
+        inbound && inbound.length <= 64 ? inbound : randomUUID();
+      console.error(
+        JSON.stringify({
+          evt: "api.unhandled",
+          requestId,
+          method: req.method,
+          path: req.path,
+          error: err.message,
+        }),
+      );
       captureException(err, {
-        tags: { source: "express", method: req.method, path: req.path },
+        tags: {
+          source: "express",
+          method: req.method,
+          path: req.path,
+          requestId,
+        },
       });
       if (res.headersSent) return;
-      res.status(500).json({ ok: false, error: "internal_error" });
+      res
+        .status(500)
+        .json({ ok: false, error: "internal_error", requestId });
     },
   );
 

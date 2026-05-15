@@ -95,6 +95,14 @@ const schema = z
     /** Canonical merchant-facing frontend origin (no trailing slash).
      *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),
+    // Svix signing secret for the Resend bounce/complaint webhook. Optional
+    // by the same posture as STRIPE_WEBHOOK_SECRET: when unset the
+    // /api/webhooks/resend endpoint hard-refuses (503) rather than
+    // accepting unsigned traffic — see server/webhooks/resend.ts. This
+    // declaration was previously only present in the in-flight SMS
+    // migration's env.ts, so a clean checkout failed `build:strict`;
+    // restored here so the beta base compiles independently of that WIP.
+    RESEND_WEBHOOK_SECRET: z.string().optional(),
     EMAIL_FROM: z.string().optional(),
     PUBLIC_WEB_URL: z.string().url().optional(),
     // Trial-ending warning is sent once at this many days before expiry.
