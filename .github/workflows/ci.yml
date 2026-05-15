@@ -1,0 +1,86 @@
+name: ci
+
+# Fast, required gates for merging into main. Deliberately separate from
+# e2e.yml (the slower Playwright golden-path, kept advisory) so a merge
+# is blocked only by cheap, deterministic checks:
+#   - API strict typecheck/build
+#   - Web typecheck
+#   - API unit tests
+#
+# Each job is an independent clean checkout (npm ci). The monorepo
+# footgun is that apps import @ecom/db / @ecom/types from dist/, and
+# postinstall only builds @ecom/branding — so every job explicitly
+# builds db + types before the check. Verified against a wiped-dist
+# clean checkout.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-strict-build:
+    name: API strict build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build workspace deps (db + types)
+        run: |
+          npm --workspace @ecom/db run build
+          npm --workspace @ecom/types run build
+      - name: API strict build
+        run: npm --workspace @ecom/api run build:strict
+
+  web-typecheck:
+    name: Web typecheck
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build workspace deps (db + types)
+        run: |
+          npm --workspace @ecom/db run build
+          npm --workspace @ecom/types run build
+      - name: Web typecheck
+        run: npm --workspace @ecom/web run typecheck
+
+  api-tests:
+    name: API tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Build workspace deps (db + types)
+        run: |
+          npm --workspace @ecom/db run build
+          npm --workspace @ecom/types run build
+      # mongodb-memory-server downloads its mongod binary on first run.
+      # Cache it (same key scheme as e2e.yml) so re-runs skip the download.
+      - name: Cache mongodb-memory-server binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: ${{ runner.os }}-mongo-mem-7
+      - name: API unit tests
+        run: npm --workspace @ecom/api test
