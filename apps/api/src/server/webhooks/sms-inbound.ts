@@ -100,8 +100,49 @@ smsInboundWebhookRouter.post(
     // +88017…, or 017… format depending on carrier.
     const normalizedFrom = normalizePhoneOrRaw(fromRaw) ?? fromRaw;
 
+    // Resolve the code to match on. If the customer included a code, use
+    // it (safest). If they replied a clear informal yes/no WITHOUT a
+    // code (the BD norm — "ok", "হ্যাঁ", "👍"), bind ONLY when this phone
+    // has exactly one pending order. Zero or multiple → we refuse to
+    // guess, but we log it loudly so the founder can see real reply
+    // behaviour instead of it vanishing silently.
+    let lookupCode: string | null = intent.code;
+    let codeless = false;
+    if (lookupCode == null) {
+      const pendings = await Order.find({
+        "automation.state": "pending_confirmation",
+        "customer.phone": normalizedFrom,
+      })
+        .select("automation.confirmationCode")
+        .limit(2)
+        .lean<Array<{ automation?: { confirmationCode?: string } }>>();
+      if (pendings.length === 1) {
+        lookupCode = pendings[0]!.automation?.confirmationCode ?? null;
+        codeless = lookupCode != null;
+      }
+      if (!lookupCode) {
+        console.warn(
+          JSON.stringify({
+            msg: "sms_inbound",
+            outcome: "intent_without_unique_order",
+            kind: intent.kind,
+            matchedOn: intent.matchedOn,
+            pendingForPhone: pendings.length,
+            fromTail: normalizedFrom.slice(-4),
+          }),
+        );
+        return res.status(200).json({
+          ok: true,
+          ignored:
+            pendings.length === 0
+              ? "clear intent but no pending order for this number"
+              : "clear intent but multiple pending orders — code required",
+        });
+      }
+    }
+
     const order = await Order.findOne({
-      "automation.confirmationCode": intent.code,
+      "automation.confirmationCode": lookupCode,
       "automation.state": "pending_confirmation",
       "customer.phone": normalizedFrom,
     })
@@ -117,7 +158,7 @@ smsInboundWebhookRouter.post(
       const LATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
       const lateCutoff = new Date(Date.now() - LATE_WINDOW_MS);
       const expired = await Order.findOne({
-        "automation.confirmationCode": intent.code,
+        "automation.confirmationCode": lookupCode,
         "customer.phone": normalizedFrom,
         "automation.state": "rejected",
         "automation.decidedBy": "system",
@@ -162,7 +203,8 @@ smsInboundWebhookRouter.post(
             subjectId: expired._id,
             meta: {
               outcome: "late_reply_acknowledged",
-              codeTail: intent.code.slice(-4),
+              codeTail: lookupCode.slice(-4),
+              matchedOn: intent.matchedOn,
             },
           });
         }
@@ -174,7 +216,9 @@ smsInboundWebhookRouter.post(
         JSON.stringify({
           msg: "sms_inbound",
           outcome: "no_match",
-          code: intent.code,
+          code: lookupCode,
+          codeless,
+          matchedOn: intent.matchedOn,
           fromTail: normalizedFrom.slice(-4),
         }),
       );
@@ -210,7 +254,7 @@ smsInboundWebhookRouter.post(
         "automation.decidedBy": "agent",
         "automation.decidedAt": now,
         "automation.confirmedAt": now,
-        "automation.reason": "customer SMS YES",
+        "automation.reason": `customer SMS confirm (${intent.matchedOn}${codeless ? ", no code" : ""})`,
         // SMS confirmation is the strongest possible "this is a real customer"
         // signal — relax the fraud review state so the order can ship without
         // an agent call. (We never relax a terminal review; the rejected/
@@ -262,7 +306,7 @@ smsInboundWebhookRouter.post(
             "automation.decidedBy": "agent",
             "automation.decidedAt": now,
             "automation.rejectedAt": now,
-            "automation.rejectionReason": "customer SMS NO",
+            "automation.rejectionReason": `customer SMS reject (${intent.matchedOn}${codeless ? ", no code" : ""})`,
             "order.status": "cancelled",
             // Customer self-rejected → strongest fraud signal. Mark for the
             // queue (rescore worker will fan it out to other open orders for
@@ -284,7 +328,12 @@ smsInboundWebhookRouter.post(
       action: `automation.sms_${intent.kind}`,
       subjectType: "order",
       subjectId: orderOid,
-      meta: { fromTail: normalizedFrom.slice(-4), code: intent.code },
+      meta: {
+        fromTail: normalizedFrom.slice(-4),
+        code: lookupCode,
+        codeless,
+        matchedOn: intent.matchedOn,
+      },
     }).catch(() => {});
 
     return res.status(200).json({ ok: true, intent: intent.kind, orderId: String(orderOid) });
