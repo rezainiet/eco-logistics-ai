@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { DashboardHero } from "@/components/onboarding/dashboard-hero";
 import { OnboardingChecklist } from "@/components/onboarding/onboarding-checklist";
+import { TestConfirmationCard } from "@/components/onboarding/test-confirmation-card";
 
 export const metadata = { title: "Getting started" };
 
@@ -17,6 +18,7 @@ export default async function GettingStartedPage() {
   return (
     <main className="space-y-5">
       <DashboardHero initialName={initialName} />
+      <TestConfirmationCard />
       <OnboardingChecklist collapseWhenComplete={false} />
     </main>
   );

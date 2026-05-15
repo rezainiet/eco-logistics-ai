@@ -93,7 +93,11 @@ describe("merchantsRouter", () => {
         expect(result.ok).toBe(true);
         expect(result.phoneSuffix).toBe("0000");
         expect(sent).toHaveLength(1);
-        expect(sent[0]!.body).toMatch(/SMS pipeline working/i);
+        // The test SMS is now the real bilingual order-confirmation
+        // template so the merchant sees exactly what their customers get.
+        expect(sent[0]!.body).toMatch(/Confirm order #TEST-/);
+        expect(sent[0]!.body).toMatch(/Reply "YES \d{6}"/);
+        expect(sent[0]!.body).toMatch(/অর্ডার নিশ্চিত করতে/);
       } finally {
         __resetSmsTransport();
       }

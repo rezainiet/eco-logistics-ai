@@ -100,7 +100,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
         "Confirm at least one order with a customer reply (or the dashboard's test button). Closes the loop end-to-end.",
       done: state.smsTested,
       ctaLabel: "Send test SMS",
-      ctaHref: "/dashboard/orders?test_sms=1",
+      ctaHref: "/dashboard/getting-started",
     },
   ];
 
