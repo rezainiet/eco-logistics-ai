@@ -88,7 +88,7 @@ describe("deriveOnboardingProgress", () => {
     // and points at the integrations page where the import button lives.
     const linked = deriveOnboardingProgress({ ...blank, hasStoreConnected: true });
     const importStep = linked.steps.find((s) => s.key === "import_orders")!;
-    expect(importStep.ctaHref).toBe("/dashboard/integrations");
+    expect(importStep.ctaHref).toBe("/dashboard/settings/integrations");
     expect(importStep.ctaLabel.toLowerCase()).toContain("import");
 
     // Without a store, fall back to the manual / CSV entry point.

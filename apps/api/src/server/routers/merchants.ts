@@ -15,7 +15,7 @@ import { adapterFor, hasCourierAdapter } from "../../lib/couriers/index.js";
 import { registerCourierWebhook } from "../../lib/couriers/webhook-registration.js";
 import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
-import { sendSms } from "../../lib/sms/index.js";
+import { sendSms, sendOrderConfirmationSms } from "../../lib/sms/index.js";
 import { consumeMerchantTokens } from "../../lib/merchantRateLimit.js";
 import {
   previewRedactCustomer,
@@ -285,11 +285,19 @@ export const merchantsRouter = router({
         message: `Test SMS limit reached. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
       });
     }
-    const result = await sendSms(
-      m.phone,
-      `${m.businessName}: SMS pipeline working. If you didn't request this, ignore — it doesn't affect your account.`,
-      { tag: "settings_test", csmsId: `test-${ctx.user.id}-${Date.now()}` },
-    );
+    // Send the *real* bilingual order-confirmation template, branded as the
+    // merchant's business, to their own phone. The point of a test isn't to
+    // prove "SMS works" abstractly — it's to let the merchant see, on their
+    // own handset, the exact message their Bangladeshi customers will
+    // receive (brand name, COD line, YES/NO reply prompt in EN + Bangla).
+    // That is the onboarding "wow" the audit calls out as missing. The
+    // sample code is unmatched so a stray reply is a harmless no-op.
+    const result = await sendOrderConfirmationSms(m.phone, {
+      brand: m.businessName,
+      orderNumber: `TEST-${String(Date.now()).slice(-4)}`,
+      codAmount: 1200,
+      confirmationCode: String(Math.floor(100_000 + Math.random() * 900_000)),
+    });
     void writeAudit({
       merchantId: m._id as Types.ObjectId,
       actorId: m._id as Types.ObjectId,

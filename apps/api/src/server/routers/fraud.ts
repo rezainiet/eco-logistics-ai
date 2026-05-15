@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
+  CustomerReliability,
   Merchant,
   type MerchantFraudConfig,
   MerchantStats,
@@ -71,6 +72,107 @@ function startOfToday(): Date {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+/**
+ * This merchant's *own* delivery history with a buyer phone, summarised
+ * for the review pane. Read straight off the CustomerReliability
+ * aggregate (race-safe, indexed on `{ merchantId, phoneHash }`) — these
+ * are the same real delivered/RTO/cancelled counters the risk engine
+ * already trusts, NOT a re-derivation. For a COD operator deciding
+ * whether to spend a phone call, "you've delivered to this customer 4
+ * times, 0 returns" is the single most decisive 5-second signal, and
+ * today it isn't surfaced anywhere.
+ */
+export type CustomerHistorySummary = {
+  delivered: number;
+  rto: number;
+  cancelled: number;
+  resolved: number;
+  isRepeat: boolean;
+  /** Plain-language trust band. "new" = no resolved history with you. */
+  label: "new" | "trusted" | "mixed" | "risky";
+};
+
+function summariseCustomerHistory(counts: {
+  deliveredCount?: number;
+  rtoCount?: number;
+  cancelledCount?: number;
+} | null): CustomerHistorySummary {
+  const delivered = Math.max(0, counts?.deliveredCount ?? 0);
+  const rto = Math.max(0, counts?.rtoCount ?? 0);
+  const cancelled = Math.max(0, counts?.cancelledCount ?? 0);
+  const resolved = delivered + rto + cancelled;
+  let label: CustomerHistorySummary["label"];
+  if (resolved === 0) {
+    label = "new";
+  } else if (rto >= 2 || rto / resolved > 0.4) {
+    // Two confirmed returns, or returns on >40% of resolved orders, is
+    // a hard "this buyer costs you money" pattern.
+    label = "risky";
+  } else if (delivered >= 3 && rto === 0) {
+    label = "trusted";
+  } else {
+    label = "mixed";
+  }
+  return { delivered, rto, cancelled, resolved, isRepeat: resolved > 0, label };
+}
+
+export type RecommendedAction = {
+  action: "ship" | "verify_call" | "reject_likely";
+  /** One short merchant-language sentence. No model jargon. */
+  hint: string;
+};
+
+/**
+ * A single explicit "what should I do" call, derived only from signals
+ * the merchant can already see (risk level, the customer's SMS reply,
+ * this store's own history, the cross-merchant network). Deliberately
+ * conservative: it never auto-decides, it only points the operator at
+ * the fastest correct next step.
+ */
+function deriveRecommendedAction(input: {
+  level: "low" | "medium" | "high";
+  hardBlocked: boolean;
+  smsFeedback: "confirmed" | "rejected" | "no_reply" | null;
+  history: CustomerHistorySummary;
+  networkRtoRate: number;
+  networkRtoCount: number;
+}): RecommendedAction {
+  if (input.hardBlocked || input.smsFeedback === "rejected") {
+    return {
+      action: "reject_likely",
+      hint: "Customer or rule already rejected this — reject unless you can reach them.",
+    };
+  }
+  if (input.history.label === "risky" || input.networkRtoCount >= 3) {
+    return {
+      action: "reject_likely",
+      hint:
+        input.history.label === "risky"
+          ? `This buyer has ${input.history.rto} return(s) with your store — call before shipping or reject.`
+          : "This number has repeated returns across stores — call before shipping or reject.",
+    };
+  }
+  if (input.smsFeedback === "confirmed" && input.level !== "high") {
+    return {
+      action: "ship",
+      hint: "Customer confirmed by SMS and risk is acceptable — safe to book the courier.",
+    };
+  }
+  if (input.history.label === "trusted" && input.level !== "high") {
+    return {
+      action: "ship",
+      hint: `Repeat customer — ${input.history.delivered} delivered, 0 returns with your store. Safe to book.`,
+    };
+  }
+  return {
+    action: "verify_call",
+    hint:
+      input.level === "high"
+        ? "High risk and unconfirmed — a quick verification call is worth it before booking."
+        : "Unconfirmed — one short call confirms intent before you commit the courier cost.",
+  };
 }
 
 /**
@@ -147,11 +249,48 @@ export const fraudRouter = router({
         "fraud.reviewStatus": statusMatch,
       });
 
+      // One batched read of this merchant's own history for every phone
+      // on the page (indexed on { merchantId, phoneHash }) — turns the
+      // queue from "wall of scores" into "who is this buyer to me".
+      const phoneHashByOrder = new Map<string, string>();
+      for (const o of page) {
+        const h = hashPhoneForNetwork(o.customer.phone);
+        if (h) phoneHashByOrder.set(String(o._id), h);
+      }
+      const relRows = await CustomerReliability.find({
+        merchantId,
+        phoneHash: { $in: [...new Set(phoneHashByOrder.values())] },
+      })
+        .select("phoneHash deliveredCount rtoCount cancelledCount")
+        .lean<
+          Array<{
+            phoneHash: string;
+            deliveredCount?: number;
+            rtoCount?: number;
+            cancelledCount?: number;
+          }>
+        >();
+      const relByHash = new Map(relRows.map((r) => [r.phoneHash, r]));
+
       return {
         total,
         nextCursor,
         hasMore,
-        items: page.map((o) => ({
+        items: page.map((o) => {
+          const history = summariseCustomerHistory(
+            relByHash.get(phoneHashByOrder.get(String(o._id)) ?? "") ?? null,
+          );
+          const level = o.fraud?.level ?? "low";
+          const smsFeedback = o.fraud?.smsFeedback ?? null;
+          const recommended = deriveRecommendedAction({
+            level,
+            hardBlocked: o.fraud?.hardBlocked ?? false,
+            smsFeedback,
+            history,
+            networkRtoRate: 0,
+            networkRtoCount: 0,
+          });
+          return {
           id: String(o._id),
           orderNumber: o.orderNumber,
           customer: {
@@ -177,7 +316,10 @@ export const fraudRouter = router({
                 : "Safe"),
           hardBlocked: o.fraud?.hardBlocked ?? false,
           smsFeedback: o.fraud?.smsFeedback ?? null,
-        })),
+          customerHistory: history,
+          recommendedAction: recommended,
+          };
+        }),
       };
     }),
 
@@ -203,6 +345,25 @@ export const fraudRouter = router({
         phoneHash,
         addressHash,
         merchantId,
+      });
+
+      const rel = await CustomerReliability.findOne({ merchantId, phoneHash })
+        .select("deliveredCount rtoCount cancelledCount firstOutcomeAt lastOutcomeAt")
+        .lean<{
+          deliveredCount?: number;
+          rtoCount?: number;
+          cancelledCount?: number;
+          firstOutcomeAt?: Date;
+          lastOutcomeAt?: Date;
+        } | null>();
+      const customerHistory = summariseCustomerHistory(rel);
+      const recommendedAction = deriveRecommendedAction({
+        level: order.fraud?.level ?? "low",
+        hardBlocked: order.fraud?.hardBlocked ?? false,
+        smsFeedback: order.fraud?.smsFeedback ?? null,
+        history: customerHistory,
+        networkRtoRate: network.rtoRate ?? 0,
+        networkRtoCount: network.rtoCount ?? 0,
       });
 
       return {
@@ -243,6 +404,12 @@ export const fraudRouter = router({
           lastSeenAt: network.lastSeenAt,
           matchedOn: network.matchedOn,
         },
+        customerHistory: {
+          ...customerHistory,
+          firstOutcomeAt: rel?.firstOutcomeAt ?? null,
+          lastOutcomeAt: rel?.lastOutcomeAt ?? null,
+        },
+        recommendedAction,
         createdAt: order.createdAt,
       };
     }),

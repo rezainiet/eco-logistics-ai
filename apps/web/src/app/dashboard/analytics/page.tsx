@@ -108,9 +108,14 @@ export default function AnalyticsPage() {
           ) : (last7.data ?? []).length === 0 ? (
             <EmptyState
               icon={BarChart3}
-              title="No activity yet"
-              description="Create your first order to see daily trends here."
+              title="No order activity yet"
+              description="This is where you'll see daily order volume, confirmation rate, and RTO trends — the numbers that tell you whether COD is making or losing you money. Connect your store and the chart fills in automatically as orders arrive."
               className="my-4"
+              action={
+                <Button asChild variant="outline" size="sm">
+                  <a href="/dashboard/integrations">Connect store</a>
+                </Button>
+              }
             />
           ) : (
             <OrdersBarChart data={last7.data ?? []} />

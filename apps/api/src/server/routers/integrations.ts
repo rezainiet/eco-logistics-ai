@@ -3049,6 +3049,43 @@ export const integrationsRouter = router({
         },
       });
 
+      // Day-one backfill. The single biggest "this product is dead"
+      // moment for a new BD merchant is landing on an empty dashboard
+      // after connecting Shopify and waiting for the *next* customer
+      // order — which on a slow afternoon is hours away (audit 04 §1,
+      // 05 Tier 1.1). Auto-trigger the exact same import the merchant
+      // would otherwise have to find and click at onboarding step 2, so
+      // recent orders + risk scores are visible within a minute of
+      // install. This reuses the proven ImportJob/commerceImport path
+      // (`ingestNormalizedOrder` does not dispatch confirmation SMS, so
+      // historical customers are never messaged). Best-effort: a backfill
+      // failure must never fail the install itself.
+      try {
+        const activeImport = await ImportJob.findOne({
+          integrationId: integration._id,
+          status: { $in: ["queued", "running"] },
+        })
+          .select("_id")
+          .lean();
+        if (!activeImport) {
+          const job = await ImportJob.create({
+            merchantId,
+            integrationId: integration._id,
+            provider: "shopify",
+            status: "queued",
+            requestedLimit: 50,
+            triggeredBy: merchantId,
+          });
+          await enqueueCommerceImport({ importJobId: String(job._id) });
+        }
+      } catch (err) {
+        console.warn("[shopify-install] backfill enqueue failed (non-fatal)", {
+          merchantId: String(merchantId),
+          shop,
+          err: (err as Error).message.slice(0, 200),
+        });
+      }
+
       return {
         ok: true as const,
         integrationId: String(integration._id),

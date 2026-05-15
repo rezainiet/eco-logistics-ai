@@ -14,6 +14,7 @@ import { Toaster } from "@/components/ui/toast";
 import { Providers } from "@/app/providers";
 import { ActivationToaster } from "@/components/onboarding/activation-moments";
 import { IncidentBanner } from "@/components/dashboard/incident-banner";
+import { SupportFooter } from "@/components/dashboard/support-footer";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -46,6 +47,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
             <IncidentBanner />
             <DashboardBanners />
             {children}
+            <SupportFooter />
           </div>
         </main>
         <MobileBottomNav />

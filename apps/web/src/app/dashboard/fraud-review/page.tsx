@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { formatBDT, formatRelative } from "@/lib/formatters";
+import { REVIEW_BADGE } from "@/lib/status-badges";
 
 import { humanizeError } from "@/lib/friendly-errors";
 type FilterValue = "all_open" | "pending_call" | "no_answer";
@@ -57,6 +58,66 @@ type QueueItem = {
   reasons: string[];
   scoredAt: Date | string | null;
   createdAt: Date | string;
+  customerHistory: CustomerHistory;
+  recommendedAction: RecommendedAction;
+};
+
+type CustomerHistory = {
+  delivered: number;
+  rto: number;
+  cancelled: number;
+  resolved: number;
+  isRepeat: boolean;
+  label: "new" | "trusted" | "mixed" | "risky";
+};
+
+type RecommendedAction = {
+  action: "ship" | "verify_call" | "reject_likely";
+  hint: string;
+};
+
+const HISTORY_PILL: Record<
+  CustomerHistory["label"],
+  { text: (h: CustomerHistory) => string; className: string }
+> = {
+  new: {
+    text: () => "New customer",
+    className: "bg-surface-raised text-fg-muted",
+  },
+  trusted: {
+    text: (h) => `Repeat · ${h.delivered} delivered`,
+    className: "bg-success-subtle text-success",
+  },
+  mixed: {
+    text: (h) =>
+      `Repeat · ${h.delivered} ok${h.rto ? ` · ${h.rto} RTO` : ""}`,
+    className: "bg-warning-subtle text-warning",
+  },
+  risky: {
+    text: (h) => `${h.rto} RTO with you`,
+    className: "bg-danger-subtle text-danger",
+  },
+};
+
+const ACTION_META: Record<
+  RecommendedAction["action"],
+  { label: string; className: string; icon: typeof ShieldCheck }
+> = {
+  ship: {
+    label: "Safe to book",
+    className: "border-success-border bg-success-subtle text-success",
+    icon: ShieldCheck,
+  },
+  verify_call: {
+    label: "Call to verify",
+    className: "border-warning-border bg-warning-subtle text-warning",
+    icon: PhoneCall,
+  },
+  reject_likely: {
+    label: "Likely reject",
+    className: "border-danger-border bg-danger-subtle text-danger",
+    icon: ShieldAlert,
+  },
 };
 
 const LEVEL_CLASS: Record<QueueItem["level"], string> = {
@@ -65,14 +126,36 @@ const LEVEL_CLASS: Record<QueueItem["level"], string> = {
   high: "bg-danger-subtle text-danger",
 };
 
-const STATUS_CLASS: Record<QueueItem["reviewStatus"], string> = {
-  not_required: "bg-surface-raised text-fg-muted",
-  optional_review: "bg-warning-subtle text-warning",
-  pending_call: "bg-warning-subtle text-warning",
-  no_answer: "bg-danger-subtle text-danger",
-  verified: "bg-success-subtle text-success",
-  rejected: "bg-danger-subtle text-danger",
-};
+/**
+ * Single source of truth for review-status label + colour + icon is
+ * `@/lib/status-badges` REVIEW_BADGE — the same map the orders list
+ * uses. Resolving through it (instead of a local class table + raw
+ * `reviewStatus.replace("_"," ")`) keeps the wording a merchant sees
+ * identical everywhere: "Pending call", not "pending_call".
+ */
+/**
+ * Turn an internal status enum into calm, consistent merchant text:
+ * every underscore, Title Case. "out_for_delivery" -> "Out For
+ * Delivery", not "out for delivery". Keeps the perimeter free of raw
+ * snake_case leaking to a non-technical operator.
+ */
+function humanizeStatus(s: string): string {
+  return s
+    .split("_")
+    .map((w) => (w ? w[0]!.toUpperCase() + w.slice(1) : w))
+    .join(" ");
+}
+
+function reviewBadgeFor(status: QueueItem["reviewStatus"]) {
+  if (status === "not_required") {
+    return {
+      label: "No review needed",
+      className: "bg-surface-raised text-fg-muted",
+      Icon: ShieldCheck,
+    };
+  }
+  return REVIEW_BADGE[status];
+}
 
 /** How long the merchant has to undo a reject — matches restoreOrder's
  *  RESTORE_WINDOW_MS but trimmed for a usable banner countdown. */
@@ -376,12 +459,42 @@ export default function FraudReviewPage() {
                         </div>
                         <div className="flex items-center justify-between gap-2 text-xs text-fg-subtle">
                           <span className="truncate">{it.orderNumber}</span>
-                          <Badge
-                            variant="outline"
-                            className={`border-transparent text-[10px] ${STATUS_CLASS[it.reviewStatus]}`}
+                          {(() => {
+                            const rb = reviewBadgeFor(it.reviewStatus);
+                            return (
+                              <Badge
+                                variant="outline"
+                                className={`inline-flex items-center gap-1 border-transparent text-[10px] ${rb.className}`}
+                              >
+                                <rb.Icon className="h-2.5 w-2.5" aria-hidden />
+                                {rb.label}
+                              </Badge>
+                            );
+                          })()}
+                        </div>
+                        {/* The two signals an operator actually decides
+                            on in <5s: what we recommend, and who this
+                            buyer is to this store. */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {(() => {
+                            const a = ACTION_META[it.recommendedAction.action];
+                            const Icon = a.icon;
+                            return (
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${a.className}`}
+                              >
+                                <Icon className="h-3 w-3" aria-hidden />
+                                {a.label}
+                              </span>
+                            );
+                          })()}
+                          <span
+                            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${HISTORY_PILL[it.customerHistory.label].className}`}
                           >
-                            {it.reviewStatus.replace("_", " ")}
-                          </Badge>
+                            {HISTORY_PILL[it.customerHistory.label].text(
+                              it.customerHistory,
+                            )}
+                          </span>
                         </div>
                         {it.reasons && it.reasons.length > 0 ? (
                           // Top reasons preview — surfaces the human-language
@@ -427,6 +540,28 @@ export default function FraudReviewPage() {
               <div className="flex items-center justify-center py-12 text-sm text-fg-subtle">
                 No order selected.
               </div>
+            ) : detail.isError ? (
+              // Previously a failed detail fetch fell through to the
+              // loading branch (!detail.data) and shimmered forever — a
+              // hidden failure: the operator waited on a spinner that
+              // would never resolve. Make the failure explicit and
+              // recoverable without a full page reload.
+              <EmptyState
+                icon={AlertTriangle}
+                tone="danger"
+                title="Couldn't load this order"
+                description="The connection dropped while fetching the order. Your queue is unaffected — retry, or pick another order."
+                variant="inset"
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => detail.refetch()}
+                  >
+                    Retry
+                  </Button>
+                }
+              />
             ) : detail.isLoading || !detail.data ? (
               <div className="space-y-3">
                 <div className="h-6 w-1/2 animate-shimmer rounded-md" />
@@ -446,8 +581,97 @@ export default function FraudReviewPage() {
                   />
                   <InfoRow
                     label="Order status"
-                    value={detail.data.status.replace("_", " ")}
+                    value={humanizeStatus(detail.data.status)}
                   />
+                </div>
+
+                {/* Recommended action — the one-line "what do I do"
+                    answer, derived server-side only from signals the
+                    merchant can already see (risk level, SMS reply,
+                    this store's history, the network). It never
+                    auto-decides; it points at the fastest correct step
+                    so an operator isn't reverse-engineering a number. */}
+                {(() => {
+                  const a = ACTION_META[detail.data.recommendedAction.action];
+                  const Icon = a.icon;
+                  return (
+                    <div
+                      className={`flex items-start gap-3 rounded-lg border p-4 ${a.className}`}
+                    >
+                      <Icon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold">
+                          Recommended: {a.label}
+                        </p>
+                        <p className="mt-0.5 text-xs opacity-90">
+                          {detail.data.recommendedAction.hint}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Customer history — this store's own delivered/RTO
+                    record with this phone, plus the privacy-safe
+                    cross-store network rollup. "4 delivered, 0 returns
+                    with you" is the most decisive 5-second signal a COD
+                    operator has, and it was previously invisible. */}
+                <div className="rounded-lg border border-stroke/8 bg-surface-overlay p-4">
+                  <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
+                    Customer history
+                  </span>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                    <HistoryStat
+                      label="Delivered"
+                      value={detail.data.customerHistory.delivered}
+                      tone="success"
+                    />
+                    <HistoryStat
+                      label="Returned"
+                      value={detail.data.customerHistory.rto}
+                      tone={
+                        detail.data.customerHistory.rto > 0 ? "danger" : "muted"
+                      }
+                    />
+                    <HistoryStat
+                      label="Cancelled"
+                      value={detail.data.customerHistory.cancelled}
+                      tone="muted"
+                    />
+                  </div>
+                  <p className="mt-3 text-xs text-fg-subtle">
+                    {detail.data.customerHistory.resolved === 0
+                      ? "First order from this number with your store."
+                      : `${detail.data.customerHistory.resolved} completed order(s) with your store.`}
+                    {detail.data.network.merchantCount > 1
+                      ? ` Across ${detail.data.network.merchantCount} stores on the network: ${detail.data.network.deliveredCount} delivered, ${detail.data.network.rtoCount} returned.`
+                      : ""}
+                  </p>
+                  {/* SMS confirmation outcome — why automation held (or
+                      released) this order. Previously only used inside
+                      the recommendation logic; showing it makes the
+                      decision transparent instead of mysterious. */}
+                  <div className="mt-3 flex items-center gap-2 border-t border-stroke/8 pt-3 text-xs">
+                    <span className="text-fg-subtle">SMS confirmation:</span>
+                    {detail.data.fraud.smsFeedback === "confirmed" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-success">
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                        Customer replied YES
+                      </span>
+                    ) : detail.data.fraud.smsFeedback === "rejected" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-danger">
+                        <XCircle className="h-3.5 w-3.5" aria-hidden />
+                        Customer replied NO
+                      </span>
+                    ) : detail.data.fraud.smsFeedback === "no_reply" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-warning">
+                        <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+                        No reply yet — held for a call
+                      </span>
+                    ) : (
+                      <span className="text-fg-muted">Not sent / pending</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="rounded-lg border border-stroke/8 bg-surface-overlay p-4">
@@ -539,6 +763,22 @@ export default function FraudReviewPage() {
                   ) : null}
                 </div>
 
+                {detail.data.fraud.reviewStatus === "verified" ||
+                detail.data.fraud.reviewStatus === "rejected" ? (
+                  // Guardrail: the queue can go stale (another tab, a
+                  // second operator, or a slow refetch). Acting again
+                  // throws a CONFLICT the merchant doesn't understand,
+                  // and risks them thinking they must "re-do" a decision
+                  // that already stuck. When the order is already in a
+                  // terminal review state, replace the action bar with a
+                  // plain record of what happened and who/when.
+                  <ReviewedNotice
+                    status={detail.data.fraud.reviewStatus}
+                    reviewedAt={detail.data.fraud.reviewedAt}
+                    notes={detail.data.fraud.reviewNotes}
+                  />
+                ) : (
+                  <>
                 <div className="space-y-1.5">
                   <label
                     htmlFor="review-notes"
@@ -575,6 +815,11 @@ export default function FraudReviewPage() {
                 <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
                   <Button
                     className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
+                    title={
+                      !callConfigured.data?.configured
+                        ? "In-app calling isn't enabled for your account yet — call the customer from your phone and use Verify / No answer to record the outcome."
+                        : undefined
+                    }
                     disabled={
                       !callConfigured.data?.configured || initiateCall.isPending
                     }
@@ -629,6 +874,17 @@ export default function FraudReviewPage() {
                     {reject.isPending ? "Rejecting…" : "Reject"}
                   </Button>
                 </div>
+                {!callConfigured.data?.configured ? (
+                  <p className="text-xs text-fg-subtle">
+                    In-app calling isn&apos;t enabled for your account yet.
+                    Call the customer from your phone, then use{" "}
+                    <span className="font-medium text-fg-muted">Verify</span> or{" "}
+                    <span className="font-medium text-fg-muted">No answer</span>{" "}
+                    to record what happened.
+                  </p>
+                ) : null}
+                  </>
+                )}
               </>
             )}
           </CardContent>
@@ -673,6 +929,80 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       <span className={`text-right text-sm text-fg ${mono ? "font-mono" : ""}`}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function ReviewedNotice({
+  status,
+  reviewedAt,
+  notes,
+}: {
+  status: "verified" | "rejected";
+  reviewedAt: Date | string | null;
+  notes: string | null;
+}) {
+  const verified = status === "verified";
+  const Icon = verified ? ShieldCheck : XCircle;
+  return (
+    <div
+      className={`rounded-lg border p-4 ${
+        verified
+          ? "border-success-border bg-success-subtle text-success"
+          : "border-danger-border bg-danger-subtle text-danger"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <Icon className="h-5 w-5 shrink-0" aria-hidden />
+        <p className="text-sm font-semibold">
+          {verified
+            ? "This order is already verified"
+            : "This order is already rejected"}
+          {reviewedAt ? (
+            <span className="font-normal opacity-90">
+              {" "}
+              · {formatRelative(reviewedAt)}
+            </span>
+          ) : null}
+        </p>
+      </div>
+      <p className="mt-1.5 text-xs opacity-90">
+        {verified
+          ? "No further action needed — it's cleared to book with the courier."
+          : "No further action needed — the order was cancelled. Restore it from cancelled orders if this was a mistake."}
+      </p>
+      {notes ? (
+        <p className="mt-2 rounded-md bg-surface-base/40 px-2.5 py-1.5 text-xs text-fg-muted">
+          Note: {notes}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function HistoryStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "success" | "danger" | "muted";
+}) {
+  const toneClass =
+    tone === "success"
+      ? "text-success"
+      : tone === "danger"
+        ? "text-danger"
+        : "text-fg-muted";
+  return (
+    <div className="rounded-md border border-stroke/8 bg-surface-base/40 py-2">
+      <div className={`text-lg font-semibold tabular-nums ${toneClass}`}>
+        {value}
+      </div>
+      <div className="text-2xs uppercase tracking-[0.06em] text-fg-subtle">
+        {label}
+      </div>
     </div>
   );
 }

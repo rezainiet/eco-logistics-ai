@@ -78,7 +78,7 @@ const METHOD_HELP: Record<string, { label: string; hint: string }> = {
   bkash: { label: "bKash", hint: "Send to 01XXXXXXXXX (Personal). Use the provided reference." },
   nagad: { label: "Nagad", hint: "Send to 01XXXXXXXXX (Personal)." },
   bank_transfer: { label: "Bank transfer", hint: "DBBL — A/C 1234567890 — ConfirmX Technologies Ltd." },
-  card: { label: "Card", hint: "Manual card receipt (Stripe coming soon)." },
+  card: { label: "Card", hint: "Upload your card payment receipt for manual review." },
   other: { label: "Other", hint: "Add details in the notes field." },
 };
 

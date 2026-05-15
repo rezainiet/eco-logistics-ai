@@ -4,6 +4,8 @@ interface StatusHeroProps {
   presentation: StatusPresentation;
   /** Hex (#rrggbb) — already sanitized by safeHexColor on the server. */
   primaryColor?: string | null;
+  /** Localised progress-step labels (length 5). Defaults to English. */
+  steps?: readonly string[];
 }
 
 /**
@@ -13,7 +15,7 @@ interface StatusHeroProps {
  * because the value is `#rrggbb` and validated upstream — there is no way
  * for a hostile color to escape into a CSS expression.
  */
-export function StatusHero({ presentation, primaryColor }: StatusHeroProps) {
+export function StatusHero({ presentation, primaryColor, steps }: StatusHeroProps) {
   const accent = primaryColor ?? "#0f172a";
   return (
     <div className="rounded-2xl bg-white p-6 shadow-sm ring-1 ring-gray-100">
@@ -27,14 +29,23 @@ export function StatusHero({ presentation, primaryColor }: StatusHeroProps) {
       </div>
       <h1 className="mt-3 text-2xl font-semibold text-gray-900">{presentation.label}</h1>
       <p className="mt-1 text-sm text-gray-600">{presentation.hint}</p>
-      <ProgressBar step={presentation.step} accent={accent} />
+      <ProgressBar step={presentation.step} accent={accent} steps={steps} />
     </div>
   );
 }
 
 const STEPS = ["Processing", "Packed", "Shipped", "Out for delivery", "Delivered"] as const;
 
-function ProgressBar({ step, accent }: { step: number; accent: string }) {
+function ProgressBar({
+  step,
+  accent,
+  steps,
+}: {
+  step: number;
+  accent: string;
+  steps?: readonly string[];
+}) {
+  const labels = steps && steps.length === STEPS.length ? steps : STEPS;
   const pct = Math.max(0, Math.min(4, step)) * 25;
   return (
     <div className="mt-5">
@@ -45,7 +56,7 @@ function ProgressBar({ step, accent }: { step: number; accent: string }) {
         />
       </div>
       <ol className="mt-3 flex items-start justify-between text-[10px] font-medium uppercase tracking-wider text-gray-400 sm:text-xs">
-        {STEPS.map((label, i) => (
+        {labels.map((label, i) => (
           <li
             key={label}
             className={`flex flex-1 flex-col items-center gap-1 ${i <= step ? "text-gray-900" : ""}`}

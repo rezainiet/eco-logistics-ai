@@ -22,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Eyebrow } from "@/components/ui/heading";
 
 const LIVE_STATUSES = new Set(["queued", "initiated", "ringing", "in-progress"]);
@@ -146,12 +147,15 @@ export default function CallCustomerPage() {
           <CardContent className="flex items-start gap-3 p-4">
             <AlertCircle className="h-5 w-5 shrink-0 text-warning" />
             <div className="text-sm">
-              <p className="font-medium text-warning">Twilio not configured</p>
+              <p className="font-medium text-warning">
+                Calling isn&apos;t enabled for your account yet
+              </p>
               <p className="text-fg-muted">
-                Set <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_ACCOUNT_SID</code>,{" "}
-                <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_AUTH_TOKEN</code>, and{" "}
-                <code className="rounded bg-surface-overlay px-1 py-0.5 text-xs">TWILIO_PHONE_NUMBER</code>{" "}
-                in the API env to enable calling.
+                We&apos;re rolling out Bangladesh-local voice confirmation so
+                calls show a local number your customers will pick up. Until
+                it&apos;s on for your account, SMS confirmation handles
+                verification automatically — contact support if you need
+                calling enabled sooner.
               </p>
             </div>
           </CardContent>
@@ -288,10 +292,18 @@ export default function CallCustomerPage() {
               ))}
             </div>
           ) : calls.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
-              <PhoneCall className="h-5 w-5 text-fg-faint" />
-              <p className="text-sm text-fg-subtle">No calls yet.</p>
-            </div>
+            <EmptyState
+              icon={PhoneCall}
+              title="No calls logged yet"
+              description="A quick call on a doubtful COD order is the cheapest way to stop a return before you pay courier pickup. Calls you place here — and from the verification queue — are logged so you can see who was reached and what they said."
+              variant="inset"
+              className="py-10"
+              action={
+                <Button asChild variant="outline" size="sm">
+                  <a href="/dashboard/fraud-review">Go to verification queue</a>
+                </Button>
+              }
+            />
           ) : (
             <ul className="divide-y divide-[rgba(209,213,219,0.08)]">
               {calls.map((c) => (
