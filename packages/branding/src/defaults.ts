@@ -41,7 +41,7 @@ export const DEFAULT_BRANDING: BrandingConfig = {
   privacyEmail: "privacy@confirmx.ai",
   salesEmail: "sales@confirmx.ai",
   helloEmail: "hello@confirmx.ai",
-  noReplyEmail: "no-reply@confirmx.ai",
+  noReplyEmail: "no-reply@email.confirmx.ai",
   colors: {
     brand: "#C6F84F",
     brandHover: "#8AE619",
@@ -69,7 +69,17 @@ export const DEFAULT_BRANDING: BrandingConfig = {
   },
   email: {
     senderName: "ConfirmX",
-    senderAddress: "no-reply@confirmx.ai",
+    // Transactional sender lives on the `email.*` subdomain, which is
+    // the Resend-verified domain in production. DKIM is published at
+    // `resend._domainkey.email.confirmx.ai` and Resend's outbound
+    // signs with it; DMARC alignment carries via DKIM (the apex
+    // `_dmarc.confirmx.ai` p=none record covers the subdomain via
+    // relaxed alignment). The legacy `send.*` subdomain has SPF/MX
+    // but no DKIM and is NOT a valid sender — kept in DNS only as a
+    // historical artifact, scheduled for cleanup.
+    senderAddress: "no-reply@email.confirmx.ai",
+    // Reply-To stays on the apex — that's the contact domain where
+    // support@ / privacy@ inboxes (will) live.
     replyTo: "support@confirmx.ai",
     footer: "Built for Bangladesh's COD economy",
     accentColor: "#C6F84F",

@@ -4,13 +4,7 @@ import { z } from "zod";
 import { CallLog, Order } from "@ecom/db";
 import { env } from "../../env.js";
 import { billableProcedure, protectedProcedure, router } from "../trpc.js";
-import {
-  getCallDetails,
-  hangupCall,
-  initiateCall,
-  isTwilioConfigured,
-  normalizePhone,
-} from "../../lib/twilio.js";
+import { getVoiceProvider } from "../../lib/voice/index.js";
 import { invalidate } from "../../lib/cache.js";
 import { bumpUsage, checkQuota } from "../../lib/usage.js";
 import { getPlan } from "../../lib/plans.js";
@@ -23,13 +17,30 @@ const phoneSchema = z
   .max(20, "phone too long")
   .regex(/^[0-9+\-\s()]+$/, "invalid phone characters");
 
-function statusCallbackUrl(): string {
-  const base = env.TWILIO_WEBHOOK_BASE_URL ?? `http://localhost:${env.API_PORT}`;
-  return `${base.replace(/\/$/, "")}/api/webhooks/twilio/call-status`;
+/**
+ * The voice subsystem's webhook base URL. Falls back to the legacy
+ * TWILIO_WEBHOOK_BASE_URL so existing Twilio-configured deploys keep
+ * working unchanged. Provider-specific callback paths are appended by
+ * the caller — the legacy Twilio webhook lives at /api/webhooks/twilio/*,
+ * BD adapters will mount under /api/webhooks/voice/*.
+ */
+function voiceWebhookBase(): string {
+  const base =
+    env.VOICE_WEBHOOK_BASE_URL ??
+    env.TWILIO_WEBHOOK_BASE_URL ??
+    env.PUBLIC_API_URL ??
+    `http://localhost:${env.API_PORT}`;
+  return base.replace(/\/$/, "");
+}
+
+function legacyTwilioStatusCallbackUrl(): string {
+  return `${voiceWebhookBase()}/api/webhooks/twilio/call-status`;
 }
 
 export const callRouter = router({
-  isConfigured: protectedProcedure.query(() => ({ configured: isTwilioConfigured() })),
+  isConfigured: protectedProcedure.query(() => ({
+    configured: getVoiceProvider().isConfigured(),
+  })),
 
   initiateCall: billableProcedure
     .input(
@@ -41,10 +52,11 @@ export const callRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (!isTwilioConfigured()) {
+      const voice = getVoiceProvider();
+      if (!voice.isConfigured()) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "Twilio is not configured",
+          message: `Voice provider '${voice.name}' is not configured`,
         });
       }
 
@@ -73,19 +85,19 @@ export const callRouter = router({
         }
         orderId = new Types.ObjectId(input.orderId);
       }
-      const normalizedPhone = normalizePhone(input.customerPhone);
+      const normalizedPhone = voice.normalizePhone(input.customerPhone);
 
-      let twilioResult;
+      let voiceResult;
       try {
-        twilioResult = await initiateCall({
+        voiceResult = await voice.initiateOutboundCall({
           to: normalizedPhone,
-          statusCallbackUrl: statusCallbackUrl(),
+          statusCallbackUrl: legacyTwilioStatusCallbackUrl(),
           record: input.record,
         });
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: err instanceof Error ? err.message : "Twilio call failed",
+          message: err instanceof Error ? err.message : "Voice call failed",
         });
       }
 
@@ -101,10 +113,13 @@ export const callRouter = router({
         callType: "outgoing",
         customerPhone: normalizedPhone,
         customerName: input.customerName,
-        callSid: twilioResult.sid,
-        status: twilioResult.status,
-        from: twilioResult.from ?? env.TWILIO_PHONE_NUMBER,
-        to: twilioResult.to ?? normalizedPhone,
+        callSid: voiceResult.callId,
+        providerName: voice.name,
+        purpose: "agent_outreach",
+        attemptNumber: 1,
+        status: voiceResult.providerStatus ?? undefined,
+        from: voiceResult.from,
+        to: voiceResult.to ?? normalizedPhone,
         startedAt: now,
       });
 
@@ -113,8 +128,8 @@ export const callRouter = router({
 
       return {
         id: String(log._id),
-        callSid: twilioResult.sid,
-        status: twilioResult.status,
+        callSid: voiceResult.callId,
+        status: voiceResult.providerStatus,
       };
     }),
 
@@ -130,12 +145,12 @@ export const callRouter = router({
       }
 
       try {
-        const result = await hangupCall(input.callSid);
-        return { callSid: result.sid, status: result.status };
+        const result = await getVoiceProvider().hangup(input.callSid);
+        return { callSid: result.callId, status: result.providerStatus };
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: err instanceof Error ? err.message : "Twilio hangup failed",
+          message: err instanceof Error ? err.message : "Voice hangup failed",
         });
       }
     }),
@@ -152,11 +167,11 @@ export const callRouter = router({
       let liveStatus: string | null = null;
       let liveDuration: number | null = null;
       try {
-        const details = await getCallDetails(input.callSid);
-        liveStatus = details.status ?? null;
+        const details = await getVoiceProvider().getCallDetails(input.callSid);
+        liveStatus = details.providerStatus;
         liveDuration = details.duration;
       } catch {
-        // Twilio fetch failed — fall back to persisted state
+        // Provider fetch failed — fall back to persisted state
       }
 
       return {

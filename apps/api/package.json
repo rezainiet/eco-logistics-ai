@@ -19,6 +19,7 @@
     "admin:promote": "tsx src/scripts/promoteAdmin.ts",
     "admin:demote": "tsx src/scripts/promoteAdmin.ts",
     "stripe:seed": "tsx src/scripts/seedStripe.ts",
+    "sms:test": "tsx src/scripts/sendTestConfirmation.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"

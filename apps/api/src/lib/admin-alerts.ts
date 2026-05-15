@@ -6,7 +6,8 @@ import {
   type AdminAlertPrefs,
   type AdminAlertSeverity,
 } from "@ecom/db";
-import { buildAdminAlertEmail, sendEmail, webUrl } from "./email.js";
+import { buildAdminAlertEmail, webUrl } from "./email.js";
+import { enqueueEmail } from "../workers/email.worker.js";
 import { sendCriticalAlertSms } from "./sms/index.js";
 import { loadBrandingFromStore } from "./branding-store.js";
 import type { Alert } from "./anomaly.js";
@@ -176,7 +177,11 @@ export async function deliverAdminAlert(
         });
       }
 
-      // 2. Email — gated by per-severity preference.
+      // 2. Email — gated by per-severity preference. Enqueued via
+      // the email worker so a Resend blip doesn't drop the alert; the
+      // alert's own dedupeKey carries forward into the correlation id
+      // so a sustained anomaly hits Resend at most once per
+      // (admin, kind, dedupeKey).
       if (!opts.skipEmail && admin.prefs[severity].email && admin.email) {
         try {
           const tpl = buildAdminAlertEmail({
@@ -187,14 +192,15 @@ export async function deliverAdminAlert(
             baselineRate: alert.baselineRate,
             alertsUrl,
           });
-          const r = await sendEmail({
+          const r = await enqueueEmail({
+            correlationId: `admin_alert:${alert.kind}:${admin.id}:${alert.dedupeKey}`,
             to: admin.email,
             subject: tpl.subject,
             html: tpl.html,
             text: tpl.text,
             tag: `admin_alert_${alert.kind}`,
           });
-          if (r.ok) result.emails++;
+          if (r.enqueued || r.mode === "inline") result.emails++;
           else if (r.error) {
             result.errors.push({
               channel: "email",

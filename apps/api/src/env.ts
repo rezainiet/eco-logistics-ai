@@ -49,6 +49,31 @@ const schema = z
      */
     TRUSTED_PROXIES: z.string().optional(),
     TRIAL_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+    // --- Voice / IVR ---
+    //
+    // The voice subsystem is provider-abstracted (`lib/voice/*`). Twilio is
+    // kept as a legacy / dev adapter — Bangladeshi recipients largely ignore
+    // foreign caller IDs, so production traffic must terminate on a BD-local
+    // provider (a real adapter slots in here once we sign a contract). The
+    // "stub" provider is the dev-fallback equivalent of the SMS module's
+    // stdout transport: it logs and returns a synthetic callId so the
+    // confirmation flow can be exercised end-to-end without a paid account.
+    VOICE_PROVIDER: z.enum(["stub", "twilio"]).default("stub"),
+    /**
+     * Canonical public base URL the voice provider should hit for status +
+     * DTMF callbacks. Falls back to PUBLIC_API_URL when unset. Always served
+     * over HTTPS in production — providers refuse plain-http callbacks.
+     */
+    VOICE_WEBHOOK_BASE_URL: z.string().url().optional(),
+    /**
+     * HMAC secret for verifying inbound voice webhooks. Required in prod
+     * once VOICE_PROVIDER is anything other than "stub". The legacy Twilio
+     * adapter uses its own signature scheme (X-Twilio-Signature derived
+     * from TWILIO_AUTH_TOKEN) and ignores this; BD providers we onboard
+     * later will sign via a shared secret instead.
+     */
+    VOICE_WEBHOOK_SHARED_SECRET: z.string().optional(),
+    // Legacy Twilio creds — only consulted when VOICE_PROVIDER="twilio".
     TWILIO_ACCOUNT_SID: z.string().optional(),
     TWILIO_AUTH_TOKEN: z.string().optional(),
     TWILIO_PHONE_NUMBER: z.string().optional(),
@@ -95,7 +120,44 @@ const schema = z
     /** Canonical merchant-facing frontend origin (no trailing slash).
      *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),
-    EMAIL_FROM: z.string().optional(),
+    /**
+     * Optional override for the transactional `From:` header. Accepts
+     * either form:
+     *   - `local@domain.tld`                       (bare address)
+     *   - `Display Name <local@domain.tld>`        (RFC 5322 mailbox)
+     *
+     * The local-part of the address must resolve to a domain Resend has
+     * verified (otherwise Resend rejects with 403 / `validation_error`).
+     * When unset, the sender is composed from `branding.email.senderName`
+     * + `branding.email.senderAddress`.
+     *
+     * We validate the *shape* at boot so a typo (e.g. trailing space,
+     * missing `<>`, missing TLD) fails fast instead of silently breaking
+     * every send in production.
+     */
+    /**
+     * Resend webhook signing secret (Svix format: `whsec_<base64>`).
+     * Configure ONE webhook in the Resend dashboard pointing at
+     * `${PUBLIC_API_URL}/api/webhooks/resend`. When unset the endpoint
+     * hard-refuses with 503 (Resend retries) rather than silently
+     * accepting unsigned traffic — same posture as STRIPE_WEBHOOK_SECRET.
+     */
+    RESEND_WEBHOOK_SECRET: z.string().optional(),
+    EMAIL_FROM: z
+      .string()
+      .trim()
+      .optional()
+      .refine(
+        (v) =>
+          v === undefined ||
+          /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(v) ||
+          /^[^<>]{1,80}<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/.test(v),
+        {
+          message:
+            "EMAIL_FROM must be 'local@domain.tld' or 'Display Name <local@domain.tld>' " +
+            "and the domain must be verified in Resend (no whitespace inside the angle brackets).",
+        },
+      ),
     PUBLIC_WEB_URL: z.string().url().optional(),
     // Trial-ending warning is sent once at this many days before expiry.
     TRIAL_WARNING_DAYS: z.coerce.number().int().min(1).max(14).default(3),
@@ -130,11 +192,28 @@ const schema = z
     STRIPE_PRICE_GROWTH: z.string().optional(),
     STRIPE_PRICE_SCALE: z.string().optional(),
     STRIPE_PRICE_ENTERPRISE: z.string().optional(),
-    // --- SMS (Bangladesh — SSL Wireless) ---
-    // BD-tier transactional SMS for OTP, order confirmation,
-    // delivery notifications. When any of the three are unset, the
-    // sms module no-ops in dev (writes to stdout) and refuses to
-    // send in production with a loud warning rather than throwing.
+    // --- SMS (Bangladesh) ---
+    //
+    // Provider-abstracted (`lib/sms/*`). The active adapter is picked at
+    // boot from SMS_PROVIDER and cached. Missing creds on the selected
+    // adapter cause `sendSms` to no-op (dev: stdout / prod: warn+drop)
+    // rather than throwing into the order-create / auth path.
+    //
+    //   stub        — dev fallback, logs to stdout
+    //   sslwireless — SSL Wireless SMS Plus (legacy / alpha-mask senders)
+    //   bulksmsbd   — BulkSMSBD numeric-CLI gateway (current BD default)
+    SMS_PROVIDER: z
+      .enum(["stub", "sslwireless", "bulksmsbd"])
+      .default("stub"),
+    // --- BulkSMSBD ---
+    BULKSMSBD_API_KEY: z.string().optional(),
+    /** Approved sender id (numeric short code, e.g. 8809617621489). */
+    BULKSMSBD_SENDER_ID: z.string().optional(),
+    BULKSMSBD_BASE_URL: z
+      .string()
+      .url()
+      .default("http://bulksmsbd.net"),
+    // --- SSL Wireless ---
     SSL_WIRELESS_API_KEY: z.string().optional(),
     SSL_WIRELESS_USER: z.string().optional(),
     SSL_WIRELESS_SID: z.string().optional(),
@@ -482,7 +561,45 @@ const schema = z
       "links, dashboard redirects, and embedded SDK URLs must point " +
       "at the real merchant frontend origin, not localhost.",
     path: ["PUBLIC_WEB_URL"],
-  });
+  })
+  .refine(
+    (e) =>
+      e.NODE_ENV !== "production" ||
+      e.VOICE_PROVIDER === "stub" ||
+      e.VOICE_PROVIDER === "twilio" ||
+      !!e.VOICE_WEBHOOK_SHARED_SECRET,
+    {
+      message:
+        "VOICE_WEBHOOK_SHARED_SECRET is required in production when " +
+        "VOICE_PROVIDER is a non-legacy adapter — unsigned voice " +
+        "callbacks would let a third party flip orders into confirmed/" +
+        "rejected by replaying the DTMF payload.",
+      path: ["VOICE_WEBHOOK_SHARED_SECRET"],
+    },
+  )
+  .refine(
+    (e) =>
+      e.SMS_PROVIDER !== "bulksmsbd" ||
+      (!!e.BULKSMSBD_API_KEY && !!e.BULKSMSBD_SENDER_ID),
+    {
+      message:
+        "SMS_PROVIDER=bulksmsbd requires both BULKSMSBD_API_KEY and " +
+        "BULKSMSBD_SENDER_ID. Without them the adapter cannot dispatch and " +
+        "every order would sit in pending_confirmation forever.",
+      path: ["BULKSMSBD_API_KEY"],
+    },
+  )
+  .refine(
+    (e) =>
+      e.SMS_PROVIDER !== "sslwireless" ||
+      (!!e.SSL_WIRELESS_API_KEY && !!e.SSL_WIRELESS_USER && !!e.SSL_WIRELESS_SID),
+    {
+      message:
+        "SMS_PROVIDER=sslwireless requires SSL_WIRELESS_API_KEY, " +
+        "SSL_WIRELESS_USER, and SSL_WIRELESS_SID.",
+      path: ["SSL_WIRELESS_API_KEY"],
+    },
+  );
 
 export type Env = z.infer<typeof schema>;
 

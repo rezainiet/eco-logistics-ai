@@ -4,11 +4,8 @@ import { Merchant } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { invalidateSubscriptionCache } from "../server/trpc.js";
 import { writeAudit } from "../lib/audit.js";
-import {
-  buildSubscriptionSuspendedEmail,
-  sendEmail,
-  webUrl,
-} from "../lib/email.js";
+import { buildSubscriptionSuspendedEmail, webUrl } from "../lib/email.js";
+import { enqueueEmail } from "./email.worker.js";
 
 /**
  * Grace-expiry sweep.
@@ -97,14 +94,21 @@ export async function sweepSubscriptionGrace(): Promise<SubscriptionGraceJobResu
       businessName: m.businessName,
       billingUrl: webUrl("/dashboard/billing"),
     });
-    void sendEmail({
+    // Correlated on merchantId only — the atomic status flip above
+    // means a merchant can be suspended at most once per past_due
+    // cycle, so the jobId is naturally one-shot.
+    void enqueueEmail({
+      correlationId: `sub_suspended:${String(m._id)}`,
       to: m.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
       tag: "subscription_suspended",
     }).catch((err) =>
-      console.error("[grace] suspend email failed", (err as Error).message),
+      console.error(
+        "[grace] suspend email enqueue failed",
+        (err as Error).message,
+      ),
     );
   }
 

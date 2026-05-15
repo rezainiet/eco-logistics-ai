@@ -12,9 +12,9 @@ import { getPlan, PLAN_TIERS, type PlanTier } from "../../lib/plans.js";
 import { enforceIntegrationCapacity } from "../../lib/entitlements.js";
 import {
   buildPaymentApprovedEmail,
-  sendEmail,
   webUrl,
 } from "../../lib/email.js";
+import { enqueueEmail } from "../../workers/email.worker.js";
 import { consumeStepupToken } from "../../lib/admin-stepup.js";
 
 const DEFAULT_PERIOD_DAYS = 30;
@@ -369,14 +369,18 @@ export const adminBillingRouter = router({
         periodEnd,
         dashboardUrl: webUrl("/dashboard"),
       });
-      void sendEmail({
+      void enqueueEmail({
+        correlationId: `pay_approved:manual:${String(payment._id)}`,
         to: merchant.email,
         subject: tpl.subject,
         html: tpl.html,
         text: tpl.text,
         tag: "payment_approved",
       }).catch((err) =>
-        console.error("[adminBilling] payment email send failed", (err as Error).message),
+        console.error(
+          "[adminBilling] payment email enqueue failed",
+          (err as Error).message,
+        ),
       );
 
       return {

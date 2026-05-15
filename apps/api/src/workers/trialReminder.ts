@@ -2,11 +2,8 @@ import type { Job } from "bullmq";
 import { Merchant } from "@ecom/db";
 import { env } from "../env.js";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
-import {
-  buildTrialEndingEmail,
-  sendEmail,
-  webUrl,
-} from "../lib/email.js";
+import { buildTrialEndingEmail, webUrl } from "../lib/email.js";
+import { enqueueEmail } from "./email.worker.js";
 
 /**
  * Trial-ending warning sweep.
@@ -90,14 +87,20 @@ export async function sweepTrialReminders(): Promise<TrialReminderJobResult> {
       pricingUrl: webUrl("/pricing"),
       billingUrl: webUrl("/dashboard/billing"),
     });
-    const result = await sendEmail({
+    // Correlated on (merchantId, trialEndsAt) so a sweep re-run inside
+    // the same trial cycle is a no-op at the queue layer (in addition
+    // to the DB-level `notificationsSent.trialEndingAt` claim above).
+    // The notification stamp is already taken atomically, so we only
+    // get here once per cycle — the correlation id is defense-in-depth.
+    const result = await enqueueEmail({
+      correlationId: `trial_end:${String(m._id)}:${new Date(trialEndsAt).getTime()}`,
       to: m.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
       tag: "trial_ending",
     });
-    if (result.ok) sent += 1;
+    if (result.enqueued || result.mode === "inline") sent += 1;
     else skipped += 1;
   }
 

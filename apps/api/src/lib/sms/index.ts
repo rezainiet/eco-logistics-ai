@@ -1,25 +1,32 @@
 import { env } from "../../env.js";
+import { SslWirelessTransport } from "./sslwireless.js";
+import { BulkSmsBdTransport } from "./bulksmsbd.js";
 import {
-  SslWirelessTransport,
   type SmsSendInput,
   type SmsSendResult,
   type SmsTransport,
   normalizeBdPhone,
-} from "./sslwireless.js";
+} from "./types.js";
 
 /**
  * SMS pipeline.
  *
- * Backed by SSL Wireless (Bangladesh) by default. Mirrors the email module's
- * dev-fallback pattern: when the SSL Wireless keys are unset, we log to
- * stdout instead of sending. In production, missing keys cause `sendSms` to
- * no-op with a loud warning rather than throwing into the request path —
- * order creation and auth must NEVER fail because the SMS gateway is down.
+ * Provider-abstracted: the active transport is picked from `env.SMS_PROVIDER`
+ * and cached for the process lifetime. The adapters live under
+ * `lib/sms/<vendor>.ts` and conform to `SmsTransport` (see `./types.ts`).
  *
- * The module exports purpose-built helpers (`sendOtpSms`, `sendOrderConfirmationSms`,
- * `sendCriticalAlertSms`) so call-sites stay readable and the templating
- * stays in one place. The lower-level `sendSms` is exported too for ad-hoc
- * use (e.g. password-reset notifications) but prefer the helpers.
+ * Dev fallback: when SMS_PROVIDER is "stub" OR the active provider's
+ * credentials are missing, `sendSms` logs the would-be message to stdout
+ * and returns a synthetic success — keeps signup / reset / order flows
+ * working without a paid account. In production, missing credentials on a
+ * non-stub provider produce a loud warning + a no-op `ok:false` rather
+ * than throwing into the request path: order creation and auth must NEVER
+ * fail because the SMS gateway is down.
+ *
+ * Adding a new provider:
+ *   1. Add `lib/sms/<vendor>.ts` implementing `SmsTransport` from `types.ts`.
+ *   2. Add the vendor name to the `SMS_PROVIDER` enum in `env.ts`.
+ *   3. Build the adapter in `loadTransport()` below.
  */
 
 export type { SmsSendInput, SmsSendResult, SmsTransport };
@@ -45,21 +52,48 @@ let cachedTransport: SmsTransport | null | undefined;
 
 function loadTransport(): SmsTransport | null {
   if (cachedTransport !== undefined) return cachedTransport;
-  const apiToken = env.SSL_WIRELESS_API_KEY;
-  const user = env.SSL_WIRELESS_USER;
-  const sid = env.SSL_WIRELESS_SID;
-  if (!apiToken || !user || !sid) {
-    cachedTransport = null;
-    return null;
+  switch (env.SMS_PROVIDER) {
+    case "bulksmsbd": {
+      const apiKey = env.BULKSMSBD_API_KEY;
+      const senderId = env.BULKSMSBD_SENDER_ID;
+      if (!apiKey || !senderId) {
+        cachedTransport = null;
+        return null;
+      }
+      cachedTransport = new BulkSmsBdTransport({
+        apiKey,
+        senderId,
+        baseUrl: env.BULKSMSBD_BASE_URL,
+      });
+      return cachedTransport;
+    }
+    case "sslwireless": {
+      const apiToken = env.SSL_WIRELESS_API_KEY;
+      const user = env.SSL_WIRELESS_USER;
+      const sid = env.SSL_WIRELESS_SID;
+      if (!apiToken || !user || !sid) {
+        cachedTransport = null;
+        return null;
+      }
+      cachedTransport = new SslWirelessTransport({
+        apiToken,
+        user,
+        sid,
+        baseUrl: env.SSL_WIRELESS_BASE_URL,
+        defaultSender: env.SSL_WIRELESS_DEFAULT_SENDER,
+      });
+      return cachedTransport;
+    }
+    case "stub":
+    default:
+      cachedTransport = null;
+      return null;
   }
-  cachedTransport = new SslWirelessTransport({
-    apiToken,
-    user,
-    sid,
-    baseUrl: env.SSL_WIRELESS_BASE_URL,
-    defaultSender: env.SSL_WIRELESS_DEFAULT_SENDER,
-  });
-  return cachedTransport;
+}
+
+/** Adapter identifier for the active transport, or "stub" when unconfigured. */
+export function activeSmsProviderName(): string {
+  return loadTransport()?.name ?? "stub";
 }
 
 /**
@@ -90,6 +124,13 @@ export interface SendSmsOptions {
 /**
  * Send a single SMS. Never throws — returns a result object so callers can
  * decide whether to retry, log, or silently absorb the failure.
+ *
+ * Emits two structured-log lines per call:
+ *   `{msg:"sms_outbound",  provider, to_tail, tag, length, csmsId}`
+ *   `{msg:"sms_provider_response", provider, ok, providerStatus, providerMessageId, error_tail?}`
+ *
+ * Tail-only redaction on the recipient phone (`to_tail` = last 4 digits) so
+ * log streams don't carry full customer numbers in plain text.
  */
 export async function sendSms(
   to: string,
@@ -99,29 +140,81 @@ export async function sendSms(
   const tag = opts.tag ?? "untagged";
   const phone = normalizeBdPhone(to);
   if (!phone) {
-    return { ok: false, error: `invalid phone: ${to}`, providerStatus: "client_invalid_phone" };
+    return {
+      ok: false,
+      error: `invalid phone: ${to}`,
+      providerStatus: "client_invalid_phone",
+      provider: activeSmsProviderName(),
+    };
   }
   const clamped = clampBody(body, tag);
   const transport = loadTransport();
+  const providerName = transport?.name ?? "stub";
+  const toTail = phone.slice(-4);
+
+  console.log(
+    JSON.stringify({
+      msg: "sms_outbound",
+      provider: providerName,
+      tag,
+      to_tail: toTail,
+      length: clamped.length,
+      csmsId: opts.csmsId ?? null,
+    }),
+  );
 
   if (!transport) {
     if (env.NODE_ENV === "production") {
       console.warn(
-        `[sms] PROD with SSL Wireless keys unset — dropping message tag=${tag} to=${phone}`,
+        JSON.stringify({
+          msg: "sms_provider_response",
+          provider: providerName,
+          ok: false,
+          providerStatus: "no_provider",
+          tag,
+          to_tail: toTail,
+          error: `${env.SMS_PROVIDER} keys unset — dropping`,
+        }),
       );
-      return { ok: false, error: "sms provider not configured", providerStatus: "no_provider" };
+      return {
+        ok: false,
+        error: "sms provider not configured",
+        providerStatus: "no_provider",
+        provider: providerName,
+      };
     }
-    // Dev/test: log instead of send. Keeps signup/reset flows working.
+    // Dev/test: log full body to stdout. Keeps signup/reset flows working.
     console.log(`[sms:dev] tag=${tag} to=${phone}: ${clamped}`);
-    return { ok: true, providerMessageId: `dev-${Date.now()}`, providerStatus: "dev_stdout" };
+    return {
+      ok: true,
+      providerMessageId: `dev-${Date.now()}`,
+      providerStatus: "dev_stdout",
+      provider: providerName,
+    };
   }
 
-  return transport.send({
+  const result = await transport.send({
     to: phone,
     body: clamped,
     sender: opts.sender,
     csmsId: opts.csmsId,
   });
+
+  const logLine: Record<string, unknown> = {
+    msg: "sms_provider_response",
+    provider: result.provider ?? providerName,
+    ok: result.ok,
+    providerStatus: result.providerStatus ?? null,
+    providerMessageId: result.providerMessageId ?? null,
+    tag,
+    to_tail: toTail,
+  };
+  if (!result.ok && result.error) {
+    logLine.error = result.error.slice(0, 240);
+  }
+  (result.ok ? console.log : console.warn)(JSON.stringify(logLine));
+
+  return result;
 }
 
 /* -------------------------------------------------------------------------- */

@@ -352,8 +352,18 @@ const automationSchema = new Schema(
     confirmationCode: { type: String, trim: true, maxlength: 20, index: true },
     /** Last time we attempted to dispatch a customer-facing confirmation message. */
     confirmationSentAt: { type: Date },
-    /** Channel used for the most recent confirmation outbound. */
-    confirmationChannel: { type: String, enum: ["sms", "whatsapp", "manual"], default: undefined },
+    /**
+     * Channel used for the most recent confirmation outbound. Additive —
+     * each new confirmation channel (ivr, whatsapp, agent, ai_voice) goes
+     * through the shared `applyConfirmationOutcome` engine and stamps this
+     * field with its identifier on dispatch. Legacy rows pre-IVR carry only
+     * "sms" / "whatsapp" / "manual".
+     */
+    confirmationChannel: {
+      type: String,
+      enum: ["sms", "ivr", "whatsapp", "manual", "agent", "ai_voice"],
+      default: undefined,
+    },
     /** SMS provider DLR — pending|delivered|failed|unknown. Default pending. */
     confirmationDeliveryStatus: {
       type: String,
@@ -419,7 +429,7 @@ export interface OrderAutomation {
   bookedByAutomation?: boolean;
   confirmationCode?: string;
   confirmationSentAt?: Date;
-  confirmationChannel?: "sms" | "whatsapp" | "manual";
+  confirmationChannel?: "sms" | "ivr" | "whatsapp" | "manual" | "agent" | "ai_voice";
   confirmationDeliveryStatus?: "pending" | "delivered" | "failed" | "unknown";
   confirmationDeliveredAt?: Date;
   confirmationDeliveryFailedAt?: Date;

@@ -12,6 +12,7 @@ import {
 import { normalizeBdPhone, SslWirelessTransport } from "../src/lib/sms/sslwireless.js";
 
 class FakeTransport implements SmsTransport {
+  readonly name = "fake";
   public calls: SmsSendInput[] = [];
   public next: SmsSendResult = { ok: true, providerMessageId: "ref-1", providerStatus: "SUCCESS" };
   async send(input: SmsSendInput): Promise<SmsSendResult> {
@@ -48,9 +49,12 @@ describe("normalizeBdPhone", () => {
 describe("sendSms — dev/test fallback", () => {
   beforeEach(() => {
     __resetSmsTransport();
+    process.env.SMS_PROVIDER = "stub";
     delete process.env.SSL_WIRELESS_API_KEY;
     delete process.env.SSL_WIRELESS_USER;
     delete process.env.SSL_WIRELESS_SID;
+    delete process.env.BULKSMSBD_API_KEY;
+    delete process.env.BULKSMSBD_SENDER_ID;
   });
 
   afterEach(() => {
@@ -58,16 +62,19 @@ describe("sendSms — dev/test fallback", () => {
     vi.restoreAllMocks();
   });
 
-  it("logs to stdout and reports ok=true when SSL Wireless keys are unset", async () => {
+  it("logs to stdout and reports ok=true when no provider transport is configured", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     const r = await sendSms("01711111111", "Hello world", { tag: "unit" });
     expect(r.ok).toBe(true);
     expect(r.providerStatus).toBe("dev_stdout");
-    expect(spy).toHaveBeenCalledTimes(1);
-    const logged = String(spy.mock.calls[0]?.[0] ?? "");
-    expect(logged).toContain("8801711111111");
-    expect(logged).toContain("Hello world");
-    expect(logged).toContain("tag=unit");
+    // Two log lines: the structured outbound record, then the dev-stdout
+    // human-readable fallback. Both should reference the call.
+    expect(spy).toHaveBeenCalledTimes(2);
+    const allLogged = spy.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
+    expect(allLogged).toContain('"msg":"sms_outbound"');
+    expect(allLogged).toContain("8801711111111");
+    expect(allLogged).toContain("Hello world");
+    expect(allLogged).toContain("tag=unit");
   });
 
   it("rejects clearly-invalid phone numbers without burning a transport call", async () => {

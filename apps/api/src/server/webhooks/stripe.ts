@@ -10,9 +10,9 @@ import { enforceDowngradeIfNeeded } from "../../lib/entitlements.js";
 import {
   buildPaymentApprovedEmail,
   buildPaymentFailedEmail,
-  sendEmail,
   webUrl,
 } from "../../lib/email.js";
+import { enqueueEmail } from "../../workers/email.worker.js";
 
 /**
  * Stripe webhook receiver.
@@ -332,7 +332,9 @@ export async function activateFromCheckoutSession(args: {
     meta: { tier: plan.tier, periodEnd, source: "stripe" },
   });
 
-  // Receipt email — mirrors the manual approval flow. Fire-and-forget.
+  // Receipt email — queued for resilient delivery. Correlated on the
+  // Stripe eventId so a webhook replay (Stripe retries up to 3 days)
+  // collapses to one Resend send on jobId dedupe.
   const tpl = buildPaymentApprovedEmail({
     businessName: merchant.businessName,
     planName: plan.name,
@@ -341,7 +343,8 @@ export async function activateFromCheckoutSession(args: {
     periodEnd,
     dashboardUrl: webUrl("/dashboard"),
   });
-  void sendEmail({
+  void enqueueEmail({
+    correlationId: `pay_approved:checkout:${args.eventId}`,
     to: merchant.email,
     subject: tpl.subject,
     html: tpl.html,
@@ -698,14 +701,18 @@ async function handleInvoicePaymentSucceeded(
       periodEnd,
       dashboardUrl: webUrl("/dashboard"),
     });
-    void sendEmail({
+    void enqueueEmail({
+      correlationId: `pay_approved:invoice:${eventId}`,
       to: merchant.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
       tag: "payment_approved",
     }).catch((err) =>
-      console.error("[stripe] subscription receipt email failed", (err as Error).message),
+      console.error(
+        "[stripe] subscription receipt email enqueue failed",
+        (err as Error).message,
+      ),
     );
   }
 
@@ -798,14 +805,18 @@ async function handleInvoicePaymentFailed(
       gracePeriodEndsAt: subDoc.gracePeriodEndsAt as Date,
       billingUrl: webUrl("/dashboard/billing"),
     });
-    void sendEmail({
+    void enqueueEmail({
+      correlationId: `pay_failed:${eventId}`,
       to: merchant.email,
       subject: tpl.subject,
       html: tpl.html,
       text: tpl.text,
       tag: "payment_failed",
     }).catch((err) =>
-      console.error("[stripe] dunning email failed", (err as Error).message),
+      console.error(
+        "[stripe] dunning email enqueue failed",
+        (err as Error).message,
+      ),
     );
 
     void writeAudit({
