@@ -199,6 +199,19 @@ export default function FraudReviewPage() {
     setNotes("");
   }, [selectedId]);
 
+  // Mobile: the detail/action pane stacks BELOW the queue list, so
+  // tapping an order leaves the operator staring at the same list with
+  // nothing apparently happening — they have to know to scroll down.
+  // On small screens, bring the detail into view on selection. Desktop
+  // (two-pane) is unaffected.
+  useEffect(() => {
+    if (!selectedId) return;
+    if (typeof window === "undefined" || window.innerWidth >= 1024) return;
+    document
+      .getElementById("review-detail")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedId]);
+
   async function invalidateAll() {
     await Promise.all([
       utils.fraud.listPendingReviews.invalidate(),
@@ -455,7 +468,11 @@ export default function FraudReviewPage() {
                 className="m-4"
               />
             ) : (
-              <ul className="max-h-[600px] divide-y divide-stroke/6 overflow-auto">
+              // Mobile: no inner max-height — a 600px scroll box nested
+              // inside page scroll is a known cheap-Android scroll trap.
+              // Constrain only on lg where the two-pane layout needs an
+              // independent queue scroll.
+              <ul className="divide-y divide-stroke/6 lg:max-h-[600px] lg:overflow-auto">
                 {items.map((it) => {
                   const active = it.id === selectedId;
                   return (
@@ -529,7 +546,7 @@ export default function FraudReviewPage() {
                           // explanation right next to the score, so the
                           // queue isn't a wall of bare numbers. Capped at 2
                           // here; the detail panel below shows the full set.
-                          <ul className="mt-1 space-y-0.5 text-[11px] leading-snug text-fg-subtle">
+                          <ul className="mt-1 hidden space-y-0.5 text-[11px] leading-snug text-fg-subtle sm:block">
                             {it.reasons.slice(0, 2).map((reason, idx) => (
                               <li key={idx} className="flex items-start gap-1.5">
                                 <span aria-hidden className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-fg-faint" />
@@ -552,7 +569,7 @@ export default function FraudReviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-3">
+        <Card id="review-detail" className="scroll-mt-4 lg:col-span-3">
           <CardHeader>
             <CardTitle className="text-base font-semibold">
               {detail.data ? `Order ${detail.data.orderNumber}` : "Select an order"}
