@@ -30,10 +30,14 @@ Run/verify these before onboarding the first merchant.
       `MONGODB_URI`, `REDIS_URL`, `SHOPIFY_API_SECRET`,
       `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
       `SMS_WEBHOOK_SHARED_SECRET`, SSL Wireless creds.
-- [ ] Recommended for beta: `SENTRY_DSN` (error capture — see §4),
-      `RESEND_WEBHOOK_SECRET` (else the Resend webhook 503s by design),
-      `NEXT_PUBLIC_SUPPORT_WHATSAPP` (else the dashboard support footer
-      falls back to the support URL).
+- [ ] `SENTRY_DSN` set AND proven: run
+      `npm --workspace apps/api run verify:sentry` and confirm the
+      nonce lands in Sentry. Telemetry fails silently by design, so an
+      unverified DSN = blind in production. The script exits non-zero
+      when unset — treat that as a do-not-onboard gate.
+- [ ] Recommended for beta: `RESEND_WEBHOOK_SECRET` (else the Resend
+      webhook 503s by design), `NEXT_PUBLIC_SUPPORT_WHATSAPP` (else the
+      dashboard support footer omits the WhatsApp link entirely).
 - [ ] Mongo + Redis backups confirmed on by the provider.
 - [ ] `wip/sms-migration` branch is **not** merged and not in the
       deploy artifact (see §2).
