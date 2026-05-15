@@ -57,6 +57,66 @@ type QueueItem = {
   reasons: string[];
   scoredAt: Date | string | null;
   createdAt: Date | string;
+  customerHistory: CustomerHistory;
+  recommendedAction: RecommendedAction;
+};
+
+type CustomerHistory = {
+  delivered: number;
+  rto: number;
+  cancelled: number;
+  resolved: number;
+  isRepeat: boolean;
+  label: "new" | "trusted" | "mixed" | "risky";
+};
+
+type RecommendedAction = {
+  action: "ship" | "verify_call" | "reject_likely";
+  hint: string;
+};
+
+const HISTORY_PILL: Record<
+  CustomerHistory["label"],
+  { text: (h: CustomerHistory) => string; className: string }
+> = {
+  new: {
+    text: () => "New customer",
+    className: "bg-surface-raised text-fg-muted",
+  },
+  trusted: {
+    text: (h) => `Repeat · ${h.delivered} delivered`,
+    className: "bg-success-subtle text-success",
+  },
+  mixed: {
+    text: (h) =>
+      `Repeat · ${h.delivered} ok${h.rto ? ` · ${h.rto} RTO` : ""}`,
+    className: "bg-warning-subtle text-warning",
+  },
+  risky: {
+    text: (h) => `${h.rto} RTO with you`,
+    className: "bg-danger-subtle text-danger",
+  },
+};
+
+const ACTION_META: Record<
+  RecommendedAction["action"],
+  { label: string; className: string; icon: typeof ShieldCheck }
+> = {
+  ship: {
+    label: "Safe to book",
+    className: "border-success-border bg-success-subtle text-success",
+    icon: ShieldCheck,
+  },
+  verify_call: {
+    label: "Call to verify",
+    className: "border-warning-border bg-warning-subtle text-warning",
+    icon: PhoneCall,
+  },
+  reject_likely: {
+    label: "Likely reject",
+    className: "border-danger-border bg-danger-subtle text-danger",
+    icon: ShieldAlert,
+  },
 };
 
 const LEVEL_CLASS: Record<QueueItem["level"], string> = {
@@ -383,6 +443,30 @@ export default function FraudReviewPage() {
                             {it.reviewStatus.replace("_", " ")}
                           </Badge>
                         </div>
+                        {/* The two signals an operator actually decides
+                            on in <5s: what we recommend, and who this
+                            buyer is to this store. */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {(() => {
+                            const a = ACTION_META[it.recommendedAction.action];
+                            const Icon = a.icon;
+                            return (
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${a.className}`}
+                              >
+                                <Icon className="h-3 w-3" aria-hidden />
+                                {a.label}
+                              </span>
+                            );
+                          })()}
+                          <span
+                            className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${HISTORY_PILL[it.customerHistory.label].className}`}
+                          >
+                            {HISTORY_PILL[it.customerHistory.label].text(
+                              it.customerHistory,
+                            )}
+                          </span>
+                        </div>
                         {it.reasons && it.reasons.length > 0 ? (
                           // Top reasons preview — surfaces the human-language
                           // explanation right next to the score, so the
@@ -448,6 +532,95 @@ export default function FraudReviewPage() {
                     label="Order status"
                     value={detail.data.status.replace("_", " ")}
                   />
+                </div>
+
+                {/* Recommended action — the one-line "what do I do"
+                    answer, derived server-side only from signals the
+                    merchant can already see (risk level, SMS reply,
+                    this store's history, the network). It never
+                    auto-decides; it points at the fastest correct step
+                    so an operator isn't reverse-engineering a number. */}
+                {(() => {
+                  const a = ACTION_META[detail.data.recommendedAction.action];
+                  const Icon = a.icon;
+                  return (
+                    <div
+                      className={`flex items-start gap-3 rounded-lg border p-4 ${a.className}`}
+                    >
+                      <Icon className="mt-0.5 h-5 w-5 shrink-0" aria-hidden />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold">
+                          Recommended: {a.label}
+                        </p>
+                        <p className="mt-0.5 text-xs opacity-90">
+                          {detail.data.recommendedAction.hint}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Customer history — this store's own delivered/RTO
+                    record with this phone, plus the privacy-safe
+                    cross-store network rollup. "4 delivered, 0 returns
+                    with you" is the most decisive 5-second signal a COD
+                    operator has, and it was previously invisible. */}
+                <div className="rounded-lg border border-stroke/8 bg-surface-overlay p-4">
+                  <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle">
+                    Customer history
+                  </span>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                    <HistoryStat
+                      label="Delivered"
+                      value={detail.data.customerHistory.delivered}
+                      tone="success"
+                    />
+                    <HistoryStat
+                      label="Returned"
+                      value={detail.data.customerHistory.rto}
+                      tone={
+                        detail.data.customerHistory.rto > 0 ? "danger" : "muted"
+                      }
+                    />
+                    <HistoryStat
+                      label="Cancelled"
+                      value={detail.data.customerHistory.cancelled}
+                      tone="muted"
+                    />
+                  </div>
+                  <p className="mt-3 text-xs text-fg-subtle">
+                    {detail.data.customerHistory.resolved === 0
+                      ? "First order from this number with your store."
+                      : `${detail.data.customerHistory.resolved} completed order(s) with your store.`}
+                    {detail.data.network.merchantCount > 1
+                      ? ` Across ${detail.data.network.merchantCount} stores on the network: ${detail.data.network.deliveredCount} delivered, ${detail.data.network.rtoCount} returned.`
+                      : ""}
+                  </p>
+                  {/* SMS confirmation outcome — why automation held (or
+                      released) this order. Previously only used inside
+                      the recommendation logic; showing it makes the
+                      decision transparent instead of mysterious. */}
+                  <div className="mt-3 flex items-center gap-2 border-t border-stroke/8 pt-3 text-xs">
+                    <span className="text-fg-subtle">SMS confirmation:</span>
+                    {detail.data.fraud.smsFeedback === "confirmed" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-success">
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+                        Customer replied YES
+                      </span>
+                    ) : detail.data.fraud.smsFeedback === "rejected" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-danger">
+                        <XCircle className="h-3.5 w-3.5" aria-hidden />
+                        Customer replied NO
+                      </span>
+                    ) : detail.data.fraud.smsFeedback === "no_reply" ? (
+                      <span className="inline-flex items-center gap-1 font-medium text-warning">
+                        <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+                        No reply yet — held for a call
+                      </span>
+                    ) : (
+                      <span className="text-fg-muted">Not sent / pending</span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="rounded-lg border border-stroke/8 bg-surface-overlay p-4">
@@ -673,6 +846,33 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       <span className={`text-right text-sm text-fg ${mono ? "font-mono" : ""}`}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function HistoryStat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "success" | "danger" | "muted";
+}) {
+  const toneClass =
+    tone === "success"
+      ? "text-success"
+      : tone === "danger"
+        ? "text-danger"
+        : "text-fg-muted";
+  return (
+    <div className="rounded-md border border-stroke/8 bg-surface-base/40 py-2">
+      <div className={`text-lg font-semibold tabular-nums ${toneClass}`}>
+        {value}
+      </div>
+      <div className="text-2xs uppercase tracking-[0.06em] text-fg-subtle">
+        {label}
+      </div>
     </div>
   );
 }
