@@ -683,7 +683,7 @@ export default function OrdersPage() {
                       <EmptyState
                         icon={PackagePlus}
                         title="No orders yet"
-                        description="Connect your store to ingest orders automatically, or create one manually to see how they flow through."
+                        description="Every order that arrives is risk-scored and, if it's doubtful, held for a quick confirmation before you pay courier pickup — that's how ConfirmX cuts RTO. Connect your store to ingest orders automatically, or create one manually to see the flow."
                         variant="inset"
                         className="m-4"
                         action={

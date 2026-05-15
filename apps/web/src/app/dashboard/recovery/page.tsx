@@ -122,8 +122,8 @@ export default function RecoveryPage() {
             <EmptyState
               icon={LifeBuoy}
               tone="success"
-              title="Inbox is clear"
-              description="No identified buyers have abandoned a cart in the recovery window."
+              title="No carts to recover right now"
+              description="When a known buyer adds to cart but doesn't check out, they'll show up here so you can win the COD order back with one SMS. An empty list means nothing is slipping away — we'll surface recoverable carts the moment they appear."
               variant="inset"
             />
           ) : (
