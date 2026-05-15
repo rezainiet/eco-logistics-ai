@@ -64,10 +64,19 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
     {
       key: "import_orders",
       title: "Import your orders",
+      // When the store is connected but no orders are in yet, the
+      // merchant is almost always inside the on-connect backfill window
+      // (a one-shot import runs automatically after Shopify connects).
+      // The old copy ("Pull your last 25 orders") read as "nothing
+      // happened, you must do this" — the single biggest "this is
+      // broken" moment in onboarding. Reassure instead: it's running,
+      // it takes a minute, refresh. CTA only as a manual fallback.
       description:
-        "Pull your last 25 orders so you can see the dashboard with real data. Future orders sync automatically.",
+        state.hasStoreConnected && !state.hasFirstOrder
+          ? "Connected — we're pulling your recent orders now. This usually takes a minute or two; refresh the dashboard and they'll appear. You don't need to do anything."
+          : "Pull your last 25 orders so you can see the dashboard with real data. Future orders sync automatically.",
       done: state.hasFirstOrder,
-      ctaLabel: state.hasStoreConnected ? "Import orders" : "Add an order",
+      ctaLabel: state.hasStoreConnected ? "Check import status" : "Add an order",
       // When a store is connected we deep-link to integrations so the
       // merchant lands on the row that has the "Import recent" button. If
       // they're still on CSV / manual, send them to the orders page.

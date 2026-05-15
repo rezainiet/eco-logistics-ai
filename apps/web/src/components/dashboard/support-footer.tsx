@@ -13,9 +13,10 @@ import { getBrandingSync } from "@ecom/branding";
  * one of the highest trust-per-effort changes available.
  *
  * Server component, zero I/O: `getBrandingSync()` is defaults + ENV only.
- * The WhatsApp number is ENV-driven so it can differ per deploy without a
- * code change; if unset we fall back to the support page link rather than
- * render a dead button.
+ * The WhatsApp number is ENV-driven. If it's unset we DON'T render a
+ * "WhatsApp" link that silently opens a web page — a BD merchant taps
+ * it expecting chat, gets a site, and feels ignored. Honest absence
+ * beats a misleading affordance; email + status stay.
  */
 export function SupportFooter() {
   const brand = getBrandingSync() as {
@@ -24,16 +25,13 @@ export function SupportFooter() {
     statusPageUrl?: string;
   };
   const supportEmail = brand.supportEmail ?? "support@confirmx.ai";
-  const supportUrl = brand.supportUrl ?? "https://confirmx.ai/support";
   const statusUrl = brand.statusPageUrl;
 
   const waDigits = (process.env.NEXT_PUBLIC_SUPPORT_WHATSAPP ?? "").replace(
     /[^\d]/g,
     "",
   );
-  const whatsappHref = waDigits
-    ? `https://wa.me/${waDigits}`
-    : supportUrl;
+  const whatsappHref = waDigits ? `https://wa.me/${waDigits}` : null;
 
   return (
     <footer className="mt-10 border-t border-stroke/10 pt-5">
@@ -46,15 +44,17 @@ export function SupportFooter() {
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <a
-            href={whatsappHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 font-medium text-fg hover:text-brand"
-          >
-            <MessageCircle className="h-4 w-4" aria-hidden />
-            WhatsApp
-          </a>
+          {whatsappHref ? (
+            <a
+              href={whatsappHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 font-medium text-fg hover:text-brand"
+            >
+              <MessageCircle className="h-4 w-4" aria-hidden />
+              WhatsApp
+            </a>
+          ) : null}
           <a
             href={`mailto:${supportEmail}`}
             className="inline-flex items-center gap-1.5 font-medium text-fg hover:text-brand"
