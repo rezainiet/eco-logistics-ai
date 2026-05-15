@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/toast";
 import { formatBDT, formatRelative } from "@/lib/formatters";
+import { REVIEW_BADGE } from "@/lib/status-badges";
 
 import { humanizeError } from "@/lib/friendly-errors";
 type FilterValue = "all_open" | "pending_call" | "no_answer";
@@ -125,14 +126,23 @@ const LEVEL_CLASS: Record<QueueItem["level"], string> = {
   high: "bg-danger-subtle text-danger",
 };
 
-const STATUS_CLASS: Record<QueueItem["reviewStatus"], string> = {
-  not_required: "bg-surface-raised text-fg-muted",
-  optional_review: "bg-warning-subtle text-warning",
-  pending_call: "bg-warning-subtle text-warning",
-  no_answer: "bg-danger-subtle text-danger",
-  verified: "bg-success-subtle text-success",
-  rejected: "bg-danger-subtle text-danger",
-};
+/**
+ * Single source of truth for review-status label + colour + icon is
+ * `@/lib/status-badges` REVIEW_BADGE — the same map the orders list
+ * uses. Resolving through it (instead of a local class table + raw
+ * `reviewStatus.replace("_"," ")`) keeps the wording a merchant sees
+ * identical everywhere: "Pending call", not "pending_call".
+ */
+function reviewBadgeFor(status: QueueItem["reviewStatus"]) {
+  if (status === "not_required") {
+    return {
+      label: "No review needed",
+      className: "bg-surface-raised text-fg-muted",
+      Icon: ShieldCheck,
+    };
+  }
+  return REVIEW_BADGE[status];
+}
 
 /** How long the merchant has to undo a reject — matches restoreOrder's
  *  RESTORE_WINDOW_MS but trimmed for a usable banner countdown. */
@@ -436,12 +446,18 @@ export default function FraudReviewPage() {
                         </div>
                         <div className="flex items-center justify-between gap-2 text-xs text-fg-subtle">
                           <span className="truncate">{it.orderNumber}</span>
-                          <Badge
-                            variant="outline"
-                            className={`border-transparent text-[10px] ${STATUS_CLASS[it.reviewStatus]}`}
-                          >
-                            {it.reviewStatus.replace("_", " ")}
-                          </Badge>
+                          {(() => {
+                            const rb = reviewBadgeFor(it.reviewStatus);
+                            return (
+                              <Badge
+                                variant="outline"
+                                className={`inline-flex items-center gap-1 border-transparent text-[10px] ${rb.className}`}
+                              >
+                                <rb.Icon className="h-2.5 w-2.5" aria-hidden />
+                                {rb.label}
+                              </Badge>
+                            );
+                          })()}
                         </div>
                         {/* The two signals an operator actually decides
                             on in <5s: what we recommend, and who this
