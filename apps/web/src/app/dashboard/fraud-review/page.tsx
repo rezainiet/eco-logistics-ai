@@ -527,6 +527,28 @@ export default function FraudReviewPage() {
               <div className="flex items-center justify-center py-12 text-sm text-fg-subtle">
                 No order selected.
               </div>
+            ) : detail.isError ? (
+              // Previously a failed detail fetch fell through to the
+              // loading branch (!detail.data) and shimmered forever — a
+              // hidden failure: the operator waited on a spinner that
+              // would never resolve. Make the failure explicit and
+              // recoverable without a full page reload.
+              <EmptyState
+                icon={AlertTriangle}
+                tone="danger"
+                title="Couldn't load this order"
+                description="The connection dropped while fetching the order. Your queue is unaffected — retry, or pick another order."
+                variant="inset"
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => detail.refetch()}
+                  >
+                    Retry
+                  </Button>
+                }
+              />
             ) : detail.isLoading || !detail.data ? (
               <div className="space-y-3">
                 <div className="h-6 w-1/2 animate-shimmer rounded-md" />
