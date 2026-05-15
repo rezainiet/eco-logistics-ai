@@ -13,7 +13,6 @@
  * enable — see SETTINGS_UX_AUDIT.md for the prior fragmentation.
  */
 import {
-  Bell,
   Bot,
   Building2,
   CreditCard,
@@ -21,7 +20,6 @@ import {
   Palette,
   Plug,
   Truck,
-  Users,
   Webhook,
   type LucideIcon,
 } from "lucide-react";
@@ -29,8 +27,6 @@ import {
 export type SettingsSectionKey =
   | "workspace"
   | "branding"
-  | "notifications"
-  | "team"
   | "billing"
   | "couriers"
   | "integrations"
@@ -78,15 +74,6 @@ export const SETTINGS_NAV: SettingsSectionGroup[] = [
           "Business identity, contact phone, country and language preferences.",
       },
       {
-        key: "notifications",
-        href: "/dashboard/settings/notifications",
-        label: "Notifications",
-        icon: Bell,
-        description:
-          "Choose which operational alerts reach you, and where.",
-        badge: "Soon",
-      },
-      {
         key: "security",
         href: "/dashboard/settings/security",
         label: "Security",
@@ -108,15 +95,6 @@ export const SETTINGS_NAV: SettingsSectionGroup[] = [
         icon: Palette,
         description:
           "Logo and accent color used across your dashboard and tracking page.",
-      },
-      {
-        key: "team",
-        href: "/dashboard/settings/team",
-        label: "Team & access",
-        icon: Users,
-        description:
-          "Invite teammates, manage roles, and review recent access events.",
-        badge: "Soon",
       },
       {
         key: "billing",
