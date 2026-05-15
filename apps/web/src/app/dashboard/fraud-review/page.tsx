@@ -750,6 +750,22 @@ export default function FraudReviewPage() {
                   ) : null}
                 </div>
 
+                {detail.data.fraud.reviewStatus === "verified" ||
+                detail.data.fraud.reviewStatus === "rejected" ? (
+                  // Guardrail: the queue can go stale (another tab, a
+                  // second operator, or a slow refetch). Acting again
+                  // throws a CONFLICT the merchant doesn't understand,
+                  // and risks them thinking they must "re-do" a decision
+                  // that already stuck. When the order is already in a
+                  // terminal review state, replace the action bar with a
+                  // plain record of what happened and who/when.
+                  <ReviewedNotice
+                    status={detail.data.fraud.reviewStatus}
+                    reviewedAt={detail.data.fraud.reviewedAt}
+                    notes={detail.data.fraud.reviewNotes}
+                  />
+                ) : (
+                  <>
                 <div className="space-y-1.5">
                   <label
                     htmlFor="review-notes"
@@ -854,6 +870,8 @@ export default function FraudReviewPage() {
                     to record what happened.
                   </p>
                 ) : null}
+                  </>
+                )}
               </>
             )}
           </CardContent>
@@ -898,6 +916,53 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       <span className={`text-right text-sm text-fg ${mono ? "font-mono" : ""}`}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function ReviewedNotice({
+  status,
+  reviewedAt,
+  notes,
+}: {
+  status: "verified" | "rejected";
+  reviewedAt: Date | string | null;
+  notes: string | null;
+}) {
+  const verified = status === "verified";
+  const Icon = verified ? ShieldCheck : XCircle;
+  return (
+    <div
+      className={`rounded-lg border p-4 ${
+        verified
+          ? "border-success-border bg-success-subtle text-success"
+          : "border-danger-border bg-danger-subtle text-danger"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <Icon className="h-5 w-5 shrink-0" aria-hidden />
+        <p className="text-sm font-semibold">
+          {verified
+            ? "This order is already verified"
+            : "This order is already rejected"}
+          {reviewedAt ? (
+            <span className="font-normal opacity-90">
+              {" "}
+              · {formatRelative(reviewedAt)}
+            </span>
+          ) : null}
+        </p>
+      </div>
+      <p className="mt-1.5 text-xs opacity-90">
+        {verified
+          ? "No further action needed — it's cleared to book with the courier."
+          : "No further action needed — the order was cancelled. Restore it from cancelled orders if this was a mistake."}
+      </p>
+      {notes ? (
+        <p className="mt-2 rounded-md bg-surface-base/40 px-2.5 py-1.5 text-xs text-fg-muted">
+          Note: {notes}
+        </p>
+      ) : null}
     </div>
   );
 }
