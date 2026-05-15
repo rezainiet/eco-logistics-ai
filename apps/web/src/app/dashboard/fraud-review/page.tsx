@@ -840,6 +840,19 @@ export default function FraudReviewPage() {
                   row, in-flow layout. No regression on operator
                   desktop workflows.
                 */}
+                {/* Consequence line, shown BEFORE the action row so an
+                    operator clearing a long queue sees the cost before
+                    the click — the cheap fix for rubber-stamping. No
+                    modal (would wreck throughput); the weight is in the
+                    wording + the money being explicit. */}
+                <p className="mt-2 text-xs text-fg-subtle">
+                  <span className="font-medium text-fg-muted">
+                    Verify &amp; book
+                  </span>{" "}
+                  sends this {formatBDT(detail.data.cod)} COD order to the
+                  courier now. Unlike Reject, there&apos;s no undo — only
+                  do it once the order is genuinely confirmed.
+                </p>
                 <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
                   <Button
                     className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
@@ -873,7 +886,7 @@ export default function FraudReviewPage() {
                     }
                   >
                     <ShieldCheck className="mr-1.5 h-4 w-4" />
-                    {verify.isPending ? "Verifying…" : "Verify"}
+                    {verify.isPending ? "Verifying…" : "Verify & book"}
                   </Button>
                   <Button
                     variant="outline"
