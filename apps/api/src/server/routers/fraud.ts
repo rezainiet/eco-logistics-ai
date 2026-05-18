@@ -833,6 +833,8 @@ export const fraudRouter = router({
             today: { risky: 0, verified: 0, rejected: 0, codSaved: 0 },
             window: { risky: 0, verified: 0, rejected: 0, codSaved: 0 },
             queue: { pending: 0, noAnswer: 0 },
+            oldestPendingAt: null,
+            oldestPendingAgeHours: null,
           };
         }
       }
@@ -915,6 +917,10 @@ export const fraudRouter = router({
                   noAnswer: {
                     $sum: { $cond: [{ $eq: ["$fraud.reviewStatus", "no_answer"] }, 1, 0] },
                   },
+                  // Oldest still-open review order. Free in this pass —
+                  // drives the "orders are aging, work them" operator
+                  // nudge that fights silent queue abandonment.
+                  oldestAt: { $min: "$createdAt" },
                 },
               },
             ],
@@ -924,13 +930,24 @@ export const fraudRouter = router({
 
       const today0 = result?.today?.[0] ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
       const window0 = result?.window?.[0] ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
-      const queue0 = result?.queue?.[0] ?? { pending: 0, noAnswer: 0 };
+      const queue0 = result?.queue?.[0] ?? {
+        pending: 0,
+        noAnswer: 0,
+        oldestAt: null,
+      };
+      const oldestAt: Date | null =
+        (queue0 as { oldestAt?: Date | null }).oldestAt ?? null;
+      const oldestPendingAgeHours = oldestAt
+        ? Math.floor((Date.now() - new Date(oldestAt).getTime()) / 3600_000)
+        : null;
 
       return {
         days: input.days,
         today: today0,
         window: window0,
-        queue: queue0,
+        queue: { pending: queue0.pending, noAnswer: queue0.noAnswer },
+        oldestPendingAt: oldestAt,
+        oldestPendingAgeHours,
       };
     }),
 });

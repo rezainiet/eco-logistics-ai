@@ -199,6 +199,19 @@ export default function FraudReviewPage() {
     setNotes("");
   }, [selectedId]);
 
+  // Mobile: the detail/action pane stacks BELOW the queue list, so
+  // tapping an order leaves the operator staring at the same list with
+  // nothing apparently happening — they have to know to scroll down.
+  // On small screens, bring the detail into view on selection. Desktop
+  // (two-pane) is unaffected.
+  useEffect(() => {
+    if (!selectedId) return;
+    if (typeof window === "undefined" || window.innerWidth >= 1024) return;
+    document
+      .getElementById("review-detail")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedId]);
+
   async function invalidateAll() {
     await Promise.all([
       utils.fraud.listPendingReviews.invalidate(),
@@ -297,6 +310,12 @@ export default function FraudReviewPage() {
   const items: QueueItem[] = (queue.data?.items ?? []) as QueueItem[];
   const total = queue.data?.total ?? 0;
   const today = stats.data?.today ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
+  // Queue-aging nudge. An unworked confirmation order doesn't sit still —
+  // it gets booked/shipped unconfirmed and comes back as RTO. Surfacing
+  // the oldest age turns "I'll get to it" into "this is costing me now".
+  const oldestAgeH = stats.data?.oldestPendingAgeHours ?? null;
+  const showAging = total > 0 && oldestAgeH !== null && oldestAgeH >= 12;
+  const agingSevere = oldestAgeH !== null && oldestAgeH >= 24;
 
   // Plan-gate: order verification is on Growth and above. The API
   // correctly throws FORBIDDEN with "fraud review is not available on
@@ -316,6 +335,28 @@ export default function FraudReviewPage() {
         title="Order verification queue"
         description="Confirm COD orders that need a quick check before booking the courier."
       />
+
+      {showAging ? (
+        <div
+          role="status"
+          className={`flex items-start gap-2.5 rounded-lg border p-3 text-sm ${
+            agingSevere
+              ? "border-danger-border bg-danger-subtle text-danger"
+              : "border-warning-border bg-warning-subtle text-warning"
+          }`}
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <p>
+            <span className="font-semibold">
+              {total} order{total === 1 ? "" : "s"} waiting
+            </span>{" "}
+            — oldest has been unworked for{" "}
+            <span className="font-semibold tabular-nums">{oldestAgeH}h</span>.
+            Orders left here get booked unconfirmed and come back as RTO.
+            Work the top of the queue first.
+          </p>
+        </div>
+      ) : null}
 
       {lastRejected ? (
         // Sticky so the affordance survives long-scroll review sessions —
@@ -427,7 +468,11 @@ export default function FraudReviewPage() {
                 className="m-4"
               />
             ) : (
-              <ul className="max-h-[600px] divide-y divide-stroke/6 overflow-auto">
+              // Mobile: no inner max-height — a 600px scroll box nested
+              // inside page scroll is a known cheap-Android scroll trap.
+              // Constrain only on lg where the two-pane layout needs an
+              // independent queue scroll.
+              <ul className="divide-y divide-stroke/6 lg:max-h-[600px] lg:overflow-auto">
                 {items.map((it) => {
                   const active = it.id === selectedId;
                   return (
@@ -501,7 +546,7 @@ export default function FraudReviewPage() {
                           // explanation right next to the score, so the
                           // queue isn't a wall of bare numbers. Capped at 2
                           // here; the detail panel below shows the full set.
-                          <ul className="mt-1 space-y-0.5 text-[11px] leading-snug text-fg-subtle">
+                          <ul className="mt-1 hidden space-y-0.5 text-[11px] leading-snug text-fg-subtle sm:block">
                             {it.reasons.slice(0, 2).map((reason, idx) => (
                               <li key={idx} className="flex items-start gap-1.5">
                                 <span aria-hidden className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-fg-faint" />
@@ -524,7 +569,7 @@ export default function FraudReviewPage() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-3">
+        <Card id="review-detail" className="scroll-mt-4 lg:col-span-3">
           <CardHeader>
             <CardTitle className="text-base font-semibold">
               {detail.data ? `Order ${detail.data.orderNumber}` : "Select an order"}
@@ -812,6 +857,19 @@ export default function FraudReviewPage() {
                   row, in-flow layout. No regression on operator
                   desktop workflows.
                 */}
+                {/* Consequence line, shown BEFORE the action row so an
+                    operator clearing a long queue sees the cost before
+                    the click — the cheap fix for rubber-stamping. No
+                    modal (would wreck throughput); the weight is in the
+                    wording + the money being explicit. */}
+                <p className="mt-2 text-xs text-fg-subtle">
+                  <span className="font-medium text-fg-muted">
+                    Verify &amp; book
+                  </span>{" "}
+                  sends this {formatBDT(detail.data.cod)} COD order to the
+                  courier now. Unlike Reject, there&apos;s no undo — only
+                  do it once the order is genuinely confirmed.
+                </p>
                 <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
                   <Button
                     className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
@@ -845,7 +903,7 @@ export default function FraudReviewPage() {
                     }
                   >
                     <ShieldCheck className="mr-1.5 h-4 w-4" />
-                    {verify.isPending ? "Verifying…" : "Verify"}
+                    {verify.isPending ? "Verifying…" : "Verify & book"}
                   </Button>
                   <Button
                     variant="outline"

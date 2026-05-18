@@ -30,16 +30,30 @@ Run/verify these before onboarding the first merchant.
       `MONGODB_URI`, `REDIS_URL`, `SHOPIFY_API_SECRET`,
       `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
       `SMS_WEBHOOK_SHARED_SECRET`, SSL Wireless creds.
-- [ ] Recommended for beta: `SENTRY_DSN` (error capture — see §4),
-      `RESEND_WEBHOOK_SECRET` (else the Resend webhook 503s by design),
-      `NEXT_PUBLIC_SUPPORT_WHATSAPP` (else the dashboard support footer
-      falls back to the support URL).
+- [ ] `SENTRY_DSN` set AND proven: run
+      `npm --workspace apps/api run verify:sentry` and confirm the
+      nonce lands in Sentry. Telemetry fails silently by design, so an
+      unverified DSN = blind in production. The script exits non-zero
+      when unset — treat that as a do-not-onboard gate.
+- [ ] Recommended for beta: `RESEND_WEBHOOK_SECRET` (else the Resend
+      webhook 503s by design), `NEXT_PUBLIC_SUPPORT_WHATSAPP` (else the
+      dashboard support footer omits the WhatsApp link entirely).
 - [ ] Mongo + Redis backups confirmed on by the provider.
 - [ ] `wip/sms-migration` branch is **not** merged and not in the
       deploy artifact (see §2).
 - [ ] Each beta merchant has signed the feedback side-letter and been
       told the data-retention window + that they must re-authorise
       Shopify with the `read_customers_private_data` scope.
+- [ ] **Public-Distribution gate (hard).** The Shopify app stays on
+      **Custom distribution** for the entire private beta. Do NOT flip
+      it to Public Distribution / list it publicly until: (a) a real
+      registered legal entity replaces the placeholder in
+      `packages/branding/src/defaults.ts` `legalName`, and (b)
+      `supportEmail` + `privacyEmail` route to a monitored inbox
+      (reviewers send test mail to both). `verify:prod-readiness`
+      emits a loud `[WARN] brand` line on every deploy while either is
+      unmet — that warning is expected during the beta and is the
+      reminder, not a blocker.
 
 ---
 
@@ -49,14 +63,27 @@ Run/verify these before onboarding the first merchant.
   is quarantined on `wip/sms-migration`. The UI degrades honestly
   (the Call button explains the manual fallback). Do **not** market
   call confirmation.
-- **No WhatsApp channel.** Not built. Confirmation is SMS only.
+- **Confirmation is manual-queue-based for this beta.** Automated SMS
+  (and WhatsApp) confirmation is **deliberately deferred** — not a bug,
+  a scope decision. Merchants confirm COD orders by working the
+  verification queue by hand (the landing page's "Manual mode"). The
+  product value in beta is the operational intelligence + queue, not
+  an automated outbound channel. Onboard merchants on this framing;
+  do **not** promise automated SMS/WhatsApp confirmation. Consequence:
+  the §6/§7 "does SMS-only cut RTO at real reply rates" learning is
+  paused until the SMS channel ships.
+- **No WhatsApp channel.** Not built. Deferred with SMS (see above).
 - **Shopify embedded app is off.** Merchants use the standalone web
   app (hand-onboarded). CSP intentionally blocks the iframe.
 - **SMS provider migration is incomplete and isolated** on branch
   `wip/sms-migration` (Twilio → SSL Wireless + BulkSMSBD, plus the
-  voice scaffold and `confirmation-outcome.ts`). Beta runs on the
-  pre-migration SMS path that is on `main`. Do not cherry-pick from
-  the wip branch piecemeal — finish and review it as one atomic PR.
+  voice scaffold and `confirmation-outcome.ts`). The SMS path on `main`
+  exists but is **not exercised in this beta** (confirmation is manual,
+  per the bullet above). Do not cherry-pick from the wip branch
+  piecemeal — finish and review it as one atomic PR when SMS is
+  un-deferred. The SSL-Wireless signing-contract pre-flight in
+  `SMS_FLOW_VERIFICATION.md` is therefore **not a beta blocker** — it
+  moves to the SMS-enablement checklist.
 - **Sentry is opt-in.** Error capture only runs if `SENTRY_DSN` is
   set; otherwise capture is a silent no-op (dependency-free by
   design — see `apps/api/src/lib/telemetry.ts`).
