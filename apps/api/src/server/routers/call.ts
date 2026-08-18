@@ -12,7 +12,7 @@ import {
   normalizePhone,
 } from "../../lib/twilio.js";
 import { invalidate } from "../../lib/cache.js";
-import { bumpUsage, checkQuota } from "../../lib/usage.js";
+import { bumpUsage, releaseQuota, reserveQuota } from "../../lib/usage.js";
 import { getPlan } from "../../lib/plans.js";
 import { Merchant } from "@ecom/db";
 
@@ -52,15 +52,14 @@ export const callRouter = router({
         .select("subscription.tier")
         .lean();
       const plan = getPlan(merchantDoc?.subscription?.tier);
-      const quota = await checkQuota(new Types.ObjectId(ctx.user.id), plan, "callsInitiated");
+      const merchantId = new Types.ObjectId(ctx.user.id);
+      const quota = await reserveQuota(merchantId, plan, "callMinutesUsed", 1);
       if (!quota.allowed) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: `call minute quota reached (${quota.used}/${quota.limit}) — upgrade your plan`,
         });
       }
-
-      const merchantId = new Types.ObjectId(ctx.user.id);
 
       let orderId: Types.ObjectId | undefined;
       if (input.orderId) {
@@ -83,6 +82,7 @@ export const callRouter = router({
           record: input.record,
         });
       } catch (err) {
+        await releaseQuota(merchantId, "callMinutesUsed", 1).catch(() => {});
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: err instanceof Error ? err.message : "Twilio call failed",
@@ -106,6 +106,7 @@ export const callRouter = router({
         from: twilioResult.from ?? env.TWILIO_PHONE_NUMBER,
         to: twilioResult.to ?? normalizedPhone,
         startedAt: now,
+        reservedCallMinutes: 1,
       });
 
       await bumpUsage(merchantId, "callsInitiated", 1);

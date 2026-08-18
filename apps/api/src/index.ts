@@ -170,10 +170,15 @@ async function main() {
   void (async () => {
     try {
       const {
+        CallEvent,
+        CallSession,
+        CallingExtension,
+        CallingNumber,
         Order,
         WebhookInbox,
         Integration,
         Merchant,
+        MerchantUser,
         ImportJob,
         CustomerReliability,
         AddressReliability,
@@ -181,10 +186,15 @@ async function main() {
         EmailSuppression,
       } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
+        ["CallEvent", CallEvent as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["CallSession", CallSession as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["CallingExtension", CallingExtension as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["CallingNumber", CallingNumber as unknown as { syncIndexes: () => Promise<unknown> }],
         ["Order", Order as unknown as { syncIndexes: () => Promise<unknown> }],
         ["WebhookInbox", WebhookInbox as unknown as { syncIndexes: () => Promise<unknown> }],
         ["Integration", Integration as unknown as { syncIndexes: () => Promise<unknown> }],
         ["Merchant", Merchant as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["MerchantUser", MerchantUser as unknown as { syncIndexes: () => Promise<unknown> }],
         ["ImportJob", ImportJob as unknown as { syncIndexes: () => Promise<unknown> }],
         // Delivery Reliability v1 — unique compound indexes on
         // (merchantId, phoneHash) / (merchantId, addressHash) are the upsert

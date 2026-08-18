@@ -3,10 +3,16 @@ import { CallLog } from "@ecom/db";
 import { env } from "../../env.js";
 import { validateSignature } from "../../lib/twilio.js";
 import { invalidate } from "../../lib/cache.js";
+import { bumpUsage, releaseQuota } from "../../lib/usage.js";
 
 export const twilioWebhookRouter = express.Router();
 
 const TERMINAL_STATUSES = new Set(["completed", "busy", "failed", "no-answer", "canceled"]);
+
+function billableMinutes(duration: number | undefined): number {
+  if (!duration || !Number.isFinite(duration) || duration <= 0) return 0;
+  return Math.ceil(duration / 60);
+}
 
 twilioWebhookRouter.post(
   "/call-status",
@@ -52,16 +58,43 @@ twilioWebhookRouter.post(
       update.endedAt = new Date();
     }
 
-    const log = await CallLog.findOneAndUpdate(
+    const logBefore = await CallLog.findOneAndUpdate(
       { callSid },
       { $set: update },
-      { new: true },
+      { new: false },
     )
-      .select("merchantId")
+      .select("merchantId reservedCallMinutes usageFinalizedAt")
       .lean();
 
-    if (log?.merchantId) {
-      await invalidate(`dashboard:${String(log.merchantId)}`);
+    if (logBefore?.merchantId) {
+      if (status && TERMINAL_STATUSES.has(status)) {
+        const minutes = billableMinutes(duration);
+        const finalized = await CallLog.findOneAndUpdate(
+          {
+            callSid,
+            usageFinalizedAt: { $exists: false },
+          },
+          {
+            $set: {
+              billedMinutes: minutes,
+              usageFinalizedAt: new Date(),
+            },
+          },
+          { new: false },
+        )
+          .select("merchantId reservedCallMinutes")
+          .lean();
+        if (finalized?.merchantId) {
+          const reserved = finalized.reservedCallMinutes ?? 0;
+          const delta = minutes - reserved;
+          if (delta > 0) {
+            await bumpUsage(finalized.merchantId, "callMinutesUsed", delta);
+          } else if (delta < 0) {
+            await releaseQuota(finalized.merchantId, "callMinutesUsed", Math.abs(delta));
+          }
+        }
+      }
+      await invalidate(`dashboard:${String(logBefore.merchantId)}`);
     }
 
     return res.json({ ok: true });

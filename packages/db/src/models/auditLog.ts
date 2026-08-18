@@ -106,6 +106,7 @@ export const AUDIT_ACTIONS = [
   // trail (settings page).
   "merchant.branding_updated",
   "merchant.test_sms_sent",
+  "pii.read",
   // Shopify-platform compliance webhooks — receipt + dispatch outcome.
   // Two rows per delivery so a Partner-app reviewer can see (a) the
   // webhook arrived + verified, and (b) what the redaction actually

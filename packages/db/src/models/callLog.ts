@@ -51,6 +51,9 @@ const callLogSchema = new Schema(
     to: { type: String, trim: true },
     startedAt: { type: Date },
     endedAt: { type: Date },
+    reservedCallMinutes: { type: Number, min: 0, default: 0 },
+    billedMinutes: { type: Number, min: 0, default: 0 },
+    usageFinalizedAt: { type: Date },
   },
   { timestamps: true }
 );

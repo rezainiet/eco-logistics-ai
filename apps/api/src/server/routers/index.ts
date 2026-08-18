@@ -4,6 +4,7 @@ import { ordersRouter } from "./orders.js";
 import { analyticsRouter } from "./analytics.js";
 import { callCenterRouter } from "./callCenter.js";
 import { callRouter } from "./call.js";
+import { callingFoundationRouter } from "./callingFoundation.js";
 import { fraudRouter } from "./fraud.js";
 import { billingRouter } from "./billing.js";
 import { adminBillingRouter } from "./adminBilling.js";
@@ -29,6 +30,7 @@ export const appRouter = router({
   analytics: analyticsRouter,
   callCenter: callCenterRouter,
   call: callRouter,
+  callingFoundation: callingFoundationRouter,
   fraud: fraudRouter,
   billing: billingRouter,
   adminBilling: adminBillingRouter,

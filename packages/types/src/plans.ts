@@ -217,7 +217,7 @@ export function quotaFor(plan: PlanDefinition, metric: UsageMetric): number | nu
     case "fraudReviewsUsed":
       return plan.features.fraudReviewQuota;
     case "callsInitiated":
-      return plan.features.callMinutes;
+      return null;
     case "callMinutesUsed":
       return plan.features.callMinutes;
   }
