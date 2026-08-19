@@ -315,6 +315,19 @@ export default function HomePage() {
                 <span className="pulse" />
                 Built for Bangladesh&apos;s COD economy
               </div>
+              {/* Bangla strapline (BD2). Written in the merchant's own
+                  inner voice, not a translation of the English H1. The
+                  deepest, most-recognised COD pain in BD is the silent
+                  RTO/fake-order bleed — goods leave, money never returns,
+                  and the courier bill lands anyway. "মাল গেল, টাকা এলো না"
+                  is the exact phrase merchants use for it; naming it back
+                  to them in their language earns instant recognition and
+                  trust. English gloss: "Goods went out, money never came
+                  back — that story ends now." `lang="bn"` so the serif
+                  stack and screen readers render Bangla correctly. */}
+              <p className="hero-bangla" lang="bn">
+                মাল গেল, টাকা এলো না — এই গল্প এবার শেষ।
+              </p>
               <h1 className="hero-title">
                 <span className="serif">Confirm</span> every COD order before it ships.
               </h1>
@@ -688,6 +701,7 @@ export default function HomePage() {
             <div className="integrations-grid">
               <div className="integration"><div className="name">Shopify</div><div className="role">HMAC webhooks</div></div>
               <div className="integration"><div className="name">WooCommerce</div><div className="role">REST + signed events</div></div>
+              <div className="integration"><div className="name">F-commerce</div><div className="role">on the roadmap</div></div>
               <div className="integration"><div className="name">Pathao</div><div className="role">courier · primary</div></div>
               <div className="integration"><div className="name">Steadfast</div><div className="role">courier · primary</div></div>
               <div className="integration"><div className="name">RedX</div><div className="role">courier · primary</div></div>
@@ -1274,13 +1288,12 @@ export default function HomePage() {
           <div className="container footer-inner">
             <Link href="/" className="logo">
               <span className="logo-dot" />
-              <span>ConfirmX</span>
+              <span>{SAAS_BRANDING.name}</span>
             </Link>
             <div className="footer-links">
               <a href="#how">How it works</a>
               <a href="#fraud">Delivery signals</a>
               <a href="#pricing">Pricing</a>
-              <a href={`mailto:${SAAS_BRANDING.helloEmail}`}>{SAAS_BRANDING.helloEmail}</a>
               {signedIn ? (
                 <Link href="/dashboard">Dashboard</Link>
               ) : (
@@ -1290,9 +1303,30 @@ export default function HomePage() {
                 </>
               )}
             </div>
-            <div>
-              © {new Date().getFullYear()} {SAAS_BRANDING.name}. Built in
-              Dhaka for Bangladesh COD merchants.
+          </div>
+          {/* Legal / trust row. The privacy + terms pages and the
+              status page already exist; surfacing them here is a
+              Shopify-reviewer requirement and a BD-merchant trust
+              signal (a real company links its policies + contact).
+              Uses branding symbols so a rebrand never orphans a link. */}
+          <div className="container footer-legal">
+            <nav className="footer-legal-links" aria-label="Legal and support">
+              <Link href={SAAS_BRANDING.privacyUrl}>Privacy</Link>
+              <Link href={SAAS_BRANDING.termsUrl}>Terms</Link>
+              <a
+                href={SAAS_BRANDING.statusPageUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Status
+              </a>
+              <a href={`mailto:${SAAS_BRANDING.supportEmail}`}>
+                {SAAS_BRANDING.supportEmail}
+              </a>
+            </nav>
+            <div className="footer-copy">
+              © {new Date().getFullYear()} {SAAS_BRANDING.legalName} ·
+              Built in Dhaka for Bangladesh COD merchants.
             </div>
           </div>
         </footer>

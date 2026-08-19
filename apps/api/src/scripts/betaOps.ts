@@ -137,7 +137,20 @@ async function main(): Promise<void> {
       createdAt: { $lt: cutoff },
     });
   }
-  report.stuckOrders = { olderThanHours: STUCK_HOURS, byState: stuckByState };
+  // Oldest stuck order overall — a high number here is the clearest
+  // signal that a merchant has stopped working their queue (silent
+  // abandonment) even when daily counts look small.
+  const oldestStuck = await Order.findOne({
+    "automation.state": { $in: stuckStates },
+  })
+    .sort({ createdAt: 1 })
+    .select("createdAt")
+    .lean<{ createdAt?: Date } | null>();
+  report.stuckOrders = {
+    olderThanHours: STUCK_HOURS,
+    byState: stuckByState,
+    oldestAge: ageHuman(oldestStuck?.createdAt),
+  };
 
   // 4. Queue depth + BullMQ failed counts. Redis may be down — never let
   // that abort the rest of the triage.
@@ -196,7 +209,11 @@ async function main(): Promise<void> {
     );
   }
   out();
-  out(`STUCK ORDERS (> ${STUCK_HOURS}h, still awaiting action):`);
+  out(
+    `STUCK ORDERS (> ${STUCK_HOURS}h, still awaiting action) — oldest ${ageHuman(
+      oldestStuck?.createdAt,
+    )}:`,
+  );
   for (const [st, n] of Object.entries(stuckByState)) {
     out(`  · ${st}: ${n}${n > 0 ? "  ⚠" : ""}`);
   }

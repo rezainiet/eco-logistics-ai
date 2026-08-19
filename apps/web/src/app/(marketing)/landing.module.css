@@ -192,6 +192,21 @@
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.55; transform: scale(0.88); }
 }
+/* Bangla strapline (BD2). Serif + accent gives it the emotional
+   weight of a spoken line without competing with the H1's size.
+   It is the merchant's pain in their own voice; the H1 is the
+   product promise in plain language. Order matters: feel, then fix. */
+.cordonPage :global(.hero-bangla) {
+  font-family: var(--font-serif), serif;
+  font-size: clamp(20px, 3.4vw, 30px);
+  line-height: 1.4;
+  color: var(--c-accent);
+  margin: 0 0 18px;
+  max-width: 720px;
+}
+@media (max-width: 480px) {
+  .cordonPage :global(.hero-bangla) { font-size: 19px; margin: 0 0 16px; }
+}
 .cordonPage :global(h1.hero-title) {
   font-size: clamp(36px, 6vw, 76px);
   line-height: 1.05;
@@ -564,6 +579,17 @@
 .cordonPage :global(.footer-links) { display: flex; gap: 24px; flex-wrap: wrap; }
 .cordonPage :global(.footer-links a) { color: var(--c-text-3); text-decoration: none; transition: color .2s; }
 .cordonPage :global(.footer-links a:hover) { color: var(--c-text); }
+.cordonPage :global(.footer-legal) {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px 24px;
+  margin-top: 28px; padding-top: 24px;
+  border-top: 1px solid var(--c-border);
+  font-size: 12.5px;
+}
+.cordonPage :global(.footer-legal-links) { display: flex; gap: 20px; flex-wrap: wrap; }
+.cordonPage :global(.footer-legal-links a) { color: var(--c-text-3); text-decoration: none; transition: color .2s; }
+.cordonPage :global(.footer-legal-links a:hover) { color: var(--c-text); }
+.cordonPage :global(.footer-copy) { color: var(--c-text-3); }
 
 @media (max-width: 800px) {
   .cordonPage :global(.nav-links) { display: none; }

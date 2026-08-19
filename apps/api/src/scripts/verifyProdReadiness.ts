@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { DEFAULT_BRANDING, getBrandingSync } from "@ecom/branding";
 import { Integration, Notification, WebhookInbox } from "@ecom/db";
 import { env } from "../env.js";
 import { connectDb } from "../lib/db.js";
@@ -180,6 +181,40 @@ function checkEnvVars(): void {
       );
     }
   }
+}
+
+// ---------- Brand / legal readiness ----------------------------------------
+
+function checkBrandReadiness(): void {
+  // The private beta runs hand-onboarded merchants on a Custom (not
+  // Public Distribution) Shopify app, so a placeholder legal entity is
+  // an accepted, documented limitation — failing the deploy on it would
+  // wrongly block the legitimate beta. But the moment the app is flipped
+  // to Public Distribution, Shopify reviewers cross-check the registered
+  // entity against the privacy/terms pages and the Partner listing, and
+  // a placeholder fails review. So this is a loud WARN on every deploy,
+  // never silent — the gate against Public Distribution lives in
+  // docs/BETA_RUNBOOK.md §1, this check keeps it from being forgotten.
+  const brand = getBrandingSync();
+  const placeholderEntity = brand.legalName === DEFAULT_BRANDING.legalName;
+  record(
+    "brand",
+    "legal_entity",
+    placeholderEntity ? "warn" : "pass",
+    placeholderEntity
+      ? `placeholder "${brand.legalName}" — private beta only. DO NOT enable Shopify Public Distribution / public listing until a registered entity is set (packages/branding/src/defaults.ts legalName, or the DB branding row).`
+      : `registered entity set: "${brand.legalName}"`,
+  );
+
+  // Email-inbox routing cannot be proven from code (no SMTP probe here).
+  // Surface the addresses so an operator visually confirms they are the
+  // intended ones, and restate that reviewers test-mail privacy+support.
+  record(
+    "brand",
+    "contact_inboxes",
+    "warn",
+    `support=${brand.supportEmail} privacy=${brand.privacyEmail} — must route to a monitored inbox before Public Distribution (reviewers send test mail to privacy + support).`,
+  );
 }
 
 // ---------- Mongo connectivity + ping --------------------------------------
@@ -518,6 +553,7 @@ async function main(): Promise<void> {
   const jsonOutput = process.argv.includes("--json");
 
   checkEnvVars();
+  checkBrandReadiness();
   await checkMongo();
   if (mongoose.connection.readyState === 1) {
     await checkIndexes();
