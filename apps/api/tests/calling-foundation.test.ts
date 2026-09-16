@@ -5,6 +5,7 @@ import {
   CallSession,
   CallingExtension,
   CallingNumber,
+  CallingProviderAccount,
   MerchantUser,
   Usage,
   currentUsagePeriod,
@@ -43,6 +44,30 @@ describe("provider-neutral calling foundation", () => {
 
     const stored = await MerchantUser.findOne({ merchantId: merchant._id }).lean();
     expect(stored?.email).toBe("agent@example.com");
+  });
+
+  it("links a merchant to a local PBX customer account without exposing credentials", async () => {
+    const merchant = await createMerchant();
+    const other = await createMerchant({ email: `other-${Date.now()}@test.com` });
+    const caller = callerFor(authUserFor(merchant));
+    const otherCaller = callerFor(authUserFor(other));
+
+    const account = await caller.callingFoundation.linkLocalPbxAccount({
+      providerCustomerId: "cust-1",
+      domain: "merchant.pbx.local",
+    });
+
+    expect(account.providerKey).toBe("local_pbx");
+    expect(account.providerCustomerId).toBe("cust-1");
+    const visible = await caller.callingFoundation.getLocalPbxAccount();
+    expect(visible).toMatchObject({ providerCustomerId: "cust-1", domain: "merchant.pbx.local" });
+    expect(await otherCaller.callingFoundation.getLocalPbxAccount()).toBeNull();
+    await expect(
+      otherCaller.callingFoundation.linkLocalPbxAccount({ providerCustomerId: "cust-1" }),
+    ).rejects.toThrow(/already linked/i);
+
+    const stored = await CallingProviderAccount.findOne({ merchantId: merchant._id }).lean();
+    expect(stored?.metadata).toBeUndefined();
   });
 
   it("assigns extensions only to agents owned by the same merchant", async () => {

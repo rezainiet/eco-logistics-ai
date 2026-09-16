@@ -6,6 +6,7 @@ import {
   CallSession,
   CallingExtension,
   CallingNumber,
+  CallingProviderAccount,
   MerchantUser,
   MERCHANT_USER_ROLES,
   MERCHANT_USER_STATUSES,
@@ -16,10 +17,16 @@ import {
   createCallingExtension,
   createCallingNumber,
   createCallSession,
+  createLocalPbxInboundRoute,
   createMerchantUser,
+  provisionLocalPbxExtension,
   processCallEvent,
+  startLocalPbxOutboundCall,
+  syncLocalPbxCdr,
   transitionCallSession,
+  upsertCallingProviderAccount,
 } from "../../lib/calling.js";
+import { isLocalPbxConfigured, LOCAL_PBX_PROVIDER_KEY } from "../../lib/calling/providers/localPbx.js";
 
 function merchantObjectId(id: string): Types.ObjectId {
   return new Types.ObjectId(id);
@@ -45,6 +52,57 @@ function mapCallingError(err: unknown): never {
 const objectIdString = z.string().refine((v) => Types.ObjectId.isValid(v), "invalid objectId");
 
 export const callingFoundationRouter = router({
+  localPbxStatus: protectedProcedure.query(() => ({
+    providerKey: LOCAL_PBX_PROVIDER_KEY,
+    configured: isLocalPbxConfigured(),
+  })),
+
+  linkLocalPbxAccount: protectedProcedure
+    .input(
+      z.object({
+        providerCustomerId: z.string().trim().min(1).max(160),
+        domain: z.string().trim().max(200).optional(),
+        status: z.enum(["active", "inactive", "suspended"]).default("active"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const account = await upsertCallingProviderAccount({
+          merchantId: ctx.user.id,
+          providerCustomerId: input.providerCustomerId,
+          providerKey: LOCAL_PBX_PROVIDER_KEY,
+          domain: input.domain,
+          status: input.status,
+        });
+        return {
+          id: String(account._id),
+          providerKey: account.providerKey,
+          providerCustomerId: account.providerCustomerId,
+          status: account.status,
+        };
+      } catch (err) {
+        mapCallingError(err);
+      }
+    }),
+
+  getLocalPbxAccount: protectedProcedure.query(async ({ ctx }) => {
+    const merchantId = merchantObjectId(ctx.user.id);
+    const account = await CallingProviderAccount.findOne({
+      merchantId,
+      providerKey: LOCAL_PBX_PROVIDER_KEY,
+    }).lean();
+    return account
+      ? {
+          id: String(account._id),
+          providerKey: account.providerKey,
+          providerCustomerId: account.providerCustomerId,
+          domain: account.domain ?? null,
+          status: account.status,
+          lastSyncedAt: account.lastSyncedAt ?? null,
+        }
+      : null;
+  }),
+
   createAgent: protectedProcedure
     .input(
       z.object({
@@ -122,6 +180,33 @@ export const callingFoundationRouter = router({
     }));
   }),
 
+  provisionLocalPbxExtension: protectedProcedure
+    .input(
+      z.object({
+        extensionId: objectIdString,
+        sipPassword: z.string().min(4).max(200),
+        isWebrtc: z.boolean().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await provisionLocalPbxExtension({
+          merchantId: ctx.user.id,
+          extensionId: input.extensionId,
+          sipPassword: input.sipPassword,
+          isWebrtc: input.isWebrtc,
+        });
+        return {
+          id: String(result.extension._id),
+          extension: result.extension.extension,
+          providerKey: result.extension.providerKey ?? null,
+          providerExtensionId: result.extension.providerExtensionId ?? null,
+        };
+      } catch (err) {
+        mapCallingError(err);
+      }
+    }),
+
   createBusinessNumber: protectedProcedure
     .input(
       z.object({
@@ -163,6 +248,26 @@ export const callingFoundationRouter = router({
     }));
   }),
 
+  createLocalPbxInboundRoute: protectedProcedure
+    .input(
+      z.object({
+        businessNumberId: objectIdString,
+        destinationType: z.enum(["ivr", "extension", "queue", "time_condition"]),
+        destinationId: z.string().trim().min(1).max(160),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const raw = await createLocalPbxInboundRoute({
+          merchantId: ctx.user.id,
+          ...input,
+        });
+        return { ok: true, raw };
+      } catch (err) {
+        mapCallingError(err);
+      }
+    }),
+
   createCallSession: protectedProcedure
     .input(
       z.object({
@@ -189,6 +294,28 @@ export const callingFoundationRouter = router({
           direction: session.direction,
           reservedCallMinutes: session.reservedCallMinutes ?? 0,
         };
+      } catch (err) {
+        mapCallingError(err);
+      }
+    }),
+
+  startLocalPbxOutboundCall: protectedProcedure
+    .input(
+      z.object({
+        agentUserId: objectIdString.optional(),
+        extensionId: objectIdString,
+        businessNumberId: objectIdString.optional(),
+        customerPhone: z.string().trim().min(7).max(40),
+        customerRefType: z.string().trim().max(80).optional(),
+        customerRefId: z.string().trim().max(160).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await startLocalPbxOutboundCall({
+          merchantId: ctx.user.id,
+          ...input,
+        });
       } catch (err) {
         mapCallingError(err);
       }
@@ -305,5 +432,26 @@ export const callingFoundationRouter = router({
         eventType: event.eventType,
         processedAt: event.processedAt ?? null,
       }));
+    }),
+
+  syncLocalPbxCdr: protectedProcedure
+    .input(
+      z
+        .object({
+          startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+          endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        })
+        .default({}),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await syncLocalPbxCdr({
+          merchantId: ctx.user.id,
+          startDate: input.startDate,
+          endDate: input.endDate,
+        });
+      } catch (err) {
+        mapCallingError(err);
+      }
     }),
 });

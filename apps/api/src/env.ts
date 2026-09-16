@@ -53,6 +53,36 @@ const schema = z
     TWILIO_AUTH_TOKEN: z.string().optional(),
     TWILIO_PHONE_NUMBER: z.string().optional(),
     TWILIO_WEBHOOK_BASE_URL: z.string().url().optional(),
+    // --- Provider-neutral local PBX integration ---
+    // Reseller/API credentials for a local PBX API compatible with the
+    // documented ePBX-style surface: Bearer auth, per-customer extensions,
+    // inbound/outbound routes, CDR, and click-to-call originate.
+    LOCAL_PBX_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    LOCAL_PBX_PROVIDER_KEY: z.string().trim().toLowerCase().default("local_pbx"),
+    LOCAL_PBX_BASE_URL: z.string().url().optional(),
+    LOCAL_PBX_API_TOKEN: z.string().optional(),
+    LOCAL_PBX_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5000),
+    // --- Self-hosted Asterisk PBX (AMI call control) ---
+    // AMI is bound to 127.0.0.1 on the PBX host and is never public. The API
+    // must reach it over a private path (SSH tunnel / WireGuard), so the host
+    // below is the local end of that tunnel. ConfirmX never learns SIP
+    // credentials; the PBX owns SIP entirely.
+    ASTERISK_ENABLED: z
+      .enum(["0", "1"])
+      .default("0")
+      .transform((v) => v === "1"),
+    ASTERISK_PROVIDER_KEY: z.string().trim().toLowerCase().default("asterisk"),
+    ASTERISK_AMI_HOST: z.string().trim().default("127.0.0.1"),
+    ASTERISK_AMI_PORT: z.coerce.number().int().min(1).max(65_535).default(5038),
+    ASTERISK_AMI_USERNAME: z.string().trim().optional(),
+    ASTERISK_AMI_PASSWORD: z.string().optional(),
+    // Dialplan context that enforces the deny-by-default outbound allow-list.
+    ASTERISK_OUTBOUND_CONTEXT: z.string().trim().default("from-confirmx-test"),
+    ASTERISK_CHANNEL_TECH: z.string().trim().default("PJSIP"),
+    ASTERISK_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5000),
     // --- Courier defaults (per-merchant baseUrl overrides these) ---
     PATHAO_BASE_URL: z.string().url().default("https://api-hermes.pathao.com"),
     STEADFAST_BASE_URL: z.string().url().default("https://portal.packzy.com"),

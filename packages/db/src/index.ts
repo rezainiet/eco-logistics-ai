@@ -6,6 +6,7 @@ export * from "./models/callingExtension.js";
 export * from "./models/callingNumber.js";
 export * from "./models/callSession.js";
 export * from "./models/callEvent.js";
+export * from "./models/callingProviderAccount.js";
 export * from "./models/merchantStats.js";
 export * from "./models/auditLog.js";
 export * from "./models/payment.js";

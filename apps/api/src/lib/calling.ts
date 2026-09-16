@@ -4,6 +4,7 @@ import {
   CallSession,
   CallingExtension,
   CallingNumber,
+  CallingProviderAccount,
   MerchantUser,
   type CallSessionStatus,
   type MerchantUserRole,
@@ -13,6 +14,20 @@ import { getPlan } from "./plans.js";
 import { bumpUsage, releaseQuota, reserveQuota } from "./usage.js";
 import { normalizePhone } from "./phone.js";
 import { Merchant } from "@ecom/db";
+import {
+  getLocalPbxClient,
+  isLocalPbxConfigured,
+  LOCAL_PBX_PROVIDER_KEY,
+  type LocalPbxCdrRecord,
+} from "./calling/providers/localPbx.js";
+import {
+  ASTERISK_PROVIDER_KEY,
+  agentChannelFor,
+  asteriskOutboundContext,
+  getAsteriskClient,
+  isAsteriskConfigured,
+  mapAmiEventToCallEvent,
+} from "./calling/providers/asterisk.js";
 
 export class CallingDomainError extends Error {
   constructor(
@@ -81,9 +96,97 @@ function billedMinutes(durationSeconds: number): number {
   return Math.ceil(durationSeconds / 60);
 }
 
+function localPbxAccountRequired(): void {
+  if (!isLocalPbxConfigured()) {
+    throw new CallingDomainError("local PBX API is not configured", "bad_request");
+  }
+}
+
+function cdrEventId(record: LocalPbxCdrRecord): string | null {
+  return (
+    pickProviderId(record.call_id) ??
+    pickProviderId(record.uniqueid) ??
+    pickProviderId(record.id) ??
+    null
+  );
+}
+
+function pickProviderId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+function cdrDuration(record: LocalPbxCdrRecord): number {
+  const raw = record.billsec ?? record.duration ?? 0;
+  const value = typeof raw === "string" ? Number(raw) : raw;
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function cdrStatus(record: LocalPbxCdrRecord): "completed" | "failed" | "missed" {
+  const disposition = String(record.disposition ?? record.status ?? "").trim().toUpperCase();
+  if (disposition === "ANSWERED") return "completed";
+  if (disposition === "NO ANSWER") return "missed";
+  return "failed";
+}
+
 async function merchantPlan(merchantId: Types.ObjectId) {
   const merchant = await Merchant.findById(merchantId).select("subscription.tier").lean();
   return getPlan(merchant?.subscription?.tier);
+}
+
+export async function upsertCallingProviderAccount(input: {
+  merchantId: Types.ObjectId | string;
+  providerCustomerId: string;
+  providerKey?: string;
+  domain?: string;
+  status?: "active" | "inactive" | "suspended";
+}) {
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const providerKey = (input.providerKey ?? LOCAL_PBX_PROVIDER_KEY).trim().toLowerCase();
+  const existingCustomer = await CallingProviderAccount.findOne({
+    merchantId: { $ne: merchantId },
+    providerKey,
+    providerCustomerId: input.providerCustomerId,
+  })
+    .select("_id")
+    .lean();
+  if (existingCustomer) {
+    throw new CallingDomainError("PBX customer account is already linked", "conflict");
+  }
+  try {
+    return await CallingProviderAccount.findOneAndUpdate(
+      { merchantId, providerKey },
+      {
+        $set: {
+          providerCustomerId: input.providerCustomerId,
+          domain: input.domain,
+          status: input.status ?? "active",
+        },
+      },
+      { upsert: true, new: true },
+    );
+  } catch (err) {
+    if (duplicateKey(err)) {
+      throw new CallingDomainError("PBX customer account is already linked", "conflict");
+    }
+    throw err;
+  }
+}
+
+export async function getCallingProviderAccount(
+  merchantIdInput: Types.ObjectId | string,
+  providerKeyInput = LOCAL_PBX_PROVIDER_KEY,
+) {
+  const merchantId = asObjectId(merchantIdInput, "merchantId");
+  const providerKey = providerKeyInput.trim().toLowerCase();
+  const account = await CallingProviderAccount.findOne({
+    merchantId,
+    providerKey,
+    status: "active",
+  }).lean();
+  if (!account) throw new CallingDomainError("PBX account not linked", "not_found");
+  return account;
 }
 
 export async function createMerchantUser(input: {
@@ -335,6 +438,250 @@ export async function createCallSession(input: {
   }
 }
 
+export async function provisionLocalPbxExtension(input: {
+  merchantId: Types.ObjectId | string;
+  extensionId: Types.ObjectId | string;
+  sipPassword: string;
+  isWebrtc?: boolean;
+}) {
+  localPbxAccountRequired();
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const extensionId = asObjectId(input.extensionId, "extensionId");
+  const [account, extension] = await Promise.all([
+    getCallingProviderAccount(merchantId),
+    CallingExtension.findOne({ _id: extensionId, merchantId }),
+  ]);
+  if (!extension) throw new CallingDomainError("extension not found", "not_found");
+  const client = getLocalPbxClient();
+  const raw = await client.createExtension({
+    customerId: account.providerCustomerId,
+    extension: extension.extension,
+    password: input.sipPassword,
+    isWebrtc: input.isWebrtc,
+  });
+  extension.providerKey = LOCAL_PBX_PROVIDER_KEY;
+  extension.providerExtensionId = extension.extension;
+  await extension.save();
+  return { extension, raw };
+}
+
+export async function createLocalPbxInboundRoute(input: {
+  merchantId: Types.ObjectId | string;
+  businessNumberId: Types.ObjectId | string;
+  destinationType: "ivr" | "extension" | "queue" | "time_condition";
+  destinationId: string;
+}) {
+  localPbxAccountRequired();
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const businessNumberId = asObjectId(input.businessNumberId, "businessNumberId");
+  const [account, number] = await Promise.all([
+    getCallingProviderAccount(merchantId),
+    CallingNumber.findOne({ _id: businessNumberId, merchantId }).lean(),
+  ]);
+  if (!number) throw new CallingDomainError("business number not found", "not_found");
+  const client = getLocalPbxClient();
+  return client.createInboundRoute({
+    customerId: account.providerCustomerId,
+    didNumber: number.normalizedPhone,
+    destinationType: input.destinationType,
+    destinationId: input.destinationId,
+  });
+}
+
+export async function startLocalPbxOutboundCall(input: {
+  merchantId: Types.ObjectId | string;
+  agentUserId?: Types.ObjectId | string | null;
+  extensionId: Types.ObjectId | string;
+  businessNumberId?: Types.ObjectId | string | null;
+  customerPhone: string;
+  customerRefType?: string;
+  customerRefId?: string;
+}) {
+  localPbxAccountRequired();
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const extensionId = asObjectId(input.extensionId, "extensionId");
+  const [account, extension] = await Promise.all([
+    getCallingProviderAccount(merchantId),
+    loadExtension(merchantId, extensionId),
+  ]);
+  const normalizedPhone = normalizePhone(input.customerPhone);
+  if (!normalizedPhone) throw new CallingDomainError("invalid customer phone", "bad_request");
+
+  const session = await createCallSession({
+    merchantId,
+    direction: "outbound",
+    agentUserId: input.agentUserId,
+    customerPhone: input.customerPhone,
+    customerRefType: input.customerRefType,
+    customerRefId: input.customerRefId,
+    extensionId,
+    businessNumberId: input.businessNumberId,
+    providerKey: LOCAL_PBX_PROVIDER_KEY,
+  });
+
+  try {
+    const client = getLocalPbxClient();
+    const result = await client.originate({
+      customerId: account.providerCustomerId,
+      extension: extension.extension,
+      phoneNumber: normalizedPhone,
+    });
+    await CallSession.updateOne(
+      { _id: session._id, merchantId },
+      {
+        $set: {
+          providerCallId: result.providerCallId ?? undefined,
+          status: "queued",
+          metadata: {
+            providerOriginateStatus: result.status,
+            providerOriginateResponse: result.raw,
+          },
+        },
+      },
+    );
+    return {
+      sessionId: String(session._id),
+      providerCallId: result.providerCallId,
+      status: result.status ?? "queued",
+    };
+  } catch (err) {
+    await transitionCallSession({
+      merchantId,
+      callSessionId: session._id,
+      status: "failed",
+      failureReason: err instanceof Error ? err.message : "local PBX originate failed",
+    }).catch(() => {});
+    throw err;
+  }
+}
+
+function asteriskConfigRequired(): void {
+  if (!isAsteriskConfigured()) {
+    throw new CallingDomainError("Asterisk PBX is not configured", "bad_request");
+  }
+}
+
+/**
+ * Click-to-call via the self-hosted Asterisk PBX.
+ *
+ * Rings the agent extension first, then the dialplan dials the customer from
+ * a deny-by-default context, so ConfirmX cannot cause an unapproved
+ * destination to be dialled even if a bad number reaches this function.
+ *
+ * ConfirmX holds no SIP credentials; the PBX owns SIP entirely.
+ */
+export async function startAsteriskOutboundCall(input: {
+  merchantId: Types.ObjectId | string;
+  agentUserId?: Types.ObjectId | string | null;
+  extensionId: Types.ObjectId | string;
+  businessNumberId?: Types.ObjectId | string | null;
+  customerPhone: string;
+  customerRefType?: string;
+  customerRefId?: string;
+}) {
+  asteriskConfigRequired();
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const extensionId = asObjectId(input.extensionId, "extensionId");
+  const extension = await loadExtension(merchantId, extensionId);
+
+  const normalizedPhone = normalizePhone(input.customerPhone);
+  if (!normalizedPhone) throw new CallingDomainError("invalid customer phone", "bad_request");
+
+  // Business DID presented to the customer, when the merchant owns one.
+  let callerId: string | undefined;
+  if (input.businessNumberId) {
+    const number = await loadNumber(merchantId, asObjectId(input.businessNumberId, "businessNumberId"));
+    callerId = number.normalizedPhone ?? undefined;
+  }
+
+  const session = await createCallSession({
+    merchantId,
+    direction: "outbound",
+    agentUserId: input.agentUserId,
+    customerPhone: input.customerPhone,
+    customerRefType: input.customerRefType,
+    customerRefId: input.customerRefId,
+    extensionId,
+    businessNumberId: input.businessNumberId,
+    providerKey: ASTERISK_PROVIDER_KEY,
+  });
+
+  try {
+    const result = await getAsteriskClient().originate({
+      agentChannel: agentChannelFor(extension.extension),
+      destination: normalizedPhone,
+      context: asteriskOutboundContext(),
+      callerId,
+      sessionId: String(session._id),
+    });
+    await CallSession.updateOne(
+      { _id: session._id, merchantId },
+      {
+        $set: {
+          providerCallId: result.providerCallId ?? undefined,
+          status: "queued",
+          metadata: { providerOriginateStatus: result.status },
+        },
+      },
+    );
+    return {
+      sessionId: String(session._id),
+      providerCallId: result.providerCallId,
+      status: result.status ?? "queued",
+    };
+  } catch (err) {
+    await transitionCallSession({
+      merchantId,
+      callSessionId: session._id,
+      status: "failed",
+      failureReason: err instanceof Error ? err.message : "asterisk originate failed",
+    }).catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Feed a raw AMI event into the calling foundation.
+ *
+ * Tenant authorization comes from the CallSession we already own, never from
+ * the event payload: we look the session up by `providerCallId` and only then
+ * use its merchantId. An event naming an unknown call is ignored.
+ *
+ * Idempotency is handled by `processCallEvent` via the deterministic
+ * `providerEventId` the mapper derives from the Asterisk uniqueid.
+ */
+export async function handleAsteriskCallEvent(event: Record<string, unknown>) {
+  const mapped = mapAmiEventToCallEvent(event);
+  if (!mapped) return { handled: false as const, reason: "unmapped_event" };
+
+  const session = await CallSession.findOne({
+    providerKey: ASTERISK_PROVIDER_KEY,
+    providerCallId: mapped.providerCallId,
+  })
+    .select("_id merchantId status")
+    .lean();
+  if (!session) return { handled: false as const, reason: "unknown_call" };
+
+  // A terminal session must not be re-opened by a late or replayed event.
+  if (TERMINAL_STATUSES.has(session.status as CallSessionStatus)) {
+    return { handled: false as const, reason: "already_terminal" };
+  }
+
+  const result = await processCallEvent({
+    merchantId: session.merchantId,
+    callSessionId: session._id,
+    providerKey: ASTERISK_PROVIDER_KEY,
+    providerEventId: mapped.providerEventId,
+    eventType: mapped.eventType,
+    occurredAt: mapped.occurredAt,
+    durationSeconds: mapped.durationSeconds,
+    failureCode: mapped.failureCode,
+    failureReason: mapped.failureReason,
+  });
+
+  return { handled: true as const, duplicate: result.duplicate, eventType: mapped.eventType };
+}
+
 export async function transitionCallSession(input: {
   merchantId: Types.ObjectId | string;
   callSessionId: Types.ObjectId | string;
@@ -492,4 +839,59 @@ export async function processCallEvent(input: {
     : null;
 
   return { duplicate: false, event, session: updatedSession };
+}
+
+export async function syncLocalPbxCdr(input: {
+  merchantId: Types.ObjectId | string;
+  startDate?: string;
+  endDate?: string;
+}) {
+  localPbxAccountRequired();
+  const merchantId = asObjectId(input.merchantId, "merchantId");
+  const account = await getCallingProviderAccount(merchantId);
+  const client = getLocalPbxClient();
+  const records = await client.getCdr({
+    customerId: account.providerCustomerId,
+    startDate: input.startDate,
+    endDate: input.endDate,
+  });
+  let processed = 0;
+  let duplicate = 0;
+  let unmapped = 0;
+
+  for (const record of records) {
+    const providerCallId = cdrEventId(record);
+    if (!providerCallId) {
+      unmapped += 1;
+      continue;
+    }
+    const session = await CallSession.findOne({
+      merchantId,
+      providerKey: LOCAL_PBX_PROVIDER_KEY,
+      providerCallId,
+    })
+      .select("_id")
+      .lean();
+    if (!session) {
+      unmapped += 1;
+      continue;
+    }
+    const result = await processCallEvent({
+      merchantId,
+      callSessionId: session._id,
+      providerKey: LOCAL_PBX_PROVIDER_KEY,
+      providerEventId: `cdr:${providerCallId}`,
+      eventType: cdrStatus(record),
+      durationSeconds: cdrDuration(record),
+      payload: record,
+    });
+    if (result.duplicate) duplicate += 1;
+    else processed += 1;
+  }
+
+  await CallingProviderAccount.updateOne(
+    { _id: account._id, merchantId },
+    { $set: { lastSyncedAt: new Date() } },
+  );
+  return { fetched: records.length, processed, duplicate, unmapped };
 }
