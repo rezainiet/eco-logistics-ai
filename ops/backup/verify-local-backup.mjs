@@ -52,15 +52,22 @@ try {
   if (!mismatched) ok(`${manifest.files.length} files match their SHA-256`);
 
   // 2. Git bundle → clone
-  const bundle = manifest.files.find((f) => f.path.endsWith(".bundle"));
-  if (!bundle) bad("no git bundle");
+  // Use the artefacts of THIS manifest's run (earlier runs stay in the folder).
+  const ofRun = (f) => f.path.includes(manifest.stamp);
+  const bundle = manifest.files.find((f) => ofRun(f) && f.path.endsWith(".bundle"));
+  if (!bundle) bad("no git bundle for this run");
   else {
     const b = path.join(dest, bundle.path);
     run("git", ["bundle", "verify", b]);
     ok(`git bundle verifies (${bundle.path})`);
     const clone = path.join(tmp, "clone");
     run("git", ["clone", "--quiet", b, clone]);
-    const has = run("git", ["-C", clone, "cat-file", "-t", manifest.git.commit]);
+    let has = "missing";
+    try {
+      has = run("git", ["-C", clone, "cat-file", "-t", manifest.git.commit]);
+    } catch {
+      /* reported below */
+    }
     has === "commit" ? ok(`bundle contains manifest commit ${manifest.git.commit.slice(0, 7)}`) : bad("manifest commit not in bundle");
     const branches = run("git", ["-C", clone, "branch", "-r"]).split("\n").map((s) => s.trim());
     ok(`bundle branches: ${branches.filter((x) => !x.includes("->")).join(", ")}`);
@@ -71,8 +78,8 @@ try {
   }
 
   // 3. Source tarball
-  const src = manifest.files.find((f) => /confirmx-src-.*\.tar\.gz$/.test(f.path));
-  if (!src) bad("no source tarball");
+  const src = manifest.files.find((f) => ofRun(f) && /confirmx-src-.*\.tar\.gz$/.test(f.path));
+  if (!src) bad("no source tarball for this run");
   else {
     const out = path.join(tmp, "src");
     fs.mkdirSync(out);
