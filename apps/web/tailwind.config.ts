@@ -3,7 +3,12 @@ import type { Config } from "tailwindcss";
 const config: Config = {
   darkMode: "class",
   presets: [require("../../packages/config/tailwind.js")],
-  content: ["./src/app/**/*.{ts,tsx}", "./src/components/**/*.{ts,tsx}"],
+  content: [
+    "./src/app/**/*.{ts,tsx}",
+    "./src/components/**/*.{ts,tsx}",
+    // Landing-page section components render inside the editor preview.
+    "../../packages/landing/src/react/**/*.{ts,tsx}",
+  ],
   theme: {
     container: {
       center: true,

@@ -56,6 +56,9 @@ export const PERMISSIONS = {
   // role until/unless we ship a granular `branding_admin` scope.
   "branding.update": [] as AdminScope[], // super_admin only
   "branding.reset": [] as AdminScope[], // super_admin only
+  // Landing-page templates render on every merchant page built from them —
+  // same blast-radius reasoning as branding: super_admin only.
+  "landing.template.manage": [] as AdminScope[], // super_admin only
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

@@ -137,6 +137,16 @@ export const AUDIT_ACTIONS = [
   // --- Centralized SaaS branding (super_admin only) ---
   "branding.updated",
   "branding.reset",
+  // --- Landing pages ---
+  "landing.template_created",
+  "landing.template_updated",
+  "landing.template_version_published",
+  "landing.template_status_changed",
+  "landing.page_created",
+  "landing.page_published",
+  "landing.page_unpublished",
+  "landing.page_archived",
+  "landing.slug_claimed",
 ] as const;
 
 export const AUDIT_SUBJECT_TYPES = [
@@ -150,6 +160,8 @@ export const AUDIT_SUBJECT_TYPES = [
   "pending_awb",
   "admin",
   "system",
+  "landing_template",
+  "landing_page",
 ] as const;
 
 const auditLogSchema = new Schema(

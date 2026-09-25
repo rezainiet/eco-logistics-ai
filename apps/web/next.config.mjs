@@ -263,7 +263,7 @@ const EMBEDDED_HEADERS = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  transpilePackages: ["@ecom/types", "@ecom/db"],
+  transpilePackages: ["@ecom/types", "@ecom/db", "@ecom/landing"],
   // Production builds gate on a clean typecheck — the project is at 0 TS
   // errors and the test suite is green, so the cheap regression gate is
   // worth catching here. ESLint stays off at build time because it's

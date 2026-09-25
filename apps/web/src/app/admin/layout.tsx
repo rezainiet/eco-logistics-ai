@@ -71,6 +71,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
             SaaS branding
           </Link>
           <Link
+            href="/admin/landing-templates"
+            className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
+          >
+            Landing templates
+          </Link>
+          <Link
             href="/dashboard"
             className="block rounded-md px-3 py-2 text-[#D1D5DB] hover:bg-[#1A1D2E] hover:text-[#F3F4F6]"
           >

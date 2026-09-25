@@ -39,6 +39,7 @@ jobs:
         run: |
           npm --workspace @ecom/db run build
           npm --workspace @ecom/types run build
+          npm --workspace @ecom/landing run build
       - name: API strict build
         run: npm --workspace @ecom/api run build:strict
 
@@ -57,8 +58,11 @@ jobs:
         run: |
           npm --workspace @ecom/db run build
           npm --workspace @ecom/types run build
+          npm --workspace @ecom/landing run build
       - name: Web typecheck
         run: npm --workspace @ecom/web run typecheck
+      - name: Sites typecheck
+        run: npm --workspace @ecom/sites run typecheck
 
   api-tests:
     name: API tests
@@ -75,6 +79,7 @@ jobs:
         run: |
           npm --workspace @ecom/db run build
           npm --workspace @ecom/types run build
+          npm --workspace @ecom/landing run build
       # mongodb-memory-server downloads its mongod binary on first run.
       # Cache it (same key scheme as e2e.yml) so re-runs skip the download.
       - name: Cache mongodb-memory-server binary

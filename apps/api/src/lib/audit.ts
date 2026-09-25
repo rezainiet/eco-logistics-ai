@@ -53,6 +53,15 @@ type AuditAction =
   | "merchant.branding_updated"
   | "branding.updated"
   | "branding.reset"
+  | "landing.template_created"
+  | "landing.template_updated"
+  | "landing.template_version_published"
+  | "landing.template_status_changed"
+  | "landing.page_created"
+  | "landing.page_published"
+  | "landing.page_unpublished"
+  | "landing.page_archived"
+  | "landing.slug_claimed"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
   | "merchant.gdpr_redact_customer"
@@ -114,7 +123,9 @@ type SubjectType =
   | "session"
   | "pending_awb"
   | "admin"
-  | "system";
+  | "system"
+  | "landing_template"
+  | "landing_page";
 
 export interface AuditEntry {
   /** Optional for system-level events that don't tie to one merchant. */

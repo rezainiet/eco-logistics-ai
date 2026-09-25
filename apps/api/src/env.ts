@@ -92,6 +92,20 @@ const schema = z
      * outage shape we now refuse to ship.
      */
     PUBLIC_API_URL: z.string().url().optional(),
+    // --- Landing pages ---
+    /**
+     * Parent domain whose one-level subdomains are merchant landing pages
+     * (`<slug>.<LANDING_ROOT_DOMAIN>`). Unset in production until the
+     * landing-domain infrastructure phase ships — every host then resolves
+     * to "not found". Non-production defaults to `localhost`, so
+     * `mybrand.localhost:3002` works in a browser with no DNS changes.
+     */
+    LANDING_ROOT_DOMAIN: z.string().trim().max(200).optional().transform((v) => v || undefined),
+    /** How a published page's public URL is displayed, e.g. `https://{slug}.pages.example`. */
+    LANDING_PUBLIC_URL_PATTERN: z.string().trim().max(300).optional().transform((v) => v || undefined),
+    /** Days a released slug stays reserved before another merchant may claim it. */
+    LANDING_SLUG_HOLD_DAYS: z.coerce.number().int().min(0).max(365).default(90),
+    LANDING_MAX_PAGES_PER_MERCHANT: z.coerce.number().int().min(1).max(1000).default(50),
     /** Canonical merchant-facing frontend origin (no trailing slash).
      *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),

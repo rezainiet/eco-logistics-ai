@@ -33,3 +33,7 @@ export * from "./models/areaReliability.js";
 export * from "./models/externalDeliveryProfile.js";
 export * from "./models/emailEvent.js";
 export * from "./models/emailSuppression.js";
+export * from "./models/landingPageTemplate.js";
+export * from "./models/landingPage.js";
+export * from "./models/landingPageHost.js";
+export * from "./models/landingAsset.js";

@@ -23,6 +23,7 @@ import {
   shopifyOauthRouter,
 } from "./server/webhooks/integrations.js";
 import { shopifyInstallRouter } from "./server/webhooks/shopify-install.js";
+import { landingAssetRouter } from "./lib/landing/assets.js";
 import { shopifyGdprWebhookRouter } from "./server/webhooks/shopify-gdpr.js";
 import { stripeWebhookRouter } from "./server/webhooks/stripe.js";
 import { resendWebhookRouter } from "./server/webhooks/resend.js";
@@ -184,6 +185,12 @@ async function main() {
         AddressReliability,
         EmailEvent,
         EmailSuppression,
+        LandingPageTemplate,
+        LandingPageTemplateVersion,
+        LandingPage,
+        LandingPageRevision,
+        LandingPageHost,
+        LandingAsset,
       } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
         ["CallEvent", CallEvent as unknown as { syncIndexes: () => Promise<unknown> }],
@@ -209,6 +216,14 @@ async function main() {
         // syncIndexes to actually materialize the expireAfterSeconds.
         ["EmailEvent", EmailEvent as unknown as { syncIndexes: () => Promise<unknown> }],
         ["EmailSuppression", EmailSuppression as unknown as { syncIndexes: () => Promise<unknown> }],
+        // Landing pages — unique hostname, one draft per template and
+        // (pageId, number) revision uniqueness are correctness guarantees.
+        ["LandingPageTemplate", LandingPageTemplate as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["LandingPageTemplateVersion", LandingPageTemplateVersion as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["LandingPage", LandingPage as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["LandingPageRevision", LandingPageRevision as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["LandingPageHost", LandingPageHost as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["LandingAsset", LandingAsset as unknown as { syncIndexes: () => Promise<unknown> }],
       ];
       for (const [name, model] of models) {
         try {
@@ -221,6 +236,18 @@ async function main() {
       }
     } catch (err) {
       console.error("[boot/syncIndexes] outer failure:", (err as Error).message);
+    }
+    // Seed code-defined landing templates only after their unique indexes
+    // exist, so concurrent replicas cannot create duplicate rows. A new
+    // template version is published only when the code spec changed.
+    try {
+      const { ensureSystemTemplates } = await import("./lib/landing/templates.js");
+      const r = await ensureSystemTemplates();
+      if (r.created || r.versioned) {
+        console.log(`[boot] landing templates seeded created=${r.created} versioned=${r.versioned}`);
+      }
+    } catch (err) {
+      console.error("[boot] landing template seed failed (non-fatal):", (err as Error).message);
     }
   })();
 
@@ -419,6 +446,9 @@ async function main() {
   // `/api/integrations/oauth/shopify/callback` (above) which has been
   // extended to recognise public install nonces stored in Redis.
   app.use("/api/shopify/install", shopifyInstallRouter);
+  // Landing-page images (public, GET-only, immutable). Served with a fixed
+  // sniffed content type, nosniff and a deny-all CSP — see lib/landing/assets.ts.
+  app.use("/api/landing-assets", landingAssetRouter);
   // Behavior tracker collector. CORS is wide-open so storefronts on any
   // origin can post events; they prove ownership via the merchant's
   // public tracking key.

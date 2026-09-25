@@ -10,6 +10,9 @@ export default defineConfig({
       "@ecom/db": resolve(here, "../../packages/db/src/index.ts"),
       "@ecom/types": resolve(here, "../../packages/types/src/index.ts"),
       "@ecom/branding": resolve(here, "../../packages/branding/src/index.ts"),
+      // More specific entry first: alias keys match as prefixes.
+      "@ecom/landing/react": resolve(here, "../../packages/landing/src/react/index.ts"),
+      "@ecom/landing": resolve(here, "../../packages/landing/src/index.ts"),
     },
   },
   test: {

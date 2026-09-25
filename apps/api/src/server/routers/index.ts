@@ -17,6 +17,8 @@ import { integrationsRouter } from "./integrations.js";
 import { trackingRouter } from "./tracking.js";
 import { recoveryRouter } from "./recovery.js";
 import { feedbackRouter } from "./feedback.js";
+import { landingPagesRouter, publicLandingRouter } from "./landingPages.js";
+import { adminLandingTemplatesRouter } from "./adminLandingTemplates.js";
 import {
   adminBrandingRouter,
   publicBrandingRouter,
@@ -47,6 +49,11 @@ export const appRouter = router({
   // every layout); `adminBranding` is super_admin only.
   branding: publicBrandingRouter,
   adminBranding: adminBrandingRouter,
+  // Landing pages: merchant CRUD/draft/publish, super_admin template
+  // management, and the unauthenticated host resolver used by apps/sites.
+  landingPages: landingPagesRouter,
+  adminLandingTemplates: adminLandingTemplatesRouter,
+  publicLanding: publicLandingRouter,
 });
 
 export type AppRouter = typeof appRouter;

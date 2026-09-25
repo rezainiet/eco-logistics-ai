@@ -10,6 +10,12 @@ import {
   CustomerReliability,
   ImportJob,
   Integration,
+  LandingAsset,
+  LandingPage,
+  LandingPageHost,
+  LandingPageRevision,
+  LandingPageTemplate,
+  LandingPageTemplateVersion,
   Merchant,
   MerchantStats,
   MerchantUser,
@@ -60,6 +66,14 @@ const MODELS = [
   // Delivery Reliability v1 — see `docs/audits/final-production-readiness-report.md §3.2`.
   ["CustomerReliability", CustomerReliability],
   ["AddressReliability", AddressReliability],
+  // Landing pages — unique hostname / one-draft-per-template / revision
+  // numbering indexes are correctness guarantees, not just performance.
+  ["LandingPageTemplate", LandingPageTemplate],
+  ["LandingPageTemplateVersion", LandingPageTemplateVersion],
+  ["LandingPage", LandingPage],
+  ["LandingPageRevision", LandingPageRevision],
+  ["LandingPageHost", LandingPageHost],
+  ["LandingAsset", LandingAsset],
 ] as const;
 
 async function main() {

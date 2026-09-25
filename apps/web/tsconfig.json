@@ -18,7 +18,9 @@
       "@ecom/types": ["../../packages/types/src/index.ts"],
       "@ecom/types/*": ["../../packages/types/src/*"],
       "@ecom/branding": ["../../packages/branding/src/index.ts"],
-      "@ecom/branding/*": ["../../packages/branding/src/*"]
+      "@ecom/branding/*": ["../../packages/branding/src/*"],
+      "@ecom/landing": ["../../packages/landing/src/index.ts"],
+      "@ecom/landing/react": ["../../packages/landing/src/react/index.ts"]
     }
   },
   "include": [

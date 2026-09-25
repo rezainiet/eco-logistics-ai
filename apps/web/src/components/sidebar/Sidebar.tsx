@@ -8,6 +8,7 @@ import {
   BarChart3,
   CreditCard,
   LayoutDashboard,
+  LayoutTemplate,
   LifeBuoy,
   Menu,
   Package,
@@ -64,6 +65,7 @@ const NAV: NavGroup[] = [
   {
     label: "Connect",
     items: [
+      { label: "Landing pages", href: "/dashboard/landing-pages", icon: LayoutTemplate },
       // Points at the new unified settings IA (settings/integrations).
       // The old /dashboard/integrations URL still redirects in case any
       // bookmark or external link is stale — see the legacy redirect at
