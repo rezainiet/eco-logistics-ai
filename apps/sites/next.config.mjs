@@ -6,8 +6,11 @@
  * dashboard routes or dashboard CSS, and a much stricter CSP. A tenant
  * hostname can only ever reach the landing renderer, never ConfirmX's UI.
  *
- * Merchant content is data rendered by trusted components, so pages need
- * no third-party scripts. `'unsafe-inline'` scripts remain only for Next's
+ * Merchant content is data rendered by trusted components. The only
+ * third-party script is the merchant's Meta Pixel on PUBLIC pages (Meta's
+ * origins are allowed there and nowhere else — the preview host keeps the
+ * strict policy, so a pixel can never load inside the editor preview).
+ * `'unsafe-inline'` scripts remain only for Next's
  * inline bootstrap (a nonce strategy can replace it later); `'unsafe-eval'`
  * is dev-only (React Refresh).
  *
@@ -37,14 +40,21 @@ const editorOrigins = (process.env.LANDING_EDITOR_ORIGINS ?? (isProd ? "" : "htt
   .map((o) => origin(o.trim()))
   .filter(Boolean);
 
-function csp(frameAncestors) {
+// Meta Pixel: fbevents.js + its config/plugins, and the /tr event endpoint
+// (image beacon, sendBeacon or fetch). LANDING_ANALYTICS=off removes them.
+const analyticsOn = (process.env.LANDING_ANALYTICS ?? "on").trim().toLowerCase() !== "off";
+const META_SCRIPT = "https://connect.facebook.net";
+const META_EVENTS = "https://www.facebook.com";
+
+function csp(frameAncestors, { analytics = false } = {}) {
+  const meta = analytics && analyticsOn;
   return [
     "default-src 'self'",
-    `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}`,
+    `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}${meta ? ` ${META_SCRIPT}` : ""}`,
     "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data:${assetOrigin ? ` ${assetOrigin}` : ""}`,
+    `img-src 'self' data:${assetOrigin ? ` ${assetOrigin}` : ""}${meta ? ` ${META_EVENTS}` : ""}`,
     "font-src 'self'",
-    `connect-src 'self'${isProd ? "" : " ws: wss:"}`,
+    `connect-src 'self'${isProd ? "" : " ws: wss:"}${meta ? ` ${META_EVENTS} ${META_SCRIPT}` : ""}`,
     "frame-src 'none'",
     `frame-ancestors ${frameAncestors}`,
     "form-action 'self'",
@@ -66,7 +76,7 @@ const baseHeaders = [
 /** Public pages: never framed. */
 const pageHeaders = [
   ...baseHeaders,
-  { key: "Content-Security-Policy", value: csp("'none'") },
+  { key: "Content-Security-Policy", value: csp("'none'", { analytics: true }) },
   { key: "X-Frame-Options", value: "DENY" },
 ];
 

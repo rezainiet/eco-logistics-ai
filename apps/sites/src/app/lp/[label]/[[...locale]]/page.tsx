@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { LOCALE_LABELS, type Locale } from "@ecom/landing";
+import { LOCALE_LABELS, type Locale, isMetaPixelId, productCatalog } from "@ecom/landing";
 import { LandingRenderer, assetEnv } from "@ecom/landing/react";
-import { indexingAllowed } from "@/lib/config";
+import { analyticsAllowed, indexingAllowed } from "@/lib/config";
 import { resolveCurrentHost } from "@/lib/resolve";
+import { LandingAnalytics } from "./landing-analytics";
 
 // Always resolve against the API: publish/unpublish must take effect
 // immediately and one tenant's response must never be reused for another.
@@ -49,6 +50,7 @@ function LanguageSwitch({ current, locales, defaultLocale }: { current: Locale; 
           key={l}
           href={l === defaultLocale ? "/" : `/${l}`}
           lang={l}
+          data-lp-lang={l}
           aria-current={l === current ? "page" : undefined}
           className={`inline-flex min-h-11 items-center rounded px-3 ${l === current ? "bg-white font-semibold shadow-sm" : "text-neutral-600 hover:text-neutral-900"}`}
         >
@@ -76,6 +78,15 @@ export default async function PublicLandingPage({ params }: Props) {
     <>
       <LanguageSwitch current={r.locale} locales={r.locales} defaultLocale={r.defaultLocale} />
       <LandingRenderer spec={r.spec} content={r.content} locale={r.locale} env={assetEnv(r.assetBaseUrl)} className="min-h-screen" />
+      {/* Published page only — the preview frame never mounts analytics. The
+          Pixel ID is re-checked here: only digits ever reach the browser. */}
+      {analyticsAllowed() && r.analytics && isMetaPixelId(r.analytics.metaPixelId) ? (
+        <LandingAnalytics
+          config={{ metaPixelId: r.analytics.metaPixelId }}
+          page={{ slug: r.slug, template: r.template?.key ?? "custom", locale: r.locale, title: r.seo.title }}
+          products={productCatalog(r.spec, r.content, r.locale)}
+        />
+      ) : null}
     </>
   );
 }

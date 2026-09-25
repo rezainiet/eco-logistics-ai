@@ -1,9 +1,11 @@
 import {
+  type LandingAnalyticsConfig,
   type Locale,
   type PageContent,
   type ResolvedSeo,
   SUPPORTED_LOCALES,
   type TemplateSpec,
+  analyticsConfigOf,
   extractLandingLabel,
   isLocale,
   normalizeLocaleSettings,
@@ -11,7 +13,7 @@ import {
   resolveContent,
   resolveSeo,
 } from "@ecom/landing";
-import { LandingPage, LandingPageHost, LandingPageRevision, Merchant } from "@ecom/db";
+import { LandingPage, LandingPageHost, LandingPageRevision, LandingPageTemplate, Merchant } from "@ecom/db";
 import { env } from "../../env.js";
 import { cached, invalidate } from "../cache.js";
 import { loadTemplateVersion } from "./templates.js";
@@ -41,10 +43,14 @@ export type PublicLandingResult =
       defaultLocale: Locale;
       revision: { number: number; publishedAt: string };
       templateVersion: { version: number };
+      /** Template key (e.g. "bd-modern-shop") — public, used in analytics payloads. */
+      template: { key: string };
       spec: TemplateSpec;
       content: PageContent;
       seo: ResolvedSeo;
       assetBaseUrl: string;
+      /** Browser analytics for this page (public Pixel ID only), or null when off. */
+      analytics: LandingAnalyticsConfig | null;
     }
   | { kind: "not_found" }
   | { kind: "unavailable" };
@@ -65,6 +71,12 @@ export function landingAssetBaseUrl(): string {
 
 export function landingHostCacheKey(label: string, locale: Locale | null = null): string {
   return `landing:host:${label}:${locale ?? "default"}`;
+}
+
+/** Drop every cached public payload for a merchant's pages (e.g. tracking settings changed). */
+export async function invalidateMerchantLandingHosts(merchantId: unknown): Promise<void> {
+  const hosts = await LandingPageHost.find({ merchantId, status: "active" }).select("hostname").lean();
+  await Promise.all(hosts.map((h) => invalidateLandingHost(h.hostname)));
 }
 
 /** Drop every cached public payload for a label (publish, unpublish, slug change, archive). */
@@ -106,7 +118,7 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Pu
     .lean();
   if (!page || page.status !== "published" || !page.publishedRevisionId) return { kind: "not_found" };
 
-  const merchant = await Merchant.findById(host.merchantId).select("subscription.status").lean();
+  const merchant = await Merchant.findById(host.merchantId).select("subscription.status landingTracking").lean();
   if (!merchant) return { kind: "not_found" };
   if (OFFLINE_SUBSCRIPTION.has(String(merchant.subscription?.status ?? ""))) return { kind: "unavailable" };
 
@@ -128,6 +140,7 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Pu
     return { kind: "not_found" };
   }
   const content = resolveContent(version.spec, readLocalized(revision.content)[locale], locale);
+  const template = await LandingPageTemplate.findById(version.templateId).select("key").lean();
   return {
     kind: "ok",
     slug: label,
@@ -139,9 +152,11 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Pu
       publishedAt: (revision.createdAt ?? new Date()).toISOString(),
     },
     templateVersion: { version: version.version },
+    template: { key: template?.key ?? "custom" },
     spec: version.spec,
     content,
     seo: resolveSeo(version.spec, content),
     assetBaseUrl: landingAssetBaseUrl(),
+    analytics: analyticsConfigOf(merchant.landingTracking),
   };
 }

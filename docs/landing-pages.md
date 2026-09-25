@@ -21,6 +21,7 @@ packages/landing          one template system, shared by every surface
   src/templates*.ts       system templates: BD Modern Shop, BD Premium Brand,
                           Launch, Showcase, Local Business (+ Bangla copy)
   src/edit-target.ts      click-to-edit: element path → schema field (editor preview)
+  src/analytics.ts        Meta Pixel event catalogue + Pixel ID validation (docs/landing-analytics.md)
   src/react/*             trusted section components, ProductCard, LandingRenderer
 
 packages/db               LandingPageTemplate, LandingPageTemplateVersion,

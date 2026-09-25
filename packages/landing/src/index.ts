@@ -71,6 +71,17 @@ export type { PreviewDevice, PreviewRenderMessage, PreviewSelectMessage } from "
 
 export { isEditPath, resolveEditTarget } from "./edit-target.js";
 
+export {
+  LANDING_EVENTS,
+  META_PIXEL_ID_RE,
+  analyticsConfigOf,
+  isMetaPixelId,
+  linkKind,
+  normalizeMetaPixelId,
+  productCatalog,
+  productKey,
+} from "./analytics.js";
+export type { ContactMethod, LandingAnalyticsConfig, LandingEventName, TrackedProduct } from "./analytics.js";
 export type { EditTarget } from "./edit-target.js";
 
 export {

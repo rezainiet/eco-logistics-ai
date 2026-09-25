@@ -42,6 +42,7 @@ import { editorBnFont } from "./bn-font";
 import { DevicePreview, DeviceToggle } from "./device-preview";
 import { type FieldEditorEnv, FieldInput, LockedField, issuesAt } from "./field-editor";
 import { LandingStatusBadge } from "./status-badge";
+import { TrackingSettings } from "./tracking-settings";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -443,7 +444,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                   tab === t ? "bg-surface text-fg shadow-sm" : "text-fg-subtle hover:text-fg",
                 )}
               >
-                {t === "content" ? "Content" : "Languages & publishing"}
+                {t === "content" ? "Content" : "Settings & publishing"}
               </button>
             ))}
           </div>
@@ -649,6 +650,8 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                   </ul>
                 )}
               </div>
+
+              <TrackingSettings />
 
               <div className="space-y-2 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-fg">

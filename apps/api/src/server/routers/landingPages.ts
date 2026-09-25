@@ -35,6 +35,7 @@ import {
 import { loadTemplateVersion } from "../../lib/landing/templates.js";
 import { storeLandingAsset } from "../../lib/landing/assets.js";
 import { landingAssetBaseUrl, resolveLandingPageByHost } from "../../lib/landing/resolve.js";
+import { getLandingTracking, setLandingTracking } from "../../lib/landing/tracking.js";
 
 /**
  * Merchant landing pages. Tenant = the authenticated merchant: every
@@ -230,6 +231,14 @@ export const landingPagesRouter = router({
       const stored = await storeLandingAsset({ merchantId: id, actorId: id, dataUrl: input.dataUrl });
       return { ...stored, url: `${landingAssetBaseUrl()}/${stored.id}` };
     }),
+
+  /** Analytics & tracking for all of the merchant's published pages. */
+  tracking: protectedProcedure.query(({ ctx }) => getLandingTracking(merchantObjectId(ctx))),
+
+  // Turning tracking OFF must work for lapsed merchants too, so this is not billable.
+  setTracking: protectedProcedure
+    .input(z.object({ metaPixelId: z.string().max(40).nullable(), enabled: z.boolean() }))
+    .mutation(({ ctx, input }) => setLandingTracking(actorOf(ctx), input)),
 });
 
 /**

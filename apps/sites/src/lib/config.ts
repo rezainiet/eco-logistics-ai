@@ -47,3 +47,12 @@ export function assetBaseUrl(): string {
 export function indexingAllowed(): boolean {
   return process.env.LANDING_ALLOW_INDEXING === "true";
 }
+
+/**
+ * Kill switch for merchant analytics (Meta Pixel) on published pages.
+ * Default on; LANDING_ANALYTICS=off disables it platform-wide. The preview
+ * frame never loads analytics regardless of this setting.
+ */
+export function analyticsAllowed(): boolean {
+  return (process.env.LANDING_ANALYTICS ?? "on").trim().toLowerCase() !== "off";
+}

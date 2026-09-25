@@ -62,6 +62,7 @@ type AuditAction =
   | "landing.page_unpublished"
   | "landing.page_archived"
   | "landing.slug_claimed"
+  | "landing.tracking_updated"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
   | "merchant.gdpr_redact_customer"

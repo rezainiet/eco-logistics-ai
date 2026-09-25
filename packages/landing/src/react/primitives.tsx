@@ -408,12 +408,15 @@ export function ProductCard({
   ctx,
   variant = "cards",
   path = "",
+  trackKey,
 }: {
   product: ProductValue;
   ctx: Ctx;
   variant?: "cards" | "minimal";
   /** Click-to-edit path of this product within its section, e.g. "items.2". */
   path?: string;
+  /** Analytics product key ("products-2") — lets the public page attribute clicks. */
+  trackKey?: string;
 }) {
   const price = S.num(product.price);
   const oldPrice = S.num(product.oldPrice);
@@ -424,6 +427,7 @@ export function ProductCard({
   return (
     <article
       {...at()}
+      data-lp-product={trackKey}
       className={cx(
         "flex h-full flex-col overflow-hidden",
         minimal ? "bg-transparent" : "rounded-[var(--lp-radius)] bg-[var(--lp-bg)] shadow-sm ring-1 ring-black/5",

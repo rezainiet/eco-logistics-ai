@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { headers } from "next/headers";
-import type { Locale, PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
+import type { LandingAnalyticsConfig, Locale, PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
 import { normalizeHost } from "@ecom/landing";
 import { landingApiUrl } from "./config";
 
@@ -13,10 +13,12 @@ export type PublicLanding =
       defaultLocale: Locale;
       revision: { number: number; publishedAt: string };
       templateVersion: { version: number };
+      template?: { key: string };
       spec: TemplateSpec;
       content: PageContent;
       seo: ResolvedSeo;
       assetBaseUrl: string;
+      analytics?: LandingAnalyticsConfig | null;
     }
   | { kind: "not_found" }
   | { kind: "unavailable" }

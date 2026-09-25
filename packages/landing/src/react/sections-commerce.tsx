@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import { ctaHref } from "../cta.js";
+import { productKey } from "../analytics.js";
 import { safeUrl } from "../safe.js";
 import { SOCIAL_NETWORKS } from "../vocab.js";
 import {
@@ -294,7 +295,7 @@ function CategoryGrid({ values: v, env }: SectionProps) {
   );
 }
 
-function ProductGrid({ values: v, env }: SectionProps) {
+function ProductGrid({ id, values: v, env }: SectionProps) {
   const ctx = ctxOf(env);
   const minimal = S.str(v.style) === "minimal";
   const cols = S.str(v.columns);
@@ -310,7 +311,7 @@ function ProductGrid({ values: v, env }: SectionProps) {
           )}
         >
           {S.arr(v.items).map((p, i) => (
-            <ProductCard key={i} product={p} ctx={ctx} variant={minimal ? "minimal" : "cards"} path={`items.${i}`} />
+            <ProductCard key={i} product={p} ctx={ctx} variant={minimal ? "minimal" : "cards"} path={`items.${i}`} trackKey={productKey(id, i)} />
           ))}
         </div>
         <div className="mt-10 flex justify-center">
@@ -321,7 +322,7 @@ function ProductGrid({ values: v, env }: SectionProps) {
   );
 }
 
-function OfferBanner({ values: v, env }: SectionProps) {
+function OfferBanner({ id, values: v, env }: SectionProps) {
   const ctx = ctxOf(env);
   const editorial = S.str(v.style) === "editorial";
   const price = S.num(v.price);
@@ -330,7 +331,7 @@ function OfferBanner({ values: v, env }: SectionProps) {
   if (editorial) {
     return (
       <Container className="py-16 md:py-20">
-        <div className="grid items-stretch overflow-hidden bg-[var(--lp-surface)] ring-1 ring-black/10 md:grid-cols-2">
+        <div className="grid items-stretch overflow-hidden bg-[var(--lp-surface)] ring-1 ring-black/10 md:grid-cols-2" data-lp-product={productKey(id, 0)}>
           <LandingImage
             value={S.img(v.image)}
             env={env}
@@ -374,6 +375,7 @@ function OfferBanner({ values: v, env }: SectionProps) {
     <Container className="py-12 md:py-16">
       <div
         className="grid items-center gap-8 overflow-hidden rounded-[calc(var(--lp-radius)*1.5)] bg-[var(--lp-primary)] p-6 text-[color:var(--lp-on-primary)] sm:p-10 md:grid-cols-2"
+        data-lp-product={productKey(id, 0)}
       >
         <div>
           <div className="flex flex-wrap items-center gap-2">

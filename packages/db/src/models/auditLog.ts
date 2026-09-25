@@ -147,6 +147,7 @@ export const AUDIT_ACTIONS = [
   "landing.page_unpublished",
   "landing.page_archived",
   "landing.slug_claimed",
+  "landing.tracking_updated",
 ] as const;
 
 export const AUDIT_SUBJECT_TYPES = [
