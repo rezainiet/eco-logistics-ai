@@ -7,7 +7,9 @@ import {
   PREVIEW_DEVICES,
   PREVIEW_MESSAGE_SOURCE,
   type PreviewDevice,
+  type PreviewSelectMessage,
   type TemplateSpec,
+  parsePreviewSelect,
 } from "@ecom/landing";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +83,7 @@ export function DevicePreview({
   interactive = true,
   className,
   title = "Landing page preview",
+  edit,
 }: {
   spec: TemplateSpec;
   content: unknown;
@@ -92,6 +95,12 @@ export function DevicePreview({
   interactive?: boolean;
   className?: string;
   title?: string;
+  /**
+   * Click-to-edit: the frame outlines editable elements and reports clicks.
+   * `selected` is echoed to the frame so the highlight survives device
+   * switches and reloads. Omit for plain previews and thumbnails.
+   */
+  edit?: { selected: string | null; onSelect: (msg: PreviewSelectMessage) => void };
 }) {
   const url = previewUrl();
   const target = url ? originOf(url) : null;
@@ -114,15 +123,26 @@ export function DevicePreview({
   const post = useCallback(() => {
     const win = frame.current?.contentWindow;
     if (!win || !target) return;
-    win.postMessage({ source: PREVIEW_MESSAGE_SOURCE, type: "render", spec, content, locale }, target);
-  }, [spec, content, locale, target]);
+    win.postMessage(
+      { source: PREVIEW_MESSAGE_SOURCE, type: "render", spec, content, locale, ...(edit ? { edit: { selected: edit.selected } } : {}) },
+      target,
+    );
+  }, [spec, content, locale, target, edit?.selected, !!edit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onSelect = useRef(edit?.onSelect);
+  onSelect.current = edit?.onSelect;
 
   // The frame announces itself when its listener is attached.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.origin !== target || e.source !== frame.current?.contentWindow) return;
       const data = e.data as { source?: string; type?: string } | null;
-      if (data?.source === PREVIEW_MESSAGE_SOURCE && data.type === "ready") setReady(true);
+      if (data?.source !== PREVIEW_MESSAGE_SOURCE) return;
+      if (data.type === "ready") setReady(true);
+      if (data.type === "select") {
+        const sel = parsePreviewSelect(e.data);
+        if (sel) onSelect.current?.(sel);
+      }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);

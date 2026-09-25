@@ -65,8 +65,13 @@ export {
   PREVIEW_DEVICES,
   PREVIEW_MESSAGE_SOURCE,
   parsePreviewMessage,
+  parsePreviewSelect,
 } from "./preview.js";
-export type { PreviewDevice, PreviewRenderMessage } from "./preview.js";
+export type { PreviewDevice, PreviewRenderMessage, PreviewSelectMessage } from "./preview.js";
+
+export { isEditPath, resolveEditTarget } from "./edit-target.js";
+
+export type { EditTarget } from "./edit-target.js";
 
 export {
   SPEC_VERSION,

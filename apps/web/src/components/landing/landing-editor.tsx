@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -13,8 +13,10 @@ import {
   Languages,
   Loader2,
   PenLine,
+  MousePointerClick,
   RefreshCw,
   Save,
+  X,
 } from "lucide-react";
 import {
   LOCALE_LABELS,
@@ -22,9 +24,11 @@ import {
   type LocalizedContent,
   type PageContent,
   type PreviewDevice,
+  type PreviewSelectMessage,
   type TemplateSpec,
   effectiveSections,
   isLocale,
+  resolveEditTarget,
   validateLocalizedContent,
 } from "@ecom/landing";
 import { trpc } from "@/lib/trpc";
@@ -55,6 +59,9 @@ function assetUrlFor(base: string) {
 
 type Confirm = null | "publish" | "unpublish" | "slug" | { restore: number };
 
+/** Brief highlight on the field a preview click opened. */
+const FLASH = ["ring-2", "ring-brand/60", "ring-offset-2", "ring-offset-surface"];
+
 export function LandingEditor({ pageId }: { pageId: string }) {
   const utils = trpc.useUtils();
   const query = trpc.landingPages.get.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
@@ -72,6 +79,11 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const [pane, setPane] = useState<"edit" | "preview">("edit");
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [langDraft, setLangDraft] = useState<{ locales: Locale[]; defaultLocale: Locale } | null>(null);
+  // Click-to-edit: schema path of the selected element ("hero.headline", "products.items.2").
+  const [selected, setSelected] = useState<{ path: string; label: string } | null>(null);
+  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null);
+  const formRef = useRef<HTMLDivElement>(null);
+  const localeChosen = useRef(false);
 
   // Adopt server state whenever a fresh copy arrives and we hold no edits.
   useEffect(() => {
@@ -81,7 +93,11 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     setSlugInput(data.page.slug ?? "");
     setName(data.page.name);
     setLangDraft({ locales: data.page.locales, defaultLocale: data.page.defaultLocale });
-    setLocale((l) => (data.page.locales.includes(l) ? l : data.page.defaultLocale));
+    // Open in the page's default language; afterwards keep the language being edited.
+    // (Read the ref now — React runs the updater later, after it has been set.)
+    const first = !localeChosen.current;
+    localeChosen.current = true;
+    setLocale((l) => (!first && data.page.locales.includes(l) ? l : data.page.defaultLocale));
     setConflict(false);
   }, [data, dirty]);
 
@@ -165,6 +181,64 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     setSlugInput(r.slug);
     toast.success("Subdomain saved", r.slug);
     await utils.landingPages.get.invalidate({ id: pageId });
+  };
+
+  // A click in the preview: resolve the path against the template schema
+  // (never the DOM) and open exactly that field in the current language.
+  const onPreviewSelect = useCallback(
+    (msg: PreviewSelectMessage) => {
+      if (!spec || msg.locale !== locale) return; // stale frame from another language
+      const target = resolveEditTarget(spec, locale, msg.path);
+      if (target.kind === "locked" || target.kind === "invalid") {
+        toast.info("Template element — not editable");
+        return;
+      }
+      setSelected({ path: target.path, label: target.label });
+      setTab("content");
+      setPane("edit");
+      setReveal((r) => ({ path: target.path, n: (r?.n ?? 0) + 1 }));
+    },
+    [spec, locale],
+  );
+
+  // Open the section, scroll the field into view, flash it and focus its input.
+  useEffect(() => {
+    if (!reveal) return;
+    const raf = requestAnimationFrame(() => {
+      const root = formRef.current;
+      if (!root) return;
+      const parts = reveal.path.split(".");
+      const details = root.querySelector<HTMLDetailsElement>(`details[data-section-id="${CSS.escape(parts[0]!)}"]`);
+      if (details) details.open = true;
+      let anchor: HTMLElement | null = null;
+      for (let n = parts.length; n > 1 && !anchor; n--) {
+        anchor = root.querySelector<HTMLElement>(`[data-field-path="${CSS.escape(parts.slice(0, n).join("."))}"]`);
+      }
+      const target = anchor ?? details;
+      if (!target) return;
+      // A field is centred; a whole section is shown from its top.
+      target.scrollIntoView({ block: anchor ? "center" : "start", behavior: "smooth" });
+      target.classList.add(...FLASH);
+      setTimeout(() => target.classList.remove(...FLASH), 1600);
+      // Keyboard focus only with a mouse/trackpad — on touch it would pop the keyboard.
+      if (anchor && window.matchMedia("(pointer: fine)").matches) {
+        const input =
+          anchor.querySelector<HTMLElement>("input:not([type=file]):not([type=hidden]):not([type=checkbox]), textarea, select") ??
+          anchor.querySelector<HTMLElement>("button");
+        input?.focus({ preventScroll: true });
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [reveal]);
+
+  // Form → preview: focusing a field outside the current selection selects it,
+  // so the preview scrolls to and outlines what is being edited.
+  const onFormFocus = (e: FocusEvent<HTMLDivElement>) => {
+    if (!spec) return;
+    const path = (e.target as HTMLElement).closest<HTMLElement>("[data-field-path]")?.dataset.fieldPath;
+    if (!path || (selected && (path === selected.path || path.startsWith(`${selected.path}.`)))) return;
+    const target = resolveEditTarget(spec, locale, path);
+    if (target.kind === "field") setSelected({ path: target.path, label: target.label });
   };
 
   if (query.isLoading || !data || !spec || !content || !settings) {
@@ -255,6 +329,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         content={localeContent}
         locale={locale}
         device={device}
+        edit={{ selected: selected?.path ?? null, onSelect: onPreviewSelect }}
         viewportHeight={typeof window !== "undefined" ? Math.max(420, Math.round(window.innerHeight * 0.74)) : 640}
       />
     </div>
@@ -374,14 +449,33 @@ export function LandingEditor({ pageId }: { pageId: string }) {
           </div>
 
           {tab === "content" ? (
-            <div className="space-y-2">
+            <div className="space-y-2" ref={formRef} onFocus={onFormFocus}>
               {localeTabs}
+              {selected ? (
+                <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-xs text-fg" role="status">
+                  <MousePointerClick className="h-3.5 w-3.5 shrink-0 text-success" />
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="text-fg-subtle">Selected: </span>
+                    {selected.label}
+                  </span>
+                  <button type="button" onClick={() => setSelected(null)} className="rounded p-1 text-fg-subtle hover:text-fg" aria-label="Clear selection">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <p className="px-1 text-2xs text-fg-faint">Tip: click any text, image or button in the preview to edit it.</p>
+              )}
               {sections.map((section, i) => {
                 const editable = section.fields.filter((f) => f.editable);
                 const locked = section.fields.filter((f) => !f.editable);
                 const errCount = issuesAt(issues, section.id).length;
                 return (
-                  <details key={`${locale}:${section.id}`} className="group rounded-lg border border-stroke/10 bg-surface" open={i === 3}>
+                  <details
+                    key={`${locale}:${section.id}`}
+                    data-section-id={section.id}
+                    className="group rounded-lg border border-stroke/10 bg-surface"
+                    open={i === 3}
+                  >
                     <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-fg">
                       <span>
                         {section.label}

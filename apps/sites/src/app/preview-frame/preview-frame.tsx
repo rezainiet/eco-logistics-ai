@@ -3,6 +3,7 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { PREVIEW_MESSAGE_SOURCE, type PreviewRenderMessage, parsePreviewMessage } from "@ecom/landing";
 import { LandingRenderer, assetEnv } from "@ecom/landing/react";
+import { EditOverlay } from "./edit-overlay";
 
 /**
  * Receives drafts from the dashboard over postMessage.
@@ -14,7 +15,9 @@ import { LandingRenderer, assetEnv } from "@ecom/landing/react";
  *   - The payload must parse as a preview message; the spec is re-validated
  *     and content is resolved by the renderer like any stored content.
  *   - Asset URLs come from this app's configuration, never from the parent.
- *   - Links are inert: clicking a CTA in the preview never navigates.
+ *   - Links are inert: clicking a CTA in the preview never navigates. In
+ *     click-to-edit mode a click selects the element instead and its schema
+ *     path is posted back — only to the origin whose draft we are rendering.
  */
 function parentOriginOf(): string | null {
   const ancestors = (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins;
@@ -28,6 +31,8 @@ function parentOriginOf(): string | null {
 
 export function PreviewFrame({ allowedOrigins, assetBaseUrl }: { allowedOrigins: string[]; assetBaseUrl: string }) {
   const [msg, setMsg] = useState<PreviewRenderMessage | null>(null);
+  // Origin of the editor whose drafts we render — click-to-edit replies go only there.
+  const [editorOrigin, setEditorOrigin] = useState<string | null>(null);
 
   useEffect(() => {
     // Phones and tablets use overlay scrollbars; a classic desktop scrollbar
@@ -41,7 +46,9 @@ export function PreviewFrame({ allowedOrigins, assetBaseUrl }: { allowedOrigins:
     const onMessage = (event: MessageEvent) => {
       if (!allowed.has(event.origin)) return;
       const parsed = parsePreviewMessage(event.data);
-      if (parsed) setMsg(parsed);
+      if (!parsed) return;
+      setMsg(parsed);
+      setEditorOrigin(event.origin);
     };
     window.addEventListener("message", onMessage);
     // Announce readiness to the embedding editor — only to its exact origin,
@@ -71,9 +78,17 @@ export function PreviewFrame({ allowedOrigins, assetBaseUrl }: { allowedOrigins:
       </main>
     );
   }
+  const editing = msg.edit !== undefined;
   return (
-    <div onClickCapture={stopLinks}>
-      <LandingRenderer spec={msg.spec} content={msg.content} locale={msg.locale} env={assetEnv(assetBaseUrl)} className="min-h-screen" />
+    <div onClickCapture={editing ? undefined : stopLinks}>
+      <LandingRenderer
+        spec={msg.spec}
+        content={msg.content}
+        locale={msg.locale}
+        env={{ ...assetEnv(assetBaseUrl), editable: editing }}
+        className="min-h-screen"
+      />
+      {editing ? <EditOverlay spec={msg.spec} locale={msg.locale} selected={msg.edit?.selected ?? null} parentOrigin={editorOrigin} /> : null}
     </div>
   );
 }

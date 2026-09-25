@@ -21,6 +21,23 @@ export interface RenderEnv {
   /** Content locale — drives UI strings, digits and typography. Default "en". */
   locale?: Locale;
   numerals?: NumeralMode;
+  /**
+   * Editor preview only: tag elements with the schema field they display
+   * (`data-lp-field`) so a click can open that field. Never set on public
+   * pages, whose markup therefore carries no editor attributes.
+   */
+  editable?: boolean;
+}
+
+/** Attributes naming the schema field an element shows — empty unless editable. */
+export type EditAttrs = { "data-lp-field"?: string };
+
+/**
+ * Click-to-edit tag. `path` is relative to the section and uses schema keys
+ * only (`headline`, `items.2.price`), so it follows the template, not the DOM.
+ */
+export function ed(env: RenderEnv, ...path: Array<string | number>): EditAttrs {
+  return env.editable ? { "data-lp-field": path.join(".") } : {};
 }
 
 export interface Ctx {
@@ -91,6 +108,7 @@ export function CtaButton({
   size = "md",
   className,
   requireLink = false,
+  edit,
 }: {
   value: CtaValue | null;
   variant?: "primary" | "secondary" | "inverse" | "outline-inverse" | "ghost";
@@ -98,6 +116,7 @@ export function CtaButton({
   className?: string;
   /** Render nothing (instead of an inert button) when there is no safe link. */
   requireLink?: boolean;
+  edit?: EditAttrs;
 }) {
   if (!value) return null;
   const target = ctaHref(value.action);
@@ -119,7 +138,7 @@ export function CtaButton({
     // No safe destination (e.g. an unfinished draft): show the button so
     // the layout is honest, but it goes nowhere.
     return (
-      <span className={cls} aria-disabled="true" data-cta-unlinked="">
+      <span className={cls} aria-disabled="true" data-cta-unlinked="" {...edit}>
         {value.label}
       </span>
     );
@@ -128,6 +147,7 @@ export function CtaButton({
     <a
       href={target.href}
       className={cls}
+      {...edit}
       {...(target.external ? { target: "_blank", rel: "noopener noreferrer nofollow ugc" } : {})}
     >
       {value.label}
@@ -135,11 +155,11 @@ export function CtaButton({
   );
 }
 
-export function RichText({ value, className }: { value: string; className?: string }) {
+export function RichText({ value, className, edit }: { value: string; className?: string; edit?: EditAttrs }) {
   const blocks = parseRichText(value);
   if (!blocks.length) return null;
   return (
-    <div className={cx("space-y-4 leading-[var(--lp-lh-body)]", className)}>
+    <div className={cx("space-y-4 leading-[var(--lp-lh-body)]", className)} {...edit}>
       {blocks.map((block, i) =>
         block.type === "paragraph" ? (
           <p key={i}>
@@ -175,18 +195,21 @@ export function LandingImage({
   className,
   placeholder = "gradient",
   icon = "sparkles",
+  edit,
 }: {
   value: ImageValue | null;
   env: RenderEnv;
   className?: string;
   placeholder?: "gradient" | "soft" | "none";
   icon?: IconName;
+  edit?: EditAttrs;
 }) {
   const src = value ? env.assetUrl(value.assetId) : null;
   if (!src) {
     if (placeholder === "none") return null;
     return (
       <div
+        {...edit}
         aria-hidden="true"
         className={cx(
           "flex items-center justify-center",
@@ -206,7 +229,7 @@ export function LandingImage({
     );
   }
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt={value?.alt ?? ""} loading="lazy" decoding="async" className={cx("object-cover", className)} />;
+  return <img src={src} alt={value?.alt ?? ""} loading="lazy" decoding="async" className={cx("object-cover", className)} {...edit} />;
 }
 
 type IconShape = { paths: string[]; circles?: Array<[number, number, number]> };
@@ -266,20 +289,39 @@ export function Icon({ name, className }: { name: string; className?: string }) 
   );
 }
 
-export function SectionHeading({ title, intro, align = "center" }: { title: string; intro?: string; align?: "center" | "left" }) {
+export function SectionHeading({
+  title,
+  intro,
+  align = "center",
+  env,
+}: {
+  title: string;
+  intro?: string;
+  align?: "center" | "left";
+  /** Pass to make the heading (`heading`) and intro (`intro`) click-to-edit. */
+  env?: RenderEnv;
+}) {
   if (!title && !intro) return null;
   return (
     <div className={cx("mb-10 max-w-2xl", align === "center" && "mx-auto text-center")}>
-      {title ? <h2 className={cx("text-3xl sm:text-4xl", TYPE.heading)}>{title}</h2> : null}
-      {intro ? <p className="mt-4 text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{intro}</p> : null}
+      {title ? (
+        <h2 className={cx("text-3xl sm:text-4xl", TYPE.heading)} {...(env ? ed(env, "heading") : {})}>
+          {title}
+        </h2>
+      ) : null}
+      {intro ? (
+        <p className="mt-4 text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]" {...(env ? ed(env, "intro") : {})}>
+          {intro}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-export function Stars({ count, label }: { count: number; label: string }) {
+export function Stars({ count, label, edit }: { count: number; label: string; edit?: EditAttrs }) {
   if (!count) return null;
   return (
-    <div className="flex gap-0.5 text-[color:var(--lp-accent)]" role="img" aria-label={label}>
+    <div className="flex gap-0.5 text-[color:var(--lp-accent)]" role="img" aria-label={label} {...edit}>
       {Array.from({ length: 5 }).map((_, i) => (
         <svg key={i} viewBox="0 0 24 24" className="h-4 w-4" fill={i < count ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
           <path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" />
@@ -297,19 +339,24 @@ export function PriceRow({
   ctx,
   size = "md",
   inverse = false,
+  base,
 }: {
   price: number | null;
   oldPrice: number | null;
   ctx: Ctx;
   size?: "md" | "lg";
   inverse?: boolean;
+  /** Click-to-edit prefix for the `price` / `oldPrice` fields ("" = section level). */
+  base?: string;
 }) {
   const current = ctx.money(price);
   if (!current) return null;
   const old = oldPrice !== null && price !== null && oldPrice > price ? ctx.money(oldPrice) : null;
+  const at = (key: string) => (base === undefined ? {} : ed(ctx.env, ...(base ? [base, key] : [key])));
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
       <span
+        {...at("price")}
         className={cx(
           "whitespace-nowrap font-bold",
           size === "lg" ? "text-3xl" : "text-lg",
@@ -319,7 +366,10 @@ export function PriceRow({
         {current}
       </span>
       {old ? (
-        <span className={cx("whitespace-nowrap line-through", size === "lg" ? "text-lg" : "text-sm", inverse ? "opacity-70" : "text-[color:var(--lp-muted)]")}>
+        <span
+          {...at("oldPrice")}
+          className={cx("whitespace-nowrap line-through", size === "lg" ? "text-lg" : "text-sm", inverse ? "opacity-70" : "text-[color:var(--lp-muted)]")}
+        >
           {old}
         </span>
       ) : null}
@@ -353,14 +403,27 @@ export interface ProductValue {
  * ratio, two-line name slot and a bottom-aligned button keep every card in
  * a row the same height regardless of name length or language.
  */
-export function ProductCard({ product, ctx, variant = "cards" }: { product: ProductValue; ctx: Ctx; variant?: "cards" | "minimal" }) {
+export function ProductCard({
+  product,
+  ctx,
+  variant = "cards",
+  path = "",
+}: {
+  product: ProductValue;
+  ctx: Ctx;
+  variant?: "cards" | "minimal";
+  /** Click-to-edit path of this product within its section, e.g. "items.2". */
+  path?: string;
+}) {
   const price = S.num(product.price);
   const oldPrice = S.num(product.oldPrice);
   const badge = S.str(product.badge);
   const rating = Number(S.str(product.rating)) || 0;
   const minimal = variant === "minimal";
+  const at = (key?: string) => (path ? ed(ctx.env, ...(key ? [path, key] : [path])) : {});
   return (
     <article
+      {...at()}
       className={cx(
         "flex h-full flex-col overflow-hidden",
         minimal ? "bg-transparent" : "rounded-[var(--lp-radius)] bg-[var(--lp-bg)] shadow-sm ring-1 ring-black/5",
@@ -373,22 +436,26 @@ export function ProductCard({ product, ctx, variant = "cards" }: { product: Prod
           placeholder="soft"
           icon="bag"
           className={cx("aspect-square w-full", minimal && "rounded-[var(--lp-radius)]")}
+          edit={at("image")}
         />
         {badge ? (
-          <span className="absolute left-2 top-2 rounded-full bg-[var(--lp-primary)] px-2.5 py-1 text-xs font-semibold text-[color:var(--lp-on-primary)]">
+          <span
+            {...at("badge")}
+            className="absolute left-2 top-2 rounded-full bg-[var(--lp-primary)] px-2.5 py-1 text-xs font-semibold text-[color:var(--lp-on-primary)]"
+          >
             {badge}
           </span>
         ) : null}
         <DiscountBadge price={price} oldPrice={oldPrice} ctx={ctx} className="absolute right-2 top-2" />
       </div>
       <div className={cx("flex flex-1 flex-col gap-2", minimal ? "pt-4" : "p-3 sm:p-4")}>
-        <h3 className={cx("line-clamp-2 min-h-[2lh] font-semibold leading-[var(--lp-lh-snug)]", minimal ? "text-lg" : "text-base")}>
+        <h3 {...at("name")} className={cx("line-clamp-2 min-h-[2lh] font-semibold leading-[var(--lp-lh-snug)]", minimal ? "text-lg" : "text-base")}>
           {S.str(product.name)}
         </h3>
-        {rating ? <Stars count={rating} label={ctx.t.stars(rating)} /> : null}
-        <PriceRow price={price} oldPrice={oldPrice} ctx={ctx} />
+        {rating ? <Stars count={rating} label={ctx.t.stars(rating)} edit={at("rating")} /> : null}
+        <PriceRow price={price} oldPrice={oldPrice} ctx={ctx} base={path || undefined} />
         <div className="mt-auto pt-2">
-          <CtaButton value={S.cta(product.cta)} size="sm" variant={minimal ? "secondary" : "primary"} className="w-full" />
+          <CtaButton value={S.cta(product.cta)} size="sm" variant={minimal ? "secondary" : "primary"} className="w-full" edit={at("cta")} />
         </div>
       </div>
     </article>

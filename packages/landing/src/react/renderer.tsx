@@ -116,7 +116,13 @@ export function LandingRenderer({ spec, content, env, locale = "en", className }
         const Component = SECTION_COMPONENTS[sectionTypeKey(section.type, section.typeVersion)];
         if (!Component) return null;
         return (
-          <section key={section.id} id={section.id} data-section-type={section.type} className="scroll-mt-4">
+          <section
+            key={section.id}
+            id={section.id}
+            data-section-type={section.type}
+            className="scroll-mt-4"
+            {...(env.editable ? { "data-lp-section": section.id } : {})}
+          >
             <Component id={section.id} values={resolved[section.id] ?? {}} env={sectionEnv} />
           </section>
         );

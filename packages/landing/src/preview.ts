@@ -1,3 +1,4 @@
+import { isEditPath } from "./edit-target.js";
 import { type Locale, isLocale } from "./locales.js";
 import { type TemplateSpec, parseTemplateSpec } from "./spec.js";
 
@@ -10,7 +11,13 @@ import { type TemplateSpec, parseTemplateSpec } from "./spec.js";
  * components as the published page — PREVIEW = PUBLISHED PAGE.
  *
  *   frame  → parent : { source, type: "ready" }
- *   parent → frame  : { source, type: "render", spec, content, locale }
+ *   parent → frame  : { source, type: "render", spec, content, locale, edit? }
+ *   frame  → parent : { source, type: "select", path, locale }   (edit mode only)
+ *
+ * `edit` switches the frame into click-to-edit mode: elements carry their
+ * schema path, hovering outlines them and a click reports the path back.
+ * `edit.selected` is the editor's current selection, so it survives device
+ * switches and iframe reloads. Without `edit` the frame is a plain preview.
  *
  * The frame accepts messages only from configured editor origins and only
  * in this exact shape; the spec is re-validated and content is resolved by
@@ -31,9 +38,27 @@ export interface PreviewRenderMessage {
   spec: TemplateSpec;
   content: unknown;
   locale: Locale;
+  edit?: { selected: string | null };
+}
+
+export interface PreviewSelectMessage {
+  source: typeof PREVIEW_MESSAGE_SOURCE;
+  type: "select";
+  /** Schema path of the clicked element — untrusted; resolve with resolveEditTarget. */
+  path: string;
+  /** Locale the frame was rendering when clicked; the editor ignores stale ones. */
+  locale: Locale;
 }
 
 const MAX_MESSAGE_BYTES = 400_000;
+
+export function parsePreviewSelect(data: unknown): PreviewSelectMessage | null {
+  if (!data || typeof data !== "object") return null;
+  const m = data as Record<string, unknown>;
+  if (m.source !== PREVIEW_MESSAGE_SOURCE || m.type !== "select") return null;
+  if (!isLocale(m.locale) || !isEditPath(m.path)) return null;
+  return { source: PREVIEW_MESSAGE_SOURCE, type: "select", path: m.path, locale: m.locale };
+}
 
 export function parsePreviewMessage(data: unknown): PreviewRenderMessage | null {
   if (!data || typeof data !== "object") return null;
@@ -47,5 +72,10 @@ export function parsePreviewMessage(data: unknown): PreviewRenderMessage | null 
   }
   const spec = parseTemplateSpec(m.spec);
   if (!spec.ok) return null;
-  return { source: PREVIEW_MESSAGE_SOURCE, type: "render", spec: spec.spec, content: m.content, locale: m.locale };
+  const msg: PreviewRenderMessage = { source: PREVIEW_MESSAGE_SOURCE, type: "render", spec: spec.spec, content: m.content, locale: m.locale };
+  if (m.edit && typeof m.edit === "object") {
+    const selected = (m.edit as { selected?: unknown }).selected;
+    msg.edit = { selected: isEditPath(selected) ? selected : null };
+  }
+  return msg;
 }

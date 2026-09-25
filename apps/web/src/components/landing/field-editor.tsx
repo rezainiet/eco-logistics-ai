@@ -51,15 +51,18 @@ function FieldShell({
   required,
   errors,
   children,
+  path,
 }: {
   label: string;
   help?: string;
   required?: boolean;
   errors: string[];
   children: ReactNode;
+  /** Click-to-edit anchor: the preview selects a field by this path. */
+  path: string;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5 rounded-md" data-field-path={path}>
       <div className="text-xs font-medium text-fg-muted">
         {label}
         {required ? <span className="ml-0.5 text-danger">*</span> : null}
@@ -96,7 +99,7 @@ export function FieldInput({
 }) {
   const errors = issuesAt(issues, path);
   const shell = (children: ReactNode) => (
-    <FieldShell label={field.label} help={field.help} required={field.required} errors={errors}>
+    <FieldShell label={field.label} help={field.help} required={field.required} errors={errors} path={path}>
       {children}
     </FieldShell>
   );
@@ -132,6 +135,7 @@ export function FieldInput({
           label={field.label}
           required={field.required}
           errors={errors}
+          path={path}
           help={field.help ?? "Blank line = new paragraph. **bold**, _italic_, and lines starting with “- ” for bullets."}
         >
           <textarea
@@ -168,7 +172,7 @@ export function FieldInput({
       );
     case "toggle":
       return (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-stroke/10 px-3 py-2">
+        <div className="flex items-center justify-between gap-3 rounded-md border border-stroke/10 px-3 py-2" data-field-path={path}>
           <span className="text-sm text-fg-muted">{field.label}</span>
           <Switch checked={value === true} onCheckedChange={(v) => onChange(v)} />
         </div>
@@ -390,7 +394,7 @@ function RepeaterInput({
     onChange(next);
   };
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 rounded-md" data-field-path={path}>
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-fg-muted">
           {field.label}
@@ -410,7 +414,7 @@ function RepeaterInput({
         </Button>
       </div>
       {items.map((item, idx) => (
-        <div key={idx} className="space-y-3 rounded-md border border-stroke/10 bg-surface-overlay/40 p-3">
+        <div key={idx} className="space-y-3 rounded-md border border-stroke/10 bg-surface-overlay/40 p-3" data-field-path={`${path}.${idx}`}>
           <div className="flex items-center justify-between">
             <span className="text-2xs font-semibold uppercase tracking-wide text-fg-faint">
               {field.itemLabel} {idx + 1}

@@ -20,6 +20,7 @@ packages/landing          one template system, shared by every surface
   src/preview.ts          editor ↔ preview-frame message protocol
   src/templates*.ts       system templates: BD Modern Shop, BD Premium Brand,
                           Launch, Showcase, Local Business (+ Bangla copy)
+  src/edit-target.ts      click-to-edit: element path → schema field (editor preview)
   src/react/*             trusted section components, ProductCard, LandingRenderer
 
 packages/db               LandingPageTemplate, LandingPageTemplateVersion,
@@ -80,6 +81,33 @@ in an iframe at the real device width (1440 / 768 / 390) and `postMessage` the d
 to it. The frame only accepts messages from `LANDING_EDITOR_ORIGINS`, can only be
 framed by those origins (CSP frame-ancestors), is `noindex` and `no-store`, and
 re-validates the spec and content before rendering.
+
+**Click-to-edit:** in the editor preview, clicking any text, image, button, product,
+category, testimonial or footer opens exactly that field in the form (current language
+only), scrolls to it, flashes it and focuses its input. Hovering outlines the element and
+names it ("Promotional hero → Headline"); the selection stays outlined across edits,
+device switches and frame reloads, and focusing a form field outlines it in the preview.
+
+```
+renderer (editor preview only)      <section data-lp-section="hero"> … <h1 data-lp-field="headline">
+                                     products: data-lp-field="items.2" (card) / "items.2.price" …
+preview frame (edit-overlay.tsx)    hover outline · click → postMessage {type:"select", path, locale}
+                                     (only to the origin whose draft it renders)
+editor (landing-editor.tsx)         resolveEditTarget(spec, locale, path)  ← schema decides
+                                     field → open section, focus [data-field-path="hero.headline"]
+                                     locked / unknown → "Template element — not editable"
+```
+
+- Paths are schema keys (`sectionId.fieldKey[.index.subKey]`), emitted by the section
+  components through one helper (`ed(env, …)`), never DOM selectors — they follow the
+  template. A test renders every system template in every language and fails if any
+  tagged element does not resolve to an editable field.
+- The schema stays the source of truth: the path is re-validated syntactically in the
+  frame and editor (`isEditPath`) and resolved against the template; locked fields are
+  never tagged and never opened. Clicking selects — it never navigates or runs anything.
+- Public pages render with `editable` off, so their HTML carries no editor attributes.
+- Stale clicks from a frame rendering another language are ignored, so a click can never
+  open the wrong language's field.
 
 **Prices:** `price` fields hold numbers; `formatBDT` renders `৳ ১,২৯০` (bn) or
 `৳ 1,290` (en), switchable per page (`theme.numerals`: auto / 123 / ১২৩). Discount %
