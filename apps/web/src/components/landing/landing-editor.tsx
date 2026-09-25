@@ -10,17 +10,23 @@ import {
   Eye,
   Globe,
   History,
+  Languages,
   Loader2,
+  PenLine,
   RefreshCw,
   Save,
 } from "lucide-react";
 import {
+  LOCALE_LABELS,
+  type Locale,
+  type LocalizedContent,
   type PageContent,
+  type PreviewDevice,
   type TemplateSpec,
   effectiveSections,
-  validateContent,
+  isLocale,
+  validateLocalizedContent,
 } from "@ecom/landing";
-import { assetEnv } from "@ecom/landing/react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -28,8 +34,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
+import { editorBnFont } from "./bn-font";
+import { DevicePreview, DeviceToggle } from "./device-preview";
 import { type FieldEditorEnv, FieldInput, LockedField, issuesAt } from "./field-editor";
-import { ScaledLandingPreview } from "./landing-preview";
 import { LandingStatusBadge } from "./status-badge";
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -41,6 +48,11 @@ function readAsDataUrl(file: File): Promise<string> {
   });
 }
 
+function assetUrlFor(base: string) {
+  const b = base.replace(/\/+$/, "");
+  return (id: string) => (/^[a-f0-9]{24}$/.test(id) ? `${b}/${id}` : null);
+}
+
 type Confirm = null | "publish" | "unpublish" | "slug" | { restore: number };
 
 export function LandingEditor({ pageId }: { pageId: string }) {
@@ -48,7 +60,8 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const query = trpc.landingPages.get.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
   const data = query.data;
 
-  const [content, setContent] = useState<PageContent | null>(null);
+  const [content, setContent] = useState<LocalizedContent | null>(null);
+  const [locale, setLocale] = useState<Locale>("en");
   const [baseRevision, setBaseRevision] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -56,14 +69,19 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const [slugInput, setSlugInput] = useState("");
   const [name, setName] = useState("");
   const [tab, setTab] = useState<"content" | "publish">("content");
+  const [pane, setPane] = useState<"edit" | "preview">("edit");
+  const [device, setDevice] = useState<PreviewDevice>("desktop");
+  const [langDraft, setLangDraft] = useState<{ locales: Locale[]; defaultLocale: Locale } | null>(null);
 
   // Adopt server state whenever a fresh copy arrives and we hold no edits.
   useEffect(() => {
     if (!data || dirty) return;
-    setContent(data.draftContent as PageContent);
+    setContent(data.draftContent as LocalizedContent);
     setBaseRevision(data.page.draftRevision);
     setSlugInput(data.page.slug ?? "");
     setName(data.page.name);
+    setLangDraft({ locales: data.page.locales, defaultLocale: data.page.defaultLocale });
+    setLocale((l) => (data.page.locales.includes(l) ? l : data.page.defaultLocale));
     setConflict(false);
   }, [data, dirty]);
 
@@ -77,15 +95,23 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
+  // Phones and small tablets start on the phone-sized preview.
+  useEffect(() => {
+    if (window.innerWidth < 1024) setDevice("mobile");
+  }, []);
+
   const spec = data?.spec as TemplateSpec | undefined;
-  const sections = useMemo(() => (spec ? effectiveSections(spec) : []), [spec]);
+  const settings = data ? { locales: data.page.locales, defaultLocale: data.page.defaultLocale } : null;
+  const sections = useMemo(() => (spec ? effectiveSections(spec, locale) : []), [spec, locale]);
   const draftCheck = useMemo(
-    () => (spec && content ? validateContent(spec, content, "draft") : null),
-    [spec, content],
+    () => (spec && content && settings ? validateLocalizedContent(spec, content, settings, "draft") : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spec, content, settings?.locales.join(","), settings?.defaultLocale],
   );
   const publishCheck = useMemo(
-    () => (spec && content ? validateContent(spec, content, "publish") : null),
-    [spec, content],
+    () => (spec && content && settings ? validateLocalizedContent(spec, content, settings, "publish") : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spec, content, settings?.locales.join(","), settings?.defaultLocale],
   );
 
   const onError = (title: string) => (err: { message: string; data?: { code?: string } | null }) => {
@@ -100,6 +126,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const rename = trpc.landingPages.rename.useMutation({ onError: onError("Could not rename") });
   const restore = trpc.landingPages.restoreRevision.useMutation({ onError: onError("Could not restore") });
   const upgrade = trpc.landingPages.upgradeTemplate.useMutation({ onError: onError("Could not update template") });
+  const setLocales = trpc.landingPages.setLocales.useMutation({ onError: onError("Languages not saved") });
   const upload = trpc.landingPages.uploadAsset.useMutation();
 
   const refresh = async () => {
@@ -114,7 +141,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     const r = await save.mutateAsync({ id: pageId, content, expectedRevision: baseRevision }).catch(() => null);
     if (!r) return null;
     setBaseRevision(r.page.draftRevision);
-    setContent(r.content as PageContent);
+    setContent(r.content as LocalizedContent);
     setDirty(false);
     void utils.landingPages.get.invalidate({ id: pageId });
     toast.success("Draft saved", "Your live page is unchanged until you publish.");
@@ -140,7 +167,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     await utils.landingPages.get.invalidate({ id: pageId });
   };
 
-  if (query.isLoading || !data || !spec || !content) {
+  if (query.isLoading || !data || !spec || !content || !settings) {
     return (
       <div className="flex items-center gap-2 py-20 text-fg-subtle">
         {query.error ? (
@@ -159,11 +186,23 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const page = data.page;
   const archived = page.status === "archived";
   const busy = save.isLoading || publish.isLoading;
-  const issues = draftCheck?.issues ?? [];
+  const localePrefix = `${locale}.`;
+  const issues = (draftCheck?.issues ?? [])
+    .filter((i) => i.path.startsWith(localePrefix))
+    .map((i) => ({ ...i, path: i.path.slice(localePrefix.length) }));
   const blockers = publishCheck?.issues ?? [];
+  // "bn.order.cta" → "বাংলা · Order call to action" — merchants never see raw paths.
+  const blockerWhere = (path: string): string => {
+    const [loc, sectionId] = path.split(".");
+    const langLabel = loc && isLocale(loc) ? LOCALE_LABELS[loc].native : null;
+    const section = spec ? effectiveSections(spec, locale).find((s) => s.id === sectionId) : undefined;
+    return [langLabel, section?.label ?? sectionId].filter(Boolean).join(" · ");
+  };
+  const localeContent: PageContent = content[locale] ?? {};
   const sectionTargets = sections.filter((s) => s.visual).map((s) => ({ id: s.id, label: s.label }));
   const env: FieldEditorEnv = {
-    assetUrl: assetEnv(data.assetBaseUrl).assetUrl,
+    locale,
+    assetUrl: assetUrlFor(data.assetBaseUrl),
     sectionTargets,
     upload: async (file) => {
       const r = await upload.mutateAsync({ dataUrl: await readAsDataUrl(file) });
@@ -172,19 +211,64 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   };
 
   const updateField = (sectionId: string, key: string, value: unknown) => {
-    setContent((prev) => (prev ? { ...prev, [sectionId]: { ...(prev[sectionId] ?? {}), [key]: value } } : prev));
+    setContent((prev) => {
+      if (!prev) return prev;
+      const current = prev[locale] ?? {};
+      return { ...prev, [locale]: { ...current, [sectionId]: { ...(current[sectionId] ?? {}), [key]: value } } };
+    });
     setDirty(true);
   };
 
+  const localeTabs = page.locales.length > 1 && (
+    <div className="flex items-center gap-1 rounded-lg bg-surface-raised p-1 text-sm" role="tablist" aria-label="Content language">
+      {page.locales.map((l) => {
+        const errs = (draftCheck?.issues ?? []).filter((i) => i.path.startsWith(`${l}.`)).length;
+        return (
+          <button
+            key={l}
+            type="button"
+            role="tab"
+            aria-selected={l === locale}
+            onClick={() => setLocale(l)}
+            lang={l}
+            className={cn("flex-1 rounded-md px-3 py-1.5 font-medium", l === locale ? "bg-surface text-fg shadow-sm" : "text-fg-subtle hover:text-fg")}
+          >
+            {LOCALE_LABELS[l].native}
+            {l === page.defaultLocale ? <span className="ml-1 text-2xs text-fg-faint">default</span> : null}
+            {errs ? <Badge variant="destructive" className="ml-1.5">{errs}</Badge> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const previewPanel = (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <DeviceToggle device={device} onChange={setDevice} />
+        <span className="text-2xs text-fg-faint" lang={locale}>
+          {LOCALE_LABELS[locale].native} · live draft
+        </span>
+      </div>
+      <DevicePreview
+        spec={spec}
+        content={localeContent}
+        locale={locale}
+        device={device}
+        viewportHeight={typeof window !== "undefined" ? Math.max(420, Math.round(window.innerHeight * 0.74)) : 640}
+      />
+    </div>
+  );
+
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4", editorBnFont.variable)}>
       <div className="flex flex-col gap-3 border-b border-stroke/8 pb-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <Link href="/dashboard/landing-pages" className="text-fg-subtle hover:text-fg" aria-label="Back to landing pages">
             <ArrowLeft className="h-5 w-5" />
           </Link>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h1 className="truncate text-xl font-semibold text-fg">{page.name}</h1>
               <LandingStatusBadge status={page.status} />
               {page.hasUnpublishedChanges || (dirty && page.status === "published") ? (
@@ -192,15 +276,16 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               ) : null}
             </div>
             <p className="text-xs text-fg-subtle">
-              {data.template.name} · template v{data.template.version} · draft rev {baseRevision}
+              {data.template.name} · template v{data.template.version} ·{" "}
+              {page.locales.map((l) => LOCALE_LABELS[l].native).join(" / ")} · draft rev {baseRevision}
               {dirty ? " · unsaved edits" : ""}
             </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button asChild variant="outline" size="sm">
-            <Link href={`/preview/landing/${pageId}`} target="_blank" rel="noopener">
-              <Eye className="mr-1.5 h-4 w-4" /> Preview draft
+            <Link href={`/preview/landing/${pageId}?locale=${locale}`} target="_blank" rel="noopener">
+              <Eye className="mr-1.5 h-4 w-4" /> Full preview
             </Link>
           </Button>
           <Button size="sm" variant="outline" disabled={!dirty || busy || archived} onClick={() => void saveDraft()}>
@@ -220,9 +305,9 @@ export function LandingEditor({ pageId }: { pageId: string }) {
       </div>
 
       {conflict ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
+        <div className="flex flex-col gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning sm:flex-row sm:items-center sm:justify-between">
           <span className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" /> This page changed somewhere else. Reload to continue — your unsaved edits here will be discarded.
+            <AlertTriangle className="h-4 w-4 shrink-0" /> This page changed somewhere else. Reload to continue — your unsaved edits here will be discarded.
           </span>
           <Button size="sm" variant="outline" onClick={() => void refresh()}>
             <RefreshCw className="mr-1.5 h-4 w-4" /> Reload
@@ -252,8 +337,26 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[440px_minmax(0,1fr)]">
-        <div className="space-y-3">
+      {/* Below lg: one pane at a time, switchable, so the preview is never buried under the form. */}
+      <div className="sticky top-0 z-10 -mx-1 flex gap-1 rounded-lg bg-surface-raised p-1 text-sm lg:hidden">
+        {(["edit", "preview"] as const).map((p) => (
+          <button
+            key={p}
+            type="button"
+            onClick={() => setPane(p)}
+            className={cn(
+              "flex min-h-10 flex-1 items-center justify-center gap-1.5 rounded-md font-medium",
+              pane === p ? "bg-surface text-fg shadow-sm" : "text-fg-subtle",
+            )}
+          >
+            {p === "edit" ? <PenLine className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {p === "edit" ? "Edit" : "Preview"}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]">
+        <div className={cn("space-y-3", pane === "preview" && "hidden lg:block")}>
           <div className="flex gap-1 rounded-lg bg-surface-raised p-1 text-sm">
             {(["content", "publish"] as const).map((t) => (
               <button
@@ -261,24 +364,25 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 type="button"
                 onClick={() => setTab(t)}
                 className={cn(
-                  "flex-1 rounded-md px-3 py-1.5 font-medium",
+                  "min-h-9 flex-1 rounded-md px-3 py-1.5 font-medium",
                   tab === t ? "bg-surface text-fg shadow-sm" : "text-fg-subtle hover:text-fg",
                 )}
               >
-                {t === "content" ? "Content" : "Publishing"}
+                {t === "content" ? "Content" : "Languages & publishing"}
               </button>
             ))}
           </div>
 
           {tab === "content" ? (
             <div className="space-y-2">
+              {localeTabs}
               {sections.map((section, i) => {
                 const editable = section.fields.filter((f) => f.editable);
                 const locked = section.fields.filter((f) => !f.editable);
                 const errCount = issuesAt(issues, section.id).length;
                 return (
-                  <details key={section.id} className="group rounded-lg border border-stroke/10 bg-surface" open={i === 3}>
-                    <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-fg">
+                  <details key={`${locale}:${section.id}`} className="group rounded-lg border border-stroke/10 bg-surface" open={i === 3}>
+                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-fg">
                       <span>
                         {section.label}
                         {!section.visual ? <span className="ml-2 text-2xs text-fg-faint">page setting</span> : null}
@@ -291,7 +395,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                         <FieldInput
                           key={field.key}
                           field={field}
-                          value={content[section.id]?.[field.key]}
+                          value={localeContent[section.id]?.[field.key]}
                           path={`${section.id}.${field.key}`}
                           issues={issues}
                           env={env}
@@ -312,6 +416,74 @@ export function LandingEditor({ pageId }: { pageId: string }) {
             </div>
           ) : (
             <div className="space-y-4">
+              <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-fg">
+                  <Languages className="h-4 w-4" /> Languages
+                </div>
+                <p className="text-xs text-fg-subtle">
+                  The default language is shown at your page address. Other languages are shown at <span className="font-mono">/en</span> or{" "}
+                  <span className="font-mono">/bn</span>, with a language switch on the page.
+                </p>
+                {langDraft ? (
+                  <div className="space-y-2">
+                    {data.allowedLocales.map((l) => (
+                      <label key={l} className="flex min-h-10 items-center justify-between gap-3 rounded-md border border-stroke/10 px-3">
+                        <span className="flex items-center gap-2 text-sm text-fg" lang={l}>
+                          <input
+                            type="checkbox"
+                            checked={langDraft.locales.includes(l)}
+                            onChange={(e) => {
+                              const locales = e.target.checked
+                                ? [...langDraft.locales, l]
+                                : langDraft.locales.filter((x) => x !== l);
+                              if (!locales.length) return;
+                              setLangDraft({
+                                locales,
+                                defaultLocale: locales.includes(langDraft.defaultLocale) ? langDraft.defaultLocale : locales[0]!,
+                              });
+                            }}
+                          />
+                          {LOCALE_LABELS[l].native}
+                          {LOCALE_LABELS[l].english !== LOCALE_LABELS[l].native ? <span className="text-fg-faint"> ({LOCALE_LABELS[l].english})</span> : null}
+                        </span>
+                        <span className="flex items-center gap-1.5 text-2xs text-fg-subtle">
+                          <input
+                            type="radio"
+                            name="default-locale"
+                            disabled={!langDraft.locales.includes(l)}
+                            checked={langDraft.defaultLocale === l}
+                            onChange={() => setLangDraft({ ...langDraft, defaultLocale: l })}
+                          />
+                          default
+                        </span>
+                      </label>
+                    ))}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        dirty ||
+                        archived ||
+                        setLocales.isLoading ||
+                        (langDraft.locales.join() === page.locales.join() && langDraft.defaultLocale === page.defaultLocale)
+                      }
+                      onClick={async () => {
+                        const r = await setLocales
+                          .mutateAsync({ id: pageId, ...langDraft, expectedRevision: baseRevision, seed: "template" })
+                          .catch(() => null);
+                        if (r) {
+                          toast.success("Languages updated", "New languages start from the template's copy — review them before publishing.");
+                          await refresh();
+                        }
+                      }}
+                    >
+                      Apply languages
+                    </Button>
+                    {dirty ? <p className="text-2xs text-fg-faint">Save your draft before changing languages.</p> : null}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="text-sm font-medium text-fg">Page name</div>
                 <div className="flex gap-2">
@@ -334,8 +506,8 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="text-sm font-medium text-fg">Subdomain</div>
                 <p className="text-xs text-fg-subtle">
-                  Your page will be served at <span className="font-mono">{slugInput || "your-name"}.&lt;landing domain&gt;</span> once
-                  public hosting is switched on.
+                  Your page will be served at <span className="font-mono">{slugInput || "your-name"}.&lt;landing domain&gt;</span> once public
+                  hosting is switched on.
                 </p>
                 <div className="flex gap-2">
                   <Input
@@ -371,13 +543,13 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 ) : null}
                 {blockers.length === 0 ? (
                   <p className="flex items-center gap-2 text-xs text-success">
-                    <CheckCircle2 className="h-3.5 w-3.5" /> All required content is filled in.
+                    <CheckCircle2 className="h-3.5 w-3.5" /> All required content is filled in for every language.
                   </p>
                 ) : (
                   <ul className="space-y-1 text-xs text-danger">
                     {blockers.slice(0, 8).map((b) => (
                       <li key={`${b.path}:${b.message}`}>
-                        {b.message} <span className="font-mono text-fg-faint">({b.path})</span>
+                        {b.message} <span className="text-fg-faint">({blockerWhere(b.path)})</span>
                       </li>
                     ))}
                   </ul>
@@ -391,7 +563,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 {data.revisions.length === 0 ? <p className="text-xs text-fg-faint">Nothing published yet.</p> : null}
                 <ul className="divide-y divide-stroke/8">
                   {data.revisions.map((r) => (
-                    <li key={r.number} className="flex items-center justify-between py-2 text-xs">
+                    <li key={r.number} className="flex items-center justify-between gap-2 py-2 text-xs">
                       <span className="text-fg-muted">
                         Revision {r.number} · {new Date(r.createdAt as unknown as string).toLocaleString()}
                         {r.live ? <Badge variant="success" className="ml-2">Live</Badge> : null}
@@ -407,33 +579,30 @@ export function LandingEditor({ pageId }: { pageId: string }) {
           )}
         </div>
 
-        <div className="xl:sticky xl:top-4 xl:self-start">
-          <div className="overflow-hidden rounded-xl border border-stroke/12 bg-white shadow-sm">
-            <div className="flex items-center gap-2 border-b border-black/5 bg-neutral-50 px-3 py-2 text-2xs text-neutral-500">
-              <span className="h-2.5 w-2.5 rounded-full bg-neutral-300" />
-              <span className="h-2.5 w-2.5 rounded-full bg-neutral-300" />
-              <span className="h-2.5 w-2.5 rounded-full bg-neutral-300" />
-              <span className="ml-2 truncate font-mono">{page.slug ? `${page.slug}.…` : "draft preview"}</span>
-            </div>
-            <div className="max-h-[78vh] overflow-y-auto">
-              <ScaledLandingPreview spec={spec} content={content} assetBaseUrl={data.assetBaseUrl} />
-            </div>
-          </div>
-        </div>
+        <div className={cn("lg:sticky lg:top-4 lg:self-start", pane === "edit" && "hidden lg:block")}>{previewPanel}</div>
       </div>
 
       <ConfirmDialog
         open={confirm === "publish"}
         onOpenChange={(o) => !o && setConfirm(null)}
+        tone="neutral"
         title={page.status === "published" ? "Publish changes?" : "Publish this page?"}
         description={
           blockers.length
-            ? `Fix ${blockers.length} required field(s) first — see the Publishing tab.`
-            : "Your saved draft becomes the live version. You can unpublish or restore an earlier revision at any time."
+            ? `${blockers.length === 1 ? "1 required field is" : `${blockers.length} required fields are`} still empty. Fill ${blockers.length === 1 ? "it" : "them"} in before publishing.`
+            : "Your saved draft becomes the live version in every language. You can unpublish or restore an earlier revision at any time."
         }
-        confirmLabel="Publish"
+        confirmLabel={blockers.length ? "Show what's missing" : "Publish"}
         loading={busy}
-        onConfirm={() => void doPublish()}
+        onConfirm={() => {
+          if (blockers.length) {
+            setTab("publish");
+            setPane("edit");
+            setConfirm(null);
+            return;
+          }
+          void doPublish();
+        }}
       />
       <ConfirmDialog
         open={confirm === "unpublish"}
@@ -464,6 +633,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
       <ConfirmDialog
         open={typeof confirm === "object" && confirm !== null}
         onOpenChange={(o) => !o && setConfirm(null)}
+        tone="neutral"
         title="Restore this revision to your draft?"
         description="Your current draft is replaced with the selected revision. The live page does not change until you publish."
         confirmLabel="Restore"

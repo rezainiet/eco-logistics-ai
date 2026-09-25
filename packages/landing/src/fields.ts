@@ -24,6 +24,7 @@ export const FIELD_TYPES = [
   "toggle",
   "url",
   "image",
+  "price",
   "cta",
   "repeater",
 ] as const;
@@ -46,6 +47,8 @@ export type FieldDef =
   | (FieldBase & { type: "toggle" })
   | (FieldBase & { type: "url" })
   | (FieldBase & { type: "image" })
+  /** A BDT amount (number). Rendered with the page's numeral setting via formatBDT. */
+  | (FieldBase & { type: "price" })
   | (FieldBase & { type: "cta" })
   | (FieldBase & {
       type: "repeater";
@@ -200,6 +203,14 @@ export function valueSchemaFor(field: FieldDef): z.ZodTypeAny {
       return urlValue;
     case "image":
       return imageValueSchema.nullable();
+    case "price":
+      return z
+        .number({ invalid_type_error: "Enter a number" })
+        .finite()
+        .min(0, "Price cannot be negative")
+        .max(100_000_000, "Price is too large")
+        .refine((v) => Math.abs(Math.round(v * 100) - v * 100) < 1e-6, "At most 2 decimal places")
+        .nullable();
     case "cta":
       return ctaValueSchema;
     case "repeater": {
@@ -225,6 +236,7 @@ export function emptyValueFor(field: FieldDef): unknown {
     case "toggle":
       return false;
     case "image":
+    case "price":
       return null;
     case "cta":
       return { label: "", action: { kind: "none" } } satisfies CtaValue;
@@ -241,6 +253,7 @@ export function isEmptyValue(field: FieldDef, value: unknown): boolean {
     case "url":
       return typeof value !== "string" || value.trim() === "";
     case "image":
+    case "price":
       return value == null;
     case "cta": {
       const v = value as CtaValue | undefined;

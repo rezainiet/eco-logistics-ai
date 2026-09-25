@@ -1,4 +1,6 @@
 import type { TemplateSpec } from "./spec.js";
+import { COMMERCE_TEMPLATES } from "./templates-commerce.js";
+import { LAUNCH_BN, LOCAL_BN, SHOWCASE_BN } from "./templates-bn.js";
 
 /**
  * System templates — shipped in code, seeded into the database by the API
@@ -14,7 +16,7 @@ import type { TemplateSpec } from "./spec.js";
  *   - Local:    service business — image banner, services, about, contact.
  */
 
-export const TEMPLATE_CATEGORIES = ["product", "service", "lead", "general"] as const;
+export const TEMPLATE_CATEGORIES = ["ecommerce", "product", "service", "lead", "general"] as const;
 export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number];
 
 export interface SystemTemplateDef {
@@ -32,6 +34,8 @@ const launch: SystemTemplateDef = {
   category: "product",
   spec: {
     specVersion: 1,
+    defaultLocale: "en",
+    localeDefaults: { bn: LAUNCH_BN },
     sections: [
       {
         id: "theme",
@@ -149,6 +153,8 @@ const showcase: SystemTemplateDef = {
   category: "product",
   spec: {
     specVersion: 1,
+    defaultLocale: "en",
+    localeDefaults: { bn: SHOWCASE_BN },
     sections: [
       {
         id: "theme",
@@ -260,6 +266,8 @@ const local: SystemTemplateDef = {
   category: "service",
   spec: {
     specVersion: 1,
+    defaultLocale: "en",
+    localeDefaults: { bn: LOCAL_BN },
     sections: [
       {
         id: "theme",
@@ -368,7 +376,7 @@ const local: SystemTemplateDef = {
   },
 };
 
-export const SYSTEM_TEMPLATES: ReadonlyArray<SystemTemplateDef> = [launch, showcase, local];
+export const SYSTEM_TEMPLATES: ReadonlyArray<SystemTemplateDef> = [...COMMERCE_TEMPLATES, launch, showcase, local];
 
 /** Starting point for a brand-new admin template. */
 export function blankTemplateSpec(): TemplateSpec {

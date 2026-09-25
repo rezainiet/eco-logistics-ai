@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Archive, Copy, ExternalLink, LayoutTemplate, Loader2, Pencil, Plus } from "lucide-react";
+import { LOCALE_LABELS } from "@ecom/landing";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
@@ -86,7 +87,10 @@ export function LandingPagesList() {
                     </Link>
                     {p.hasUnpublishedChanges ? <p className="text-2xs text-warning">Unpublished changes</p> : null}
                   </td>
-                  <td className="hidden px-4 py-3 text-fg-muted md:table-cell">{p.templateName}</td>
+                  <td className="hidden px-4 py-3 text-fg-muted md:table-cell">
+                    {p.templateName}
+                    <span className="block text-2xs text-fg-faint">{p.locales.map((l) => LOCALE_LABELS[l].native).join(" / ")}</span>
+                  </td>
                   <td className="px-4 py-3">
                     <LandingStatusBadge status={p.status} />
                   </td>

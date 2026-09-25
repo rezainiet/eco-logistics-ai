@@ -1,8 +1,8 @@
 import type { ComponentType } from "react";
-import { SOCIAL_NETWORKS } from "../sections.js";
-import { safeUrl } from "../safe.js";
 import { ctaHref } from "../cta.js";
+import { safeUrl } from "../safe.js";
 import type { SectionContent } from "../spec.js";
+import { SOCIAL_NETWORKS } from "../vocab.js";
 import {
   Container,
   CtaButton,
@@ -12,8 +12,12 @@ import {
   RichText,
   S,
   SectionHeading,
+  Stars,
+  TYPE,
+  ctxOf,
   cx,
 } from "./primitives.js";
+import { COMMERCE_COMPONENTS } from "./sections-commerce.js";
 
 export interface SectionProps {
   id: string;
@@ -33,24 +37,24 @@ function Header({ values: v, env }: SectionProps) {
         style === "transparent" && "bg-transparent",
       )}
     >
-      <Container className="flex items-center justify-between gap-4 py-4">
+      <Container className="flex items-center justify-between gap-4 py-3">
         <div className="flex min-w-0 items-center gap-3">
           {logo ? <LandingImage value={logo} env={env} className="h-9 w-auto max-w-[140px] object-contain" placeholder="none" /> : null}
-          {S.str(v.brandName) ? <span className="truncate text-lg font-bold tracking-tight">{S.str(v.brandName)}</span> : null}
+          {S.str(v.brandName) ? <span className="truncate text-lg font-bold">{S.str(v.brandName)}</span> : null}
         </div>
-        <CtaButton value={S.cta(v.cta)} size="sm" variant={style === "solid" ? "inverse" : "primary"} />
+        <CtaButton value={S.cta(v.cta)} size="sm" variant={style === "solid" ? "inverse" : "primary"} className="shrink-0" />
       </Container>
     </header>
   );
 }
 
-function Badges({ items, inverse }: { items: Array<Record<string, unknown>>; inverse?: boolean }) {
+function Badges({ items, inverse, center }: { items: Array<Record<string, unknown>>; inverse?: boolean; center?: boolean }) {
   if (!items.length) return null;
   return (
-    <ul className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm font-medium">
+    <ul className={cx("mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm font-medium", center && "justify-center")}>
       {items.map((b, i) => (
         <li key={i} className={cx("flex items-center gap-2", !inverse && "text-[color:var(--lp-muted)]")}>
-          <Icon name={S.str(b.icon)} className={cx("h-4 w-4", !inverse && "text-[color:var(--lp-primary)]")} />
+          <Icon name={S.str(b.icon)} className={cx("h-4 w-4 shrink-0", !inverse && "text-[color:var(--lp-primary)]")} />
           {S.str(b.text)}
         </li>
       ))}
@@ -72,15 +76,15 @@ function Hero({ values: v, env }: SectionProps) {
 
   if (variant === "split") {
     return (
-      <Container className="grid items-center gap-10 py-16 md:grid-cols-2 md:py-24">
+      <Container className="grid items-center gap-10 py-14 md:grid-cols-2 md:py-24">
         <div>
-          {eyebrow ? <p className="mb-4 text-sm font-semibold uppercase tracking-widest text-[color:var(--lp-primary)]">{eyebrow}</p> : null}
-          <h1 className="text-4xl font-bold leading-tight tracking-tight sm:text-5xl">{S.str(v.headline)}</h1>
-          {sub ? <p className="mt-6 text-lg text-[color:var(--lp-muted)]">{sub}</p> : null}
+          {eyebrow ? <p className={cx("mb-4 text-[color:var(--lp-primary)]", TYPE.eyebrow)}>{eyebrow}</p> : null}
+          <h1 className={cx("text-4xl sm:text-5xl", TYPE.display)}>{S.str(v.headline)}</h1>
+          {sub ? <p className="mt-6 text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{sub}</p> : null}
           {buttons()}
           <Badges items={badges} />
         </div>
-        <LandingImage value={S.img(v.image)} env={env} className="aspect-[4/5] w-full rounded-[var(--lp-radius)] shadow-xl" />
+        <LandingImage value={S.img(v.image)} env={env} className="aspect-[4/3] w-full rounded-[var(--lp-radius)] shadow-xl md:aspect-[4/5]" />
       </Container>
     );
   }
@@ -92,17 +96,19 @@ function Hero({ values: v, env }: SectionProps) {
       <div className="relative isolate overflow-hidden bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)]">
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={src} alt={img?.alt ?? ""} className="absolute inset-0 -z-10 h-full w-full object-cover opacity-30" />
+          <img src={src} alt={img?.alt ?? ""} className="absolute inset-0 -z-20 h-full w-full object-cover" />
         ) : (
-          <div aria-hidden="true" className="absolute inset-0 -z-10 bg-gradient-to-br from-[var(--lp-primary)] via-[var(--lp-primary)] to-[var(--lp-accent)] opacity-90" />
+          <div aria-hidden="true" className="absolute inset-0 -z-20 bg-gradient-to-br from-[var(--lp-primary)] via-[var(--lp-primary)] to-[var(--lp-accent)]" />
         )}
-        <Container className="py-24 md:py-32">
+        {/* Contrast scrim: keeps white copy legible over any photo or gradient. */}
+        <div aria-hidden="true" className="absolute inset-0 -z-10 bg-gradient-to-r from-black/65 via-black/45 to-black/20" />
+        <Container className="py-20 md:py-32">
           <div className="max-w-2xl">
             {eyebrow ? (
-              <p className="mb-4 inline-block bg-[var(--lp-accent)] px-3 py-1 text-xs font-bold uppercase tracking-widest text-black/80">{eyebrow}</p>
+              <p className={cx("mb-4 inline-block bg-[var(--lp-accent)] px-3 py-1 text-xs text-black/85", TYPE.eyebrow)}>{eyebrow}</p>
             ) : null}
-            <h1 className="text-4xl font-extrabold leading-tight tracking-tight sm:text-6xl">{S.str(v.headline)}</h1>
-            {sub ? <p className="mt-6 text-lg opacity-90 sm:text-xl">{sub}</p> : null}
+            <h1 className={cx("text-4xl sm:text-6xl", TYPE.display)}>{S.str(v.headline)}</h1>
+            {sub ? <p className="mt-6 text-lg leading-[var(--lp-lh-body)] opacity-95 sm:text-xl">{sub}</p> : null}
             {buttons(true)}
             <Badges items={badges} inverse />
           </div>
@@ -115,19 +121,17 @@ function Hero({ values: v, env }: SectionProps) {
   return (
     <div className="relative overflow-hidden">
       <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 -top-40 -z-0 h-[480px] bg-gradient-to-b from-[var(--lp-surface)] to-transparent" />
-      <Container className="relative py-20 text-center md:py-28">
+      <Container className="relative py-16 text-center md:py-28">
         {eyebrow ? (
           <p className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full bg-[var(--lp-surface)] px-4 py-1.5 text-sm font-semibold text-[color:var(--lp-primary)] ring-1 ring-black/5">
             <Icon name="sparkles" className="h-4 w-4" />
             {eyebrow}
           </p>
         ) : null}
-        <h1 className="mx-auto max-w-4xl text-4xl font-extrabold leading-tight tracking-tight sm:text-6xl">{S.str(v.headline)}</h1>
-        {sub ? <p className="mx-auto mt-6 max-w-2xl text-lg text-[color:var(--lp-muted)] sm:text-xl">{sub}</p> : null}
+        <h1 className={cx("mx-auto max-w-4xl text-4xl sm:text-6xl", TYPE.display)}>{S.str(v.headline)}</h1>
+        {sub ? <p className="mx-auto mt-6 max-w-2xl text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)] sm:text-xl">{sub}</p> : null}
         {buttons()}
-        <div className="flex justify-center">
-          <Badges items={badges} />
-        </div>
+        <Badges items={badges} center />
         {S.img(v.image) ? (
           <LandingImage value={S.img(v.image)} env={env} className="mx-auto mt-14 aspect-[16/9] w-full max-w-4xl rounded-[var(--lp-radius)] shadow-2xl" />
         ) : null}
@@ -140,19 +144,16 @@ function Features({ values: v }: SectionProps) {
   const cols = S.str(v.columns);
   const cards = S.str(v.style) !== "minimal";
   return (
-    <Container className="py-20">
+    <Container className="py-16 md:py-20">
       <SectionHeading title={S.str(v.heading)} intro={S.str(v.intro)} />
       <div className={cx("grid gap-6 sm:grid-cols-2", cols === "3" && "lg:grid-cols-3", cols === "4" && "lg:grid-cols-4")}>
         {S.arr(v.items).map((item, i) => (
-          <div
-            key={i}
-            className={cx(cards ? "rounded-[var(--lp-radius)] bg-[var(--lp-surface)] p-6 ring-1 ring-black/5" : "p-2")}
-          >
+          <div key={i} className={cx(cards ? "rounded-[var(--lp-radius)] bg-[var(--lp-surface)] p-6 ring-1 ring-black/5" : "p-2")}>
             <span className="mb-4 inline-flex h-11 w-11 items-center justify-center rounded-[var(--lp-radius)] bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)]">
               <Icon name={S.str(item.icon)} className="h-5 w-5" />
             </span>
-            <h3 className="text-lg font-semibold">{S.str(item.title)}</h3>
-            {S.str(item.text) ? <p className="mt-2 text-[color:var(--lp-muted)]">{S.str(item.text)}</p> : null}
+            <h3 className={cx("text-lg", TYPE.heading)}>{S.str(item.title)}</h3>
+            {S.str(item.text) ? <p className="mt-2 leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{S.str(item.text)}</p> : null}
           </div>
         ))}
       </div>
@@ -164,14 +165,14 @@ function Benefits({ values: v, env }: SectionProps) {
   const imageLeft = S.str(v.imageSide) === "left";
   return (
     <div className="bg-[var(--lp-surface)]">
-      <Container className="grid items-center gap-12 py-20 md:grid-cols-2">
+      <Container className="grid items-center gap-10 py-16 md:grid-cols-2 md:gap-12 md:py-20">
         <LandingImage
           value={S.img(v.image)}
           env={env}
-          className={cx("aspect-square w-full rounded-[var(--lp-radius)]", imageLeft ? "md:order-first" : "md:order-last")}
+          className={cx("aspect-[4/3] w-full rounded-[var(--lp-radius)] md:aspect-square", imageLeft ? "md:order-first" : "md:order-last")}
         />
         <div>
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">{S.str(v.heading)}</h2>
+          <h2 className={cx("text-3xl sm:text-4xl", TYPE.heading)}>{S.str(v.heading)}</h2>
           {S.str(v.body) ? <RichText value={S.str(v.body)} className="mt-5 text-lg text-[color:var(--lp-muted)]" /> : null}
           <ul className="mt-8 space-y-4">
             {S.arr(v.items).map((item, i) => (
@@ -195,37 +196,26 @@ function Benefits({ values: v, env }: SectionProps) {
   );
 }
 
-function Stars({ count }: { count: number }) {
-  if (!count) return null;
-  return (
-    <div className="flex gap-0.5 text-[color:var(--lp-accent)]" aria-label={`${count} out of 5 stars`}>
-      {Array.from({ length: 5 }).map((_, i) => (
-        <svg key={i} viewBox="0 0 24 24" className="h-4 w-4" fill={i < count ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.5} aria-hidden="true">
-          <path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z" />
-        </svg>
-      ))}
-    </div>
-  );
-}
-
 function Testimonials({ values: v, env }: SectionProps) {
+  const ctx = ctxOf(env);
   return (
-    <Container className="py-20">
+    <Container className="py-16 md:py-20">
       <SectionHeading title={S.str(v.heading)} />
       <div className="grid gap-6 md:grid-cols-3">
         {S.arr(v.items).map((t, i) => {
           const avatar = S.img(t.avatar);
           const name = S.str(t.name);
+          const rating = Number(S.str(t.rating)) || 0;
           return (
             <figure key={i} className="flex flex-col rounded-[var(--lp-radius)] bg-[var(--lp-surface)] p-6 shadow-sm ring-1 ring-black/5">
-              <Stars count={Number(S.str(t.rating)) || 0} />
-              <blockquote className="mt-4 flex-1 text-lg leading-relaxed">“{S.str(t.quote)}”</blockquote>
+              <Stars count={rating} label={ctx.t.stars(rating)} />
+              <blockquote className="mt-4 flex-1 text-lg leading-[var(--lp-lh-body)]">“{S.str(t.quote)}”</blockquote>
               <figcaption className="mt-6 flex items-center gap-3">
                 {avatar ? (
                   <LandingImage value={avatar} env={env} className="h-10 w-10 rounded-full" placeholder="none" />
                 ) : (
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--lp-primary)] font-semibold text-[color:var(--lp-on-primary)]">
-                    {name.slice(0, 1).toUpperCase()}
+                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)]">
+                    <Icon name="heart" className="h-4 w-4" />
                   </span>
                 )}
                 <span>
@@ -242,24 +232,29 @@ function Testimonials({ values: v, env }: SectionProps) {
 }
 
 function Services({ values: v, env }: SectionProps) {
+  const items = S.arr(v.items);
+  // If any card has a photo, give photo-less cards a matching placeholder so
+  // every card in the row has the same structure and height.
+  const anyImage = items.some((s) => S.img(s.image));
   return (
     <div className="bg-[var(--lp-surface)]">
-      <Container className="py-20">
+      <Container className="py-16 md:py-20">
         <SectionHeading title={S.str(v.heading)} intro={S.str(v.intro)} align="left" />
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {S.arr(v.items).map((s, i) => {
-            const img = S.img(s.image);
-            return (
-              <article key={i} className="flex flex-col overflow-hidden rounded-[var(--lp-radius)] bg-[var(--lp-bg)] shadow-sm ring-1 ring-black/5">
-                {img ? <LandingImage value={img} env={env} className="aspect-[16/10] w-full" /> : <div className="h-1.5 bg-[var(--lp-primary)]" />}
-                <div className="flex flex-1 flex-col p-6">
-                  <h3 className="text-xl font-semibold">{S.str(s.title)}</h3>
-                  {S.str(s.text) ? <p className="mt-2 flex-1 text-[color:var(--lp-muted)]">{S.str(s.text)}</p> : null}
-                  {S.str(s.price) ? <p className="mt-4 text-lg font-bold text-[color:var(--lp-primary)]">{S.str(s.price)}</p> : null}
-                </div>
-              </article>
-            );
-          })}
+        <div className="grid gap-6 sm:grid-cols-2 md:grid-cols-3">
+          {items.map((s, i) => (
+            <article key={i} className="flex flex-col overflow-hidden rounded-[var(--lp-radius)] bg-[var(--lp-bg)] shadow-sm ring-1 ring-black/5">
+              {anyImage ? (
+                <LandingImage value={S.img(s.image)} env={env} placeholder="soft" icon="wrench" className="aspect-[16/10] w-full" />
+              ) : (
+                <div className="h-1.5 bg-[var(--lp-primary)]" />
+              )}
+              <div className="flex flex-1 flex-col p-6">
+                <h3 className={cx("text-xl", TYPE.heading)}>{S.str(s.title)}</h3>
+                {S.str(s.text) ? <p className="mt-2 flex-1 leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{S.str(s.text)}</p> : null}
+                {S.str(s.price) ? <p className="mt-4 text-lg font-bold text-[color:var(--lp-primary)]">{S.str(s.price)}</p> : null}
+              </div>
+            </article>
+          ))}
         </div>
       </Container>
     </div>
@@ -270,9 +265,9 @@ function About({ values: v, env }: SectionProps) {
   const stats = S.arr(v.stats);
   const img = S.img(v.image);
   return (
-    <Container className={cx("grid gap-12 py-20", img && "md:grid-cols-2 md:items-center")}>
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">{S.str(v.heading)}</h2>
+    <Container className={cx("grid gap-12 py-16 md:py-20", img && "md:grid-cols-2 md:items-center")}>
+      <div className={cx(!img && "max-w-3xl")}>
+        <h2 className={cx("text-3xl sm:text-4xl", TYPE.heading)}>{S.str(v.heading)}</h2>
         {S.str(v.body) ? <RichText value={S.str(v.body)} className="mt-5 text-lg text-[color:var(--lp-muted)]" /> : null}
         {stats.length ? (
           <dl className="mt-10 grid grid-cols-2 gap-6 sm:grid-cols-3">
@@ -292,12 +287,12 @@ function About({ values: v, env }: SectionProps) {
 
 function Faq({ values: v }: SectionProps) {
   return (
-    <Container className="max-w-3xl py-20">
+    <Container className="max-w-3xl py-16 md:py-20">
       <SectionHeading title={S.str(v.heading)} />
       <div className="divide-y divide-black/10 rounded-[var(--lp-radius)] bg-[var(--lp-surface)] ring-1 ring-black/5">
         {S.arr(v.items).map((q, i) => (
-          <details key={i} className="group p-6" open={i === 0}>
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-lg font-semibold">
+          <details key={i} className="group p-5 sm:p-6" open={i === 0}>
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-4 text-lg font-semibold">
               {S.str(q.question)}
               <span aria-hidden="true" className="text-[color:var(--lp-primary)] transition-transform group-open:rotate-45">+</span>
             </summary>
@@ -316,38 +311,41 @@ function ContactRow({ icon, label, children, href }: { icon: string; label: stri
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-[var(--lp-radius)] bg-[var(--lp-surface)] text-[color:var(--lp-primary)]">
         <Icon name={icon} className="h-5 w-5" />
       </span>
-      <div>
+      <div className="min-w-0">
         <p className="text-sm font-medium text-[color:var(--lp-muted)]">{label}</p>
         {href ? (
-          <a href={href} className="whitespace-pre-line font-semibold hover:underline">{children}</a>
+          <a href={href} className="inline-flex min-h-11 items-center whitespace-pre-line break-words font-semibold hover:underline">
+            {children}
+          </a>
         ) : (
-          <p className="whitespace-pre-line font-semibold">{children}</p>
+          <p className="whitespace-pre-line break-words font-semibold leading-[var(--lp-lh-body)]">{children}</p>
         )}
       </div>
     </div>
   );
 }
 
-function Contact({ values: v }: SectionProps) {
+function Contact({ values: v, env }: SectionProps) {
+  const { t } = ctxOf(env);
   const phone = S.str(v.phone);
   const wa = S.str(v.whatsapp);
   const email = S.str(v.email);
   return (
-    <Container className="py-20">
-      <div className="grid gap-10 rounded-[var(--lp-radius)] p-8 ring-1 ring-black/10 md:grid-cols-2 md:p-12">
+    <Container className="py-16 md:py-20">
+      <div className="grid gap-10 rounded-[var(--lp-radius)] p-6 ring-1 ring-black/10 sm:p-8 lg:grid-cols-2 lg:p-12">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">{S.str(v.heading)}</h2>
-          {S.str(v.text) ? <p className="mt-4 text-lg text-[color:var(--lp-muted)]">{S.str(v.text)}</p> : null}
+          <h2 className={cx("text-3xl", TYPE.heading)}>{S.str(v.heading)}</h2>
+          {S.str(v.text) ? <p className="mt-4 text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{S.str(v.text)}</p> : null}
           <div className="mt-8">
             <CtaButton value={S.cta(v.cta)} size="lg" />
           </div>
         </div>
-        <div className="space-y-6">
-          <ContactRow icon="phone" label="Phone" href={ctaHref({ kind: "phone", phone })?.href}>{phone}</ContactRow>
-          <ContactRow icon="chat" label="WhatsApp" href={ctaHref({ kind: "whatsapp", phone: wa })?.href}>{wa}</ContactRow>
-          <ContactRow icon="chat" label="Email" href={ctaHref({ kind: "email", email })?.href}>{email}</ContactRow>
-          <ContactRow icon="map-pin" label="Address">{S.str(v.address)}</ContactRow>
-          <ContactRow icon="clock" label="Opening hours">{S.str(v.hours)}</ContactRow>
+        <div className="space-y-5">
+          <ContactRow icon="phone" label={t.phone} href={ctaHref({ kind: "phone", phone })?.href}>{phone}</ContactRow>
+          <ContactRow icon="chat" label={t.whatsapp} href={ctaHref({ kind: "whatsapp", phone: wa })?.href}>{wa}</ContactRow>
+          <ContactRow icon="chat" label={t.email} href={ctaHref({ kind: "email", email })?.href}>{email}</ContactRow>
+          <ContactRow icon="map-pin" label={t.address}>{S.str(v.address)}</ContactRow>
+          <ContactRow icon="clock" label={t.hours}>{S.str(v.hours)}</ContactRow>
         </div>
       </div>
     </Container>
@@ -357,10 +355,10 @@ function Contact({ values: v }: SectionProps) {
 function Cta({ values: v }: SectionProps) {
   if (S.str(v.style) === "card") {
     return (
-      <Container className="py-20">
-        <div className="mx-auto max-w-3xl rounded-[var(--lp-radius)] bg-[var(--lp-surface)] p-10 text-center shadow-lg ring-1 ring-black/5 md:p-14">
-          <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">{S.str(v.heading)}</h2>
-          {S.str(v.text) ? <p className="mx-auto mt-4 max-w-xl text-lg text-[color:var(--lp-muted)]">{S.str(v.text)}</p> : null}
+      <Container className="py-16 md:py-20">
+        <div className="mx-auto max-w-3xl rounded-[var(--lp-radius)] bg-[var(--lp-surface)] p-8 text-center shadow-lg ring-1 ring-black/5 md:p-14">
+          <h2 className={cx("text-3xl sm:text-4xl", TYPE.heading)}>{S.str(v.heading)}</h2>
+          {S.str(v.text) ? <p className="mx-auto mt-4 max-w-xl text-lg leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">{S.str(v.text)}</p> : null}
           <div className="mt-8">
             <CtaButton value={S.cta(v.cta)} size="lg" />
           </div>
@@ -370,18 +368,18 @@ function Cta({ values: v }: SectionProps) {
   }
   return (
     <div className="bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)]">
-      <Container className="flex flex-col items-center gap-6 py-16 text-center md:flex-row md:justify-between md:text-left">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">{S.str(v.heading)}</h2>
-          {S.str(v.text) ? <p className="mt-2 text-lg opacity-90">{S.str(v.text)}</p> : null}
+      <Container className="flex flex-col items-center gap-6 py-14 text-center lg:flex-row lg:justify-between lg:text-left">
+        <div className="max-w-2xl">
+          <h2 className={cx("text-3xl", TYPE.heading)}>{S.str(v.heading)}</h2>
+          {S.str(v.text) ? <p className="mt-2 text-lg leading-[var(--lp-lh-body)] opacity-90">{S.str(v.text)}</p> : null}
         </div>
-        <CtaButton value={S.cta(v.cta)} size="lg" variant="inverse" />
+        <CtaButton value={S.cta(v.cta)} size="lg" variant="inverse" className="shrink-0" />
       </Container>
     </div>
   );
 }
 
-const SOCIAL_LABEL = new Map<string, string>(SOCIAL_NETWORKS.map((n) => [n.value, n.label]));
+export const SOCIAL_LABEL = new Map<string, string>(SOCIAL_NETWORKS.map((n) => [n.value, n.label]));
 
 function Footer({ values: v }: SectionProps) {
   const links = S.arr(v.links);
@@ -395,11 +393,11 @@ function Footer({ values: v }: SectionProps) {
         </div>
         <div className="flex flex-col gap-4 text-sm md:items-end">
           {links.length ? (
-            <nav className="flex flex-wrap gap-x-5 gap-y-2">
+            <nav className="flex flex-wrap gap-x-5 gap-y-1">
               {links.map((l, i) => {
                 const href = safeUrl(S.str(l.url));
                 return href ? (
-                  <a key={i} href={href} rel="noopener noreferrer nofollow ugc" className="hover:underline">
+                  <a key={i} href={href} rel="noopener noreferrer nofollow ugc" className="inline-flex min-h-11 items-center hover:underline">
                     {S.str(l.label)}
                   </a>
                 ) : null;
@@ -416,7 +414,7 @@ function Footer({ values: v }: SectionProps) {
                     href={href}
                     target="_blank"
                     rel="noopener noreferrer nofollow ugc"
-                    className="rounded-full px-3 py-1 font-medium ring-1 ring-black/15 hover:bg-black/5"
+                    className="inline-flex min-h-11 items-center rounded-full px-4 font-medium ring-1 ring-black/15 hover:bg-black/5"
                   >
                     {SOCIAL_LABEL.get(S.str(s.network)) ?? "Link"}
                   </a>
@@ -444,4 +442,5 @@ export const SECTION_COMPONENTS: Readonly<Record<string, ComponentType<SectionPr
   "contact@1": Contact,
   "cta@1": Cta,
   "footer@1": Footer,
+  ...COMMERCE_COMPONENTS,
 };

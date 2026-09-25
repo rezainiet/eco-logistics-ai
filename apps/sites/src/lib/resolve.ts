@@ -1,15 +1,18 @@
 import { cache } from "react";
 import { headers } from "next/headers";
-import type { PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
+import type { Locale, PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
 import { normalizeHost } from "@ecom/landing";
 import { landingApiUrl } from "./config";
 
 export type PublicLanding =
   | {
       kind: "ok";
-      page: { id: string; name: string; slug: string };
+      slug: string;
+      locale: Locale;
+      locales: Locale[];
+      defaultLocale: Locale;
       revision: { number: number; publishedAt: string };
-      templateVersion: { id: string; version: number };
+      templateVersion: { version: number };
       spec: TemplateSpec;
       content: PageContent;
       seo: ResolvedSeo;
@@ -24,14 +27,14 @@ export type PublicLanding =
  * The label in the URL path is only a routing artefact of the middleware
  * rewrite; the API resolves from the (validated) Host itself.
  *
- * Deduplicated per request with React `cache` (metadata + page share one
- * call). Not cached across requests here — the API holds the shared,
- * explicitly-invalidated cache, so publish/unpublish take effect at once.
+ * Deduplicated per request with React `cache` (layout, metadata and page
+ * share one call). Not cached across requests here — the API holds the
+ * shared, explicitly-invalidated cache, so publish/unpublish apply at once.
  */
-export const resolveCurrentHost = cache(async (label: string): Promise<PublicLanding> => {
+export const resolveCurrentHost = cache(async (label: string, locale: string | null): Promise<PublicLanding> => {
   const host = normalizeHost(headers().get("host"));
   if (!host || !host.startsWith(`${label}.`)) return { kind: "not_found" };
-  const input = encodeURIComponent(JSON.stringify({ host }));
+  const input = encodeURIComponent(JSON.stringify({ host, locale }));
   let res: Response;
   try {
     res = await fetch(`${landingApiUrl()}/trpc/publicLanding.resolveByHost?input=${input}`, {

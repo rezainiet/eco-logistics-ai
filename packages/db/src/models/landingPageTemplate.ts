@@ -18,7 +18,7 @@ export type LandingTemplateStatus = (typeof LANDING_TEMPLATE_STATUSES)[number];
 export const LANDING_TEMPLATE_ORIGINS = ["system", "custom"] as const;
 export type LandingTemplateOrigin = (typeof LANDING_TEMPLATE_ORIGINS)[number];
 
-export const LANDING_TEMPLATE_CATEGORIES = ["product", "service", "lead", "general"] as const;
+export const LANDING_TEMPLATE_CATEGORIES = ["ecommerce", "product", "service", "lead", "general"] as const;
 
 const landingPageTemplateSchema = new Schema(
   {

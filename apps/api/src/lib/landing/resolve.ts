@@ -1,8 +1,13 @@
 import {
+  type Locale,
   type PageContent,
   type ResolvedSeo,
+  SUPPORTED_LOCALES,
   type TemplateSpec,
   extractLandingLabel,
+  isLocale,
+  normalizeLocaleSettings,
+  readLocalized,
   resolveContent,
   resolveSeo,
 } from "@ecom/landing";
@@ -29,9 +34,13 @@ import { loadTemplateVersion } from "./templates.js";
 export type PublicLandingResult =
   | {
       kind: "ok";
-      page: { id: string; name: string; slug: string };
+      slug: string;
+      /** The locale rendered, the page's enabled locales and its default. */
+      locale: Locale;
+      locales: Locale[];
+      defaultLocale: Locale;
       revision: { number: number; publishedAt: string };
-      templateVersion: { id: string; version: number };
+      templateVersion: { version: number };
       spec: TemplateSpec;
       content: PageContent;
       seo: ResolvedSeo;
@@ -54,35 +63,46 @@ export function landingAssetBaseUrl(): string {
   return `${(env.PUBLIC_API_URL ?? `http://localhost:${env.API_PORT}`).replace(/\/+$/, "")}/api/landing-assets`;
 }
 
-export function landingHostCacheKey(label: string): string {
-  return `landing:host:${label}`;
+export function landingHostCacheKey(label: string, locale: Locale | null = null): string {
+  return `landing:host:${label}:${locale ?? "default"}`;
 }
 
-/** Drop the cached public payload for a label (publish, unpublish, slug change, archive). */
+/** Drop every cached public payload for a label (publish, unpublish, slug change, archive). */
 export async function invalidateLandingHost(label: string | null | undefined): Promise<void> {
-  if (label) await invalidate(landingHostCacheKey(label));
+  if (!label) return;
+  await Promise.all([null, ...SUPPORTED_LOCALES].map((l) => invalidate(landingHostCacheKey(label, l))));
 }
 
+/**
+ * @param opts.locale  null/undefined → the page's default locale (served at
+ *   "/"); a locale code → that language (served at "/<locale>"), which
+ *   must be enabled on the published revision or the result is not_found.
+ */
 export async function resolveLandingPageByHost(
   hostname: string | null | undefined,
-  opts: { rootDomain?: string | null; useCache?: boolean } = {},
+  opts: { rootDomain?: string | null; useCache?: boolean; locale?: string | null } = {},
 ): Promise<PublicLandingResult> {
   const root = opts.rootDomain === undefined ? landingRootDomain() : opts.rootDomain;
   if (!root) return { kind: "not_found" };
   const label = extractLandingLabel(hostname, root);
   if (!label) return { kind: "not_found" };
-  if (opts.useCache === false) return resolveLabel(label);
-  return cached(landingHostCacheKey(label), CACHE_TTL_S, () => resolveLabel(label));
+  let locale: Locale | null = null;
+  if (opts.locale != null && opts.locale !== "") {
+    if (!isLocale(opts.locale)) return { kind: "not_found" };
+    locale = opts.locale;
+  }
+  if (opts.useCache === false) return resolveLabel(label, locale);
+  return cached(landingHostCacheKey(label, locale), CACHE_TTL_S, () => resolveLabel(label, locale));
 }
 
-async function resolveLabel(label: string): Promise<PublicLandingResult> {
+async function resolveLabel(label: string, requested: Locale | null): Promise<PublicLandingResult> {
   const host = await LandingPageHost.findOne({ hostname: label, status: "active" })
     .select("merchantId pageId")
     .lean();
   if (!host) return { kind: "not_found" };
 
   const page = await LandingPage.findOne({ _id: host.pageId, merchantId: host.merchantId })
-    .select("name status publishedRevisionId")
+    .select("status publishedRevisionId")
     .lean();
   if (!page || page.status !== "published" || !page.publishedRevisionId) return { kind: "not_found" };
 
@@ -100,15 +120,25 @@ async function resolveLabel(label: string): Promise<PublicLandingResult> {
   const version = await loadTemplateVersion(revision.templateVersionId);
   if (!version || version.status !== "published") return { kind: "not_found" };
 
-  const content = resolveContent(version.spec, revision.content);
+  const settings = normalizeLocaleSettings(revision.locales, revision.defaultLocale, "en");
+  const locale = requested ?? settings.defaultLocale;
+  // A non-default locale must be requested explicitly; the default locale is
+  // only served at the root, so "/bn" on a bn-default page is not a duplicate.
+  if (!settings.locales.includes(locale) || (requested && requested === settings.defaultLocale)) {
+    return { kind: "not_found" };
+  }
+  const content = resolveContent(version.spec, readLocalized(revision.content)[locale], locale);
   return {
     kind: "ok",
-    page: { id: String(page._id), name: page.name, slug: label },
+    slug: label,
+    locale,
+    locales: settings.locales,
+    defaultLocale: settings.defaultLocale,
     revision: {
       number: revision.number,
       publishedAt: (revision.createdAt ?? new Date()).toISOString(),
     },
-    templateVersion: { id: version.id, version: version.version },
+    templateVersion: { version: version.version },
     spec: version.spec,
     content,
     seo: resolveSeo(version.spec, content),

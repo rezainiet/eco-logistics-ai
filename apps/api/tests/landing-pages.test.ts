@@ -18,6 +18,12 @@ import { invalidateSubscriptionCache } from "../src/server/trpc.js";
 import { authUserFor, callerFor, createMerchant, disconnectDb, resetDb } from "./helpers.js";
 
 const ROOT = "pages.test";
+
+type C = Record<string, Record<string, unknown>>;
+/** English content of a (localized) draft. */
+const en = (got: { draftContent: unknown }) => (got.draftContent as Record<string, C>).en!;
+/** Wrap single-locale content in the localized shape saveDraft expects. */
+const L = (c: unknown) => ({ en: c });
 const PNG_1PX =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
@@ -32,11 +38,11 @@ async function setup() {
 
 async function publishable(caller: ReturnType<typeof callerFor>, pageId: string, slug: string) {
   const got = await caller.landingPages.get({ id: pageId });
-  const content = got.draftContent as Record<string, Record<string, unknown>>;
+  const content = en(got);
   content.order!.cta = { label: "Order on WhatsApp", action: { kind: "whatsapp", phone: "+8801711000000" } };
   const saved = await caller.landingPages.saveDraft({
     id: pageId,
-    content,
+    content: L(content),
     expectedRevision: got.page.draftRevision,
   });
   await caller.landingPages.setSlug({ id: pageId, slug });
@@ -55,8 +61,8 @@ describe("landing pages", () => {
   describe("system template seeding", () => {
     it("is idempotent and versions only on spec change", async () => {
       const first = await ensureSystemTemplates();
-      expect(first.created).toBe(3);
-      expect(first.versioned).toBe(3);
+      expect(first.created).toBe(5);
+      expect(first.versioned).toBe(5);
       const again = await ensureSystemTemplates();
       expect(again).toEqual({ created: 0, versioned: 0 });
 
@@ -75,13 +81,13 @@ describe("landing pages", () => {
   describe("merchant lifecycle", () => {
     it("lets a merchant create multiple pages from different templates", async () => {
       const { caller, templates } = await setup();
-      expect(templates.map((t) => t.key)).toEqual(["launch", "showcase", "local-service"]);
+      expect(templates.map((t) => t.key)).toEqual(["bd-modern-shop", "bd-premium-brand", "launch", "showcase", "local-service"]);
       for (const t of templates) {
         await caller.landingPages.create({ templateId: t.id, name: `Page ${t.key}` });
       }
       await caller.landingPages.create({ templateId: templates[0]!.id, name: "Second launch page" });
       const list = await caller.landingPages.list();
-      expect(list).toHaveLength(4);
+      expect(list).toHaveLength(templates.length + 1);
       expect(list.every((p) => p.status === "draft")).toBe(true);
     });
 
@@ -89,37 +95,37 @@ describe("landing pages", () => {
       const { caller, launch } = await setup();
       const page = await caller.landingPages.create({ templateId: launch.id, name: "Launch" });
       const got = await caller.landingPages.get({ id: page.id });
-      const content = got.draftContent as Record<string, Record<string, unknown>>;
+      const content = en(got);
       content.hero!.headline = "First edit";
-      const saved = await caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: 1 });
+      const saved = await caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: 1 });
       expect(saved.page.draftRevision).toBe(2);
 
       content.hero!.headline = "Stale edit";
       await expect(
-        caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: 1 }),
+        caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: 1 }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
       const stored = await LandingPage.findById(page.id).lean();
-      expect((stored!.draftContent as Record<string, Record<string, unknown>>).hero!.headline).toBe("First edit");
+      expect((stored!.draftContent as Record<string, C>).en!.hero!.headline).toBe("First edit");
     });
 
     it("validates drafts server-side (locked fields, unsafe URLs, unknown keys)", async () => {
       const { caller, launch } = await setup();
       const page = await caller.landingPages.create({ templateId: launch.id, name: "Launch" });
       const got = await caller.landingPages.get({ id: page.id });
-      const base = got.draftContent as Record<string, Record<string, unknown>>;
+      const base = en(got);
 
       const locked = structuredClone(base);
       locked.hero!.variant = "banner";
-      await expect(caller.landingPages.saveDraft({ id: page.id, content: locked, expectedRevision: 1 })).rejects.toMatchObject({
+      await expect(caller.landingPages.saveDraft({ id: page.id, content: L(locked), expectedRevision: 1 })).rejects.toMatchObject({
         code: "BAD_REQUEST",
       });
 
       const js = structuredClone(base);
       js.hero!.primaryCta = { label: "x", action: { kind: "link", url: "javascript:alert(1)" } };
-      await expect(caller.landingPages.saveDraft({ id: page.id, content: js, expectedRevision: 1 })).rejects.toThrow(/Unsafe/);
+      await expect(caller.landingPages.saveDraft({ id: page.id, content: L(js), expectedRevision: 1 })).rejects.toThrow(/Unsafe/);
 
       const extra = { ...structuredClone(base), script: { src: "https://evil.example/x.js" } };
-      await expect(caller.landingPages.saveDraft({ id: page.id, content: extra, expectedRevision: 1 })).rejects.toThrow(
+      await expect(caller.landingPages.saveDraft({ id: page.id, content: L(extra), expectedRevision: 1 })).rejects.toThrow(
         /Unknown section/,
       );
     });
@@ -141,7 +147,7 @@ describe("landing pages", () => {
       expect(live.content.hero!.headline).toBe("Everyday quality, delivered to your door");
 
       content.hero!.headline = "Unpublished edit";
-      const saved = await caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: revision });
+      const saved = await caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: revision });
       expect(saved.page.hasUnpublishedChanges).toBe(true);
       const stillLive = await resolve("nova-store.pages.test");
       expect(stillLive.kind === "ok" && stillLive.content.hero!.headline).toBe("Everyday quality, delivered to your door");
@@ -233,14 +239,14 @@ describe("landing pages", () => {
       const { content, revision } = await publishable(caller, page.id, "restore-shop");
       await caller.landingPages.publish({ id: page.id, expectedRevision: revision });
       content.hero!.headline = "Changed";
-      const saved = await caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: revision });
+      const saved = await caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: revision });
       const restored = await caller.landingPages.restoreRevision({
         id: page.id,
         revisionNumber: 1,
         expectedRevision: saved.page.draftRevision,
       });
       const got = await caller.landingPages.get({ id: page.id });
-      expect((got.draftContent as Record<string, Record<string, unknown>>).hero!.headline).toBe(
+      expect(en(got).hero!.headline).toBe(
         "Everyday quality, delivered to your door",
       );
       expect(restored.draftRevision).toBe(saved.page.draftRevision + 1);
@@ -298,15 +304,15 @@ describe("landing pages", () => {
 
       const page = await caller.landingPages.create({ templateId: launch.id, name: "Mine" });
       const got = await caller.landingPages.get({ id: page.id });
-      const content = got.draftContent as Record<string, Record<string, unknown>>;
+      const content = en(got);
       content.hero!.image = { assetId: theirs.id, alt: "" };
-      await expect(caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: 1 })).rejects.toThrow(
+      await expect(caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: 1 })).rejects.toThrow(
         /images were not found/,
       );
 
       const mine = await caller.landingPages.uploadAsset({ dataUrl: `data:image/png;base64,${PNG_1PX}` });
       content.hero!.image = { assetId: mine.id, alt: "Product" };
-      await expect(caller.landingPages.saveDraft({ id: page.id, content, expectedRevision: 1 })).resolves.toBeTruthy();
+      await expect(caller.landingPages.saveDraft({ id: page.id, content: L(content), expectedRevision: 1 })).resolves.toBeTruthy();
     });
 
     it("blocks unauthenticated and lapsed merchants from publishing", async () => {
@@ -345,7 +351,8 @@ describe("landing pages", () => {
       const ok = await resolve("Resolver.Pages.Test:443");
       expect(ok.kind).toBe("ok");
       if (ok.kind === "ok") {
-        expect(ok.page.slug).toBe("resolver");
+        expect(ok.slug).toBe("resolver");
+        expect(ok).not.toHaveProperty("page");
         expect(ok.seo.title).toBe("Everyday quality, delivered to your door");
         expect(ok).not.toHaveProperty("merchantId");
         expect(JSON.stringify(ok)).not.toContain(String((await LandingPage.findById(page.id).lean())!.merchantId));
@@ -386,7 +393,7 @@ describe("landing pages", () => {
       await ensureSystemTemplates();
       const after = await resolve("pinned.pages.test");
       expect(after.kind === "ok" && after.templateVersion.version).toBe(1);
-      expect(before.kind === "ok" && before.templateVersion.id).toBe(after.kind === "ok" && after.templateVersion.id);
+      expect(before.kind === "ok" && before.templateVersion.version).toBe(after.kind === "ok" && after.templateVersion.version);
 
       const got = await caller.landingPages.get({ id: page.id });
       expect(got.template.upgradeAvailable).toBe(true);

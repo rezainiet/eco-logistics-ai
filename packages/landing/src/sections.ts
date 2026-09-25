@@ -1,4 +1,7 @@
 import type { FieldDef } from "./fields.js";
+import { NUMERAL_MODES } from "./format.js";
+import { COMMERCE_SECTIONS } from "./sections-commerce.js";
+import { FONT_OPTIONS, ICON_OPTIONS, SOCIAL_NETWORKS, cta, heading } from "./vocab.js";
 
 /**
  * Section types — the building blocks a template composes.
@@ -24,64 +27,16 @@ export interface SectionTypeDef {
   fields: ReadonlyArray<FieldDef>;
 }
 
-export const ICON_NAMES = [
-  "check",
-  "star",
-  "shield",
-  "truck",
-  "clock",
-  "heart",
-  "bolt",
-  "phone",
-  "chat",
-  "gift",
-  "leaf",
-  "award",
-  "tag",
-  "map-pin",
-  "sparkles",
-  "wrench",
-] as const;
-export type IconName = (typeof ICON_NAMES)[number];
-
-const ICON_OPTIONS = ICON_NAMES.map((n) => ({ value: n, label: n.replace("-", " ") }));
-
-/** Font stacks are a closed allowlist — a merchant picks a key, never a CSS value. */
-export const FONT_STACKS = {
-  system: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-  humanist: '"Trebuchet MS", "Gill Sans", "Segoe UI", ui-sans-serif, sans-serif',
-  serif: 'Georgia, Cambria, "Times New Roman", Times, serif',
-  bengali: '"Hind Siliguri", "Noto Sans Bengali", "SolaimanLipi", ui-sans-serif, system-ui, sans-serif',
-} as const;
-export type FontKey = keyof typeof FONT_STACKS;
-
-const FONT_OPTIONS = [
-  { value: "system", label: "Modern sans" },
-  { value: "humanist", label: "Friendly sans" },
-  { value: "serif", label: "Classic serif" },
-  { value: "bengali", label: "Bengali-friendly" },
-];
-
-export const SOCIAL_NETWORKS = [
-  { value: "facebook", label: "Facebook" },
-  { value: "instagram", label: "Instagram" },
-  { value: "youtube", label: "YouTube" },
-  { value: "tiktok", label: "TikTok" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "linkedin", label: "LinkedIn" },
-  { value: "x", label: "X" },
-] as const;
-
-const heading = (def = "", required = true): FieldDef => ({
-  key: "heading",
-  type: "text",
-  label: "Heading",
-  maxLength: 120,
-  required,
-  default: def,
-});
-
-const cta = (key: string, label: string): FieldDef => ({ key, type: "cta", label });
+export {
+  ICON_NAMES,
+  FONT_STACKS,
+  FONT_KEYS,
+  SOCIAL_NETWORKS,
+  PAYMENT_METHODS,
+  PAYMENT_METHOD_OPTIONS,
+  fontStack,
+} from "./vocab.js";
+export type { IconName, FontKey, PaymentMethod } from "./vocab.js";
 
 const SECTION_LIST: SectionTypeDef[] = [
   {
@@ -110,6 +65,14 @@ const SECTION_LIST: SectionTypeDef[] = [
         ],
         default: "soft",
         required: true,
+      },
+      {
+        key: "numerals",
+        type: "select",
+        label: "Numbers",
+        help: "How prices and numbers are written. Auto uses Bangla digits (১২৩) on Bangla pages and 123 on English pages.",
+        options: NUMERAL_MODES.map((m) => ({ value: m, label: m === "auto" ? "Auto (match language)" : m === "latin" ? "123" : "১২৩" })),
+        default: "auto",
       },
     ],
   },
@@ -447,6 +410,7 @@ const SECTION_LIST: SectionTypeDef[] = [
       { key: "copyright", type: "text", label: "Copyright line", maxLength: 120 },
     ],
   },
+  ...COMMERCE_SECTIONS,
 ];
 
 export const SECTION_TYPES: ReadonlyMap<string, SectionTypeDef> = new Map(

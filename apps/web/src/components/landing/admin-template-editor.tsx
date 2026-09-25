@@ -3,14 +3,22 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Eye, Loader2, Lock } from "lucide-react";
-import { TEMPLATE_CATEGORIES, defaultContent, parseTemplateSpec } from "@ecom/landing";
+import {
+  LOCALE_LABELS,
+  type Locale,
+  type PreviewDevice,
+  TEMPLATE_CATEGORIES,
+  defaultContent,
+  parseTemplateSpec,
+  templateLocales,
+} from "@ecom/landing";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { ScaledLandingPreview } from "./landing-preview";
+import { DevicePreview, DeviceToggle } from "./device-preview";
 
 const selectCls =
   "h-10 rounded-md border border-stroke/14 bg-surface-raised px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30";
@@ -31,6 +39,8 @@ export function AdminTemplateEditor({ templateId }: { templateId: string }) {
   const [json, setJson] = useState("");
   const [dirty, setDirty] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
+  const [device, setDevice] = useState<PreviewDevice>("desktop");
+  const [previewLocale, setPreviewLocale] = useState<Locale | null>(null);
   const [meta, setMeta] = useState({ name: "", description: "", category: "general" as (typeof TEMPLATE_CATEGORIES)[number] });
 
   useEffect(() => {
@@ -205,20 +215,54 @@ export function AdminTemplateEditor({ templateId }: { templateId: string }) {
         </div>
 
         <div className="xl:sticky xl:top-4 xl:self-start">
-          <div className="mb-2 text-sm font-medium text-fg">Live preview (default content)</div>
-          <div className="max-h-[80vh] overflow-y-auto rounded-xl border border-stroke/12 bg-white">
-            {parsed.ok ? (
-              <ScaledLandingPreview spec={parsed.spec} content={defaultContent(parsed.spec)} assetBaseUrl={null} />
-            ) : (
-              <p className="p-6 text-sm text-neutral-500">Fix the spec to see a preview.</p>
-            )}
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-medium text-fg">Live preview (default content)</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {parsed.ok && templateLocales(parsed.spec).length > 1 ? (
+                <div className="inline-flex rounded-lg bg-surface-raised p-1 text-xs">
+                  {templateLocales(parsed.spec).map((l) => {
+                    const cur = previewLocale ?? parsed.spec.defaultLocale ?? templateLocales(parsed.spec)[0];
+                    return (
+                      <button
+                        key={l}
+                        type="button"
+                        lang={l}
+                        onClick={() => setPreviewLocale(l)}
+                        className={`min-h-8 rounded-md px-3 ${l === cur ? "bg-surface text-fg shadow-sm" : "text-fg-subtle"}`}
+                      >
+                        {LOCALE_LABELS[l].native}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              <DeviceToggle device={device} onChange={setDevice} />
+            </div>
           </div>
+          {parsed.ok ? (
+            (() => {
+              const locales = templateLocales(parsed.spec);
+              const loc = previewLocale && locales.includes(previewLocale) ? previewLocale : parsed.spec.defaultLocale ?? locales[0]!;
+              return (
+                <DevicePreview
+                  spec={parsed.spec}
+                  content={defaultContent(parsed.spec, loc)}
+                  locale={loc}
+                  device={device}
+                  viewportHeight={640}
+                />
+              );
+            })()
+          ) : (
+            <p className="rounded-xl border border-stroke/12 p-6 text-sm text-fg-subtle">Fix the spec to see a preview.</p>
+          )}
         </div>
       </div>
 
       <ConfirmDialog
         open={confirmPublish}
         onOpenChange={setConfirmPublish}
+        tone="neutral"
         title={`Publish v${draft?.version ?? ""}?`}
         description="This version becomes immutable and is used for new pages. Existing pages stay on their current version until their owners choose to update."
         confirmLabel="Publish version"

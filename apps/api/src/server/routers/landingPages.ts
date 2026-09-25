@@ -1,5 +1,6 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { SUPPORTED_LOCALES, readLocalized, templateDefaultLocale, templateLocales } from "@ecom/landing";
 import {
   LandingPage,
   LandingPageHost,
@@ -27,6 +28,7 @@ import {
   renamePage,
   restoreRevision,
   saveDraft,
+  setLocales,
   unpublishPage,
   upgradeTemplate,
 } from "../../lib/landing/pages.js";
@@ -57,6 +59,7 @@ function actorOf(ctx: Ctx): Actor {
 const pageId = z.string().min(1).max(64);
 const pageName = z.string().trim().min(1, "Give the page a name").max(80);
 const revision = z.number().int().min(1);
+const locale = z.enum(SUPPORTED_LOCALES);
 
 export const landingPagesRouter = router({
   /** Templates a merchant can start from (active, with a published version). */
@@ -75,6 +78,8 @@ export const landingPagesRouter = router({
         description: t.description ?? "",
         category: t.category,
         version: v.version,
+        locales: templateLocales(v.spec),
+        defaultLocale: templateDefaultLocale(v.spec),
         spec: v.spec,
       });
     }
@@ -109,7 +114,9 @@ export const landingPagesRouter = router({
     if (!version) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Template version unavailable" });
     return {
       page: pageSummary(page),
-      draftContent: page.draftContent as unknown,
+      /** Localized: { <locale>: PageContent } for every enabled locale. */
+      draftContent: readLocalized(page.draftContent) as Record<string, unknown>,
+      allowedLocales: templateLocales(version.spec),
       spec: version.spec,
       template: {
         id: String(page.templateId),
@@ -132,8 +139,28 @@ export const landingPagesRouter = router({
   }),
 
   create: billableProcedure
-    .input(z.object({ templateId: z.string().min(1).max(64), name: pageName }))
+    .input(z.object({ templateId: z.string().min(1).max(64), name: pageName, locale: locale.optional() }))
     .mutation(({ ctx, input }) => createPage(actorOf(ctx), input)),
+
+  setLocales: billableProcedure
+    .input(
+      z.object({
+        id: pageId,
+        locales: z.array(locale).min(1).max(SUPPORTED_LOCALES.length),
+        defaultLocale: locale,
+        expectedRevision: revision,
+        seed: z.enum(["template", "copy"]).default("template"),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      setLocales(actorOf(ctx), {
+        pageId: input.id,
+        locales: input.locales,
+        defaultLocale: input.defaultLocale,
+        expectedRevision: input.expectedRevision,
+        seed: input.seed,
+      }),
+    ),
 
   rename: billableProcedure
     .input(z.object({ id: pageId, name: pageName }))
@@ -194,8 +221,10 @@ export const landingPagesRouter = router({
     .mutation(({ ctx, input }) => upgradeTemplate(actorOf(ctx), { pageId: input.id, expectedRevision: input.expectedRevision })),
 
   uploadAsset: billableProcedure
-    // ~700 KB image → ~935 KB base64; stays under express.json's 1 MB.
-    .input(z.object({ dataUrl: z.string().max(960_000) }))
+    // Size is enforced inside storeLandingAsset (decoded bytes) so the
+    // merchant sees "Images must be 700 KB or smaller", not a schema dump.
+    // express.json still caps the whole request at 1 MB.
+    .input(z.object({ dataUrl: z.string().max(2_000_000) }))
     .mutation(async ({ ctx, input }) => {
       const id = merchantObjectId(ctx);
       const stored = await storeLandingAsset({ merchantId: id, actorId: id, dataUrl: input.dataUrl });
@@ -209,6 +238,6 @@ export const landingPagesRouter = router({
  */
 export const publicLandingRouter = router({
   resolveByHost: publicProcedure
-    .input(z.object({ host: z.string().max(300) }))
-    .query(({ input }) => resolveLandingPageByHost(input.host)),
+    .input(z.object({ host: z.string().max(300), locale: z.string().max(8).nullish() }))
+    .query(({ input }) => resolveLandingPageByHost(input.host, { locale: input.locale ?? null })),
 });

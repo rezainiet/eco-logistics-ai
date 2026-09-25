@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +35,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   destructive = false,
+  tone = "warning",
   loading = false,
   onConfirm,
 }: {
@@ -45,6 +46,8 @@ export function ConfirmDialog({
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  /** "neutral" for non-destructive confirmations (publish, restore). Default keeps the warning icon. */
+  tone?: "warning" | "neutral";
   loading?: boolean;
   onConfirm: () => void;
 }) {
@@ -52,9 +55,15 @@ export function ConfirmDialog({
     <Dialog open={open} onOpenChange={(v) => (loading ? null : onOpenChange(v))}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-danger-subtle text-danger">
-            <AlertTriangle className="h-5 w-5" aria-hidden />
-          </div>
+          {tone === "neutral" && !destructive ? (
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success-subtle text-success">
+              <CheckCircle2 className="h-5 w-5" aria-hidden />
+            </div>
+          ) : (
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-danger-subtle text-danger">
+              <AlertTriangle className="h-5 w-5" aria-hidden />
+            </div>
+          )}
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>

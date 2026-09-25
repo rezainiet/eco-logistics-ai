@@ -17,7 +17,7 @@
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
 /** Bidi overrides and zero-width joiners used for spoofing. */
-const SPOOF_CHARS = /[​-‏‪-‮⁦-⁩﻿]/g;
+const SPOOF_CHARS = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
 
 /** Strip characters that have no business in page copy. */
 export function cleanText(value: string, opts: { multiline?: boolean } = {}): string {

@@ -30,8 +30,10 @@ function asset(v: unknown): string | null {
 export function resolveSeo(spec: TemplateSpec, resolved: PageContent): ResolvedSeo {
   const sections = effectiveSections(spec);
   const seo = resolved[sections.find((s) => s.type === "seo")?.id ?? ""] ?? {};
-  const hero = resolved[sections.find((s) => s.type === "hero")?.id ?? ""] ?? {};
-  const header = resolved[sections.find((s) => s.type === "header")?.id ?? ""] ?? {};
+  const HERO_TYPES = ["hero", "promoHero", "editorialHero"];
+  const HEADER_TYPES = ["header", "shopHeader"];
+  const hero = resolved[sections.find((s) => HERO_TYPES.includes(s.type))?.id ?? ""] ?? {};
+  const header = resolved[sections.find((s) => HEADER_TYPES.includes(s.type))?.id ?? ""] ?? {};
 
   const title = str(seo.title) || str(hero.headline) || str(header.brandName) || "Untitled page";
   const description = str(seo.description) || str(hero.subheadline).slice(0, 160);

@@ -20,6 +20,9 @@ const { Schema, model, models } = mongoose;
 export const LANDING_PAGE_STATUSES = ["draft", "published", "unpublished", "archived"] as const;
 export type LandingPageStatus = (typeof LANDING_PAGE_STATUSES)[number];
 
+/** Content locales (mirrors @ecom/landing SUPPORTED_LOCALES). */
+export const LANDING_LOCALES = ["en", "bn"] as const;
+
 const landingPageSchema = new Schema(
   {
     merchantId: { type: Schema.Types.ObjectId, ref: "Merchant", required: true },
@@ -28,6 +31,14 @@ const landingPageSchema = new Schema(
     templateVersionId: { type: Schema.Types.ObjectId, ref: "LandingPageTemplateVersion", required: true },
     status: { type: String, enum: LANDING_PAGE_STATUSES, default: "draft" },
 
+    /**
+     * Languages this page has content for, in display order, and the one
+     * served at the page root (others at /<locale>). Pages created before
+     * locales existed have neither field and are read as English.
+     */
+    locales: { type: [{ type: String, enum: LANDING_LOCALES }], default: undefined },
+    defaultLocale: { type: String, enum: LANDING_LOCALES },
+    /** Localized draft: { <locale>: PageContent } (legacy rows: bare PageContent). */
     draftContent: { type: Schema.Types.Mixed, required: true, default: () => ({}) },
     draftRevision: { type: Number, required: true, default: 1, min: 1 },
     draftUpdatedAt: { type: Date },
@@ -69,7 +80,10 @@ const landingPageRevisionSchema = new Schema(
     number: { type: Number, required: true, min: 1 },
     templateId: { type: Schema.Types.ObjectId, ref: "LandingPageTemplate", required: true },
     templateVersionId: { type: Schema.Types.ObjectId, ref: "LandingPageTemplateVersion", required: true },
+    /** Localized snapshot: { <locale>: PageContent } (legacy rows: bare PageContent). */
     content: { type: Schema.Types.Mixed, required: true },
+    locales: { type: [{ type: String, enum: LANDING_LOCALES }], default: undefined },
+    defaultLocale: { type: String, enum: LANDING_LOCALES },
     /** The draftRevision this snapshot was taken from. */
     fromDraftRevision: { type: Number, required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "Merchant" },

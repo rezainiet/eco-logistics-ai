@@ -75,6 +75,27 @@ const ROUTE_MAP: Array<{ pattern: RegExp; crumbs: (m: RegExpMatchArray) => Crumb
     crumbs: () => [{ label: "Dashboard", href: "/dashboard" }, { label: "Settings" }],
   },
   {
+    pattern: /^\/dashboard\/landing-pages\/?$/,
+    crumbs: () => [{ label: "Dashboard", href: "/dashboard" }, { label: "Landing pages" }],
+  },
+  {
+    pattern: /^\/dashboard\/landing-pages\/new\/?$/,
+    crumbs: () => [
+      { label: "Dashboard", href: "/dashboard" },
+      { label: "Landing pages", href: "/dashboard/landing-pages" },
+      { label: "New" },
+    ],
+  },
+  {
+    // Editor: never show the raw page id as a crumb.
+    pattern: /^\/dashboard\/landing-pages\/[^/]+\/?$/,
+    crumbs: () => [
+      { label: "Dashboard", href: "/dashboard" },
+      { label: "Landing pages", href: "/dashboard/landing-pages" },
+      { label: "Editor" },
+    ],
+  },
+  {
     pattern: /^\/admin\/billing\/?$/,
     crumbs: () => [{ label: "Admin", href: "/admin/billing" }, { label: "Billing" }],
   },

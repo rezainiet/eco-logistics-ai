@@ -63,6 +63,8 @@ jobs:
         run: npm --workspace @ecom/web run typecheck
       - name: Sites typecheck
         run: npm --workspace @ecom/sites run typecheck
+      - name: Sites tests
+        run: npm --workspace @ecom/sites test
 
   api-tests:
     name: API tests

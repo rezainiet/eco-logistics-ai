@@ -2,11 +2,19 @@ import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import {
   type ContentIssue,
+  type Locale,
+  type LocaleSettings,
+  type LocalizedContent,
   MAX_CONTENT_BYTES,
   coerceContent,
   defaultContent,
+  defaultLocalizedContent,
+  initialLocale,
   landingPublicUrl,
-  validateContent,
+  normalizeLocaleSettings,
+  readLocalized,
+  templateLocales,
+  validateLocalizedContent,
   validateSlug,
 } from "@ecom/landing";
 import {
@@ -102,6 +110,11 @@ function audit(actor: Actor, action: Parameters<typeof writeAudit>[0]["action"],
   });
 }
 
+/** Locale settings of a page; pages from before locales existed are English-only. */
+export function settingsOf(page: { locales?: unknown; defaultLocale?: unknown }): LocaleSettings {
+  return normalizeLocaleSettings(page.locales, page.defaultLocale, "en");
+}
+
 export function publicUrlFor(slug: string | null | undefined): string | null {
   const pattern =
     env.LANDING_PUBLIC_URL_PATTERN ?? (env.NODE_ENV === "production" ? null : "http://{slug}.localhost:3002");
@@ -115,6 +128,7 @@ export function pageSummary(page: PageDoc) {
     status: page.status,
     templateId: String(page.templateId),
     templateVersionId: String(page.templateVersionId),
+    ...settingsOf(page),
     slug: page.slug ?? null,
     publicUrl: page.status === "published" ? publicUrlFor(page.slug) : null,
     draftRevision: page.draftRevision,
@@ -137,7 +151,7 @@ async function assertUnderPageLimit(merchantId: Types.ObjectId) {
   }
 }
 
-export async function createPage(actor: Actor, input: { templateId: string; name: string }) {
+export async function createPage(actor: Actor, input: { templateId: string; name: string; locale?: string }) {
   await assertUnderPageLimit(actor.merchantId);
   if (!Types.ObjectId.isValid(input.templateId)) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
@@ -147,18 +161,21 @@ export async function createPage(actor: Actor, input: { templateId: string; name
   const version = await versionOrThrow(tpl.currentVersionId);
   if (version.status !== "published") throw new TRPCError({ code: "NOT_FOUND", message: "Template not found" });
 
+  const locale = initialLocale(version.spec, input.locale);
   const page = await LandingPage.create({
     merchantId: actor.merchantId,
     name: input.name,
     templateId: tpl._id,
     templateVersionId: tpl.currentVersionId,
     status: "draft",
-    draftContent: defaultContent(version.spec),
+    locales: [locale],
+    defaultLocale: locale,
+    draftContent: defaultLocalizedContent(version.spec, [locale]),
     draftRevision: 1,
     draftUpdatedAt: new Date(),
     draftUpdatedBy: actor.actorId,
   });
-  await audit(actor, "landing.page_created", page._id, { templateKey: tpl.key, templateVersion: version.version });
+  await audit(actor, "landing.page_created", page._id, { templateKey: tpl.key, templateVersion: version.version, locale });
   return pageSummary(page.toObject() as PageDoc);
 }
 
@@ -176,7 +193,7 @@ export async function saveDraft(
     throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "Page content is too large" });
   }
   const version = await versionOrThrow(page.templateVersionId);
-  const result = validateContent(version.spec, input.content, "draft");
+  const result = validateLocalizedContent(version.spec, input.content, settingsOf(page), "draft");
   if (!result.ok) throw issuesError("Draft not saved", result.issues);
   await assertAssetsOwned(actor.merchantId, result.content);
 
@@ -216,7 +233,8 @@ export async function publishPage(actor: Actor, input: { pageId: string; expecte
   if (version.status !== "published") {
     throw new TRPCError({ code: "BAD_REQUEST", message: "This page's template version is not published" });
   }
-  const result = validateContent(version.spec, page.draftContent, "publish");
+  const settings = settingsOf(page);
+  const result = validateLocalizedContent(version.spec, readLocalized(page.draftContent), settings, "publish");
   if (!result.ok) throw issuesError("Page not published", result.issues);
   await assertAssetsOwned(actor.merchantId, result.content);
 
@@ -234,6 +252,8 @@ export async function publishPage(actor: Actor, input: { pageId: string; expecte
     templateId: page.templateId,
     templateVersionId: page.templateVersionId,
     content: result.content,
+    locales: settings.locales,
+    defaultLocale: settings.defaultLocale,
     fromDraftRevision: input.expectedRevision,
     createdBy: actor.actorId,
   });
@@ -330,7 +350,8 @@ export async function duplicatePage(actor: Actor, input: { pageId: string; name?
     templateId: source.templateId,
     templateVersionId: source.templateVersionId,
     status: "draft",
-    draftContent: source.draftContent,
+    ...settingsOf(source),
+    draftContent: readLocalized(source.draftContent),
     draftRevision: 1,
     draftUpdatedAt: new Date(),
     draftUpdatedBy: actor.actorId,
@@ -436,7 +457,8 @@ export async function restoreRevision(
     { _id: page._id, merchantId: actor.merchantId, draftRevision: input.expectedRevision, status: { $ne: "archived" } },
     {
       $set: {
-        draftContent: revision.content,
+        draftContent: readLocalized(revision.content),
+        ...settingsOf(revision),
         templateVersionId: revision.templateVersionId,
         draftUpdatedAt: new Date(),
         draftUpdatedBy: actor.actorId,
@@ -460,12 +482,23 @@ export async function upgradeTemplate(actor: Actor, input: { pageId: string; exp
     return { page: pageSummary(page), upgraded: false };
   }
   const target = await versionOrThrow(tpl.currentVersionId);
+  const settings = settingsOf(page);
+  const supported = templateLocales(target.spec);
+  const locales = settings.locales.filter((l) => supported.includes(l));
+  if (!locales.length) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "The new template version does not support this page's languages" });
+  }
+  const current = readLocalized(page.draftContent);
+  const migrated: LocalizedContent = {};
+  for (const l of locales) migrated[l] = coerceContent(target.spec, current[l], l);
   const updated = await LandingPage.findOneAndUpdate(
     { _id: page._id, merchantId: actor.merchantId, draftRevision: input.expectedRevision, status: { $ne: "archived" } },
     {
       $set: {
         templateVersionId: tpl.currentVersionId,
-        draftContent: coerceContent(target.spec, page.draftContent),
+        draftContent: migrated,
+        locales,
+        defaultLocale: locales.includes(settings.defaultLocale) ? settings.defaultLocale : locales[0],
         draftUpdatedAt: new Date(),
         draftUpdatedBy: actor.actorId,
       },
@@ -475,4 +508,50 @@ export async function upgradeTemplate(actor: Actor, input: { pageId: string; exp
   ).lean();
   if (!updated) return conflictOrMissing(actor.merchantId, input.pageId);
   return { page: pageSummary(updated), upgraded: true };
+}
+
+/**
+ * Enable/disable languages and choose the default. A newly enabled
+ * language starts from the template's copy for that language (or a copy of
+ * the default language's content when `seed: "copy"`); a disabled
+ * language's draft content is dropped. Published revisions are untouched.
+ */
+export async function setLocales(
+  actor: Actor,
+  input: { pageId: string; locales: Locale[]; defaultLocale: Locale; expectedRevision: number; seed?: "template" | "copy" },
+) {
+  const page = await getOwnedPage(actor.merchantId, input.pageId);
+  assertEditable(page);
+  const version = await versionOrThrow(page.templateVersionId);
+  const supported = templateLocales(version.spec);
+  const next = normalizeLocaleSettings(input.locales, input.defaultLocale);
+  const unsupported = next.locales.filter((l) => !supported.includes(l));
+  if (unsupported.length) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `This template does not support: ${unsupported.join(", ")}` });
+  }
+  const before = settingsOf(page);
+  const current = readLocalized(page.draftContent);
+  const content: LocalizedContent = {};
+  for (const l of next.locales) {
+    if (current[l]) content[l] = current[l];
+    else if (input.seed === "copy" && current[before.defaultLocale]) {
+      content[l] = coerceContent(version.spec, current[before.defaultLocale], l);
+    } else content[l] = defaultContent(version.spec, l);
+  }
+  const updated = await LandingPage.findOneAndUpdate(
+    { _id: page._id, merchantId: actor.merchantId, draftRevision: input.expectedRevision, status: { $ne: "archived" } },
+    {
+      $set: {
+        locales: next.locales,
+        defaultLocale: next.defaultLocale,
+        draftContent: content,
+        draftUpdatedAt: new Date(),
+        draftUpdatedBy: actor.actorId,
+      },
+      $inc: { draftRevision: 1 },
+    },
+    { new: true },
+  ).lean();
+  if (!updated) return conflictOrMissing(actor.merchantId, input.pageId);
+  return pageSummary(updated);
 }

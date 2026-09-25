@@ -1,31 +1,40 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { extractLandingLabel } from "@ecom/landing";
-import { landingRootDomain } from "./lib/config";
+import { landingRootDomain, previewHost } from "./lib/config";
+import { routeFor } from "./lib/routing";
 
 /**
- * Host-based routing. The only thing this app serves is
- *   https://<label>.<LANDING_ROOT_DOMAIN>/  →  /lp/<label>
+ * Host-based routing (see lib/routing.ts). Internal render paths
+ * (`/lp/*`, `/preview-frame`) are never directly addressable: every request
+ * is re-routed from its Host + path, so a visitor cannot ask one hostname
+ * to render another tenant's page. `X-Forwarded-Host` is ignored.
  *
- * - The Host header is normalised and validated by the same helper the API
- *   uses; anything malformed, reserved, nested or foreign is a 404.
- * - `X-Forwarded-Host` is ignored — tenant identity comes from Host only.
- * - `/lp/*` is internal and never directly addressable, so a visitor
- *   cannot ask one hostname to render another tenant's page.
- * - Pages are single-URL for now; other paths 404.
+ * The resolved label/locale are forwarded as request headers so the root
+ * layout can set <html lang> for the page it wraps.
  */
 const NOT_FOUND = "/lp/-";
 
 export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
-  const root = landingRootDomain();
-  const label = root ? extractLandingLabel(req.headers.get("host"), root) : null;
-
+  const route = routeFor(req.headers.get("host"), req.nextUrl.pathname, {
+    rootDomain: landingRootDomain(),
+    previewHost: previewHost(),
+  });
   const url = req.nextUrl.clone();
   url.search = "";
-  url.pathname = label && pathname === "/" ? `/lp/${label}` : NOT_FOUND;
-  return NextResponse.rewrite(url);
+  const headers = new Headers(req.headers);
+  headers.delete("x-lp-label");
+  headers.delete("x-lp-locale");
+  if (route.kind === "page") {
+    url.pathname = route.locale ? `/lp/${route.label}/${route.locale}` : `/lp/${route.label}`;
+    headers.set("x-lp-label", route.label);
+    headers.set("x-lp-locale", route.locale ?? "");
+  } else if (route.kind === "preview") {
+    url.pathname = "/preview-frame";
+  } else {
+    url.pathname = NOT_FOUND;
+  }
+  return NextResponse.rewrite(url, { request: { headers } });
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|robots.txt).*)"],
+  matcher: ["/((?!_next/static|_next/image|robots.txt|icon.svg).*)"],
 };

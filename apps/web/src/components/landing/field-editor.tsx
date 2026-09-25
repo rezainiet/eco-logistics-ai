@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { localeInputClass } from "./bn-font";
 
 /**
  * Schema-driven field editor. It renders exactly the fields a template
@@ -27,6 +28,8 @@ import { cn } from "@/lib/utils";
  */
 
 export interface FieldEditorEnv {
+  /** Language of the content being edited — sets lang + the Bengali typeface on inputs. */
+  locale: string;
   assetUrl: (assetId: string) => string | null;
   upload: (file: File) => Promise<{ id: string }>;
   /** Visible section ids a "scroll to section" CTA may target. */
@@ -98,6 +101,7 @@ export function FieldInput({
     </FieldShell>
   );
   const str = typeof value === "string" ? value : "";
+  const langProps = { lang: env.locale, className: localeInputClass(env.locale) };
 
   switch (field.type) {
     case "text":
@@ -109,12 +113,14 @@ export function FieldInput({
           placeholder={field.type === "url" ? "https://…" : field.placeholder}
           onChange={(e) => onChange(e.target.value)}
           aria-invalid={errors.length > 0}
+          {...(field.type === "text" ? langProps : {})}
         />,
       );
     case "textarea":
       return shell(
         <textarea
-          className={textareaCls}
+          lang={env.locale}
+          className={cn(textareaCls, langProps.className)}
           value={str}
           maxLength={field.maxLength ?? 1200}
           onChange={(e) => onChange(e.target.value)}
@@ -129,7 +135,8 @@ export function FieldInput({
           help={field.help ?? "Blank line = new paragraph. **bold**, _italic_, and lines starting with “- ” for bullets."}
         >
           <textarea
-            className={cn(textareaCls, "min-h-[120px]")}
+            lang={env.locale}
+            className={cn(textareaCls, "min-h-[120px]", langProps.className)}
             value={str}
             maxLength={field.maxLength ?? 6000}
             onChange={(e) => onChange(e.target.value)}
@@ -168,6 +175,27 @@ export function FieldInput({
       );
     case "image":
       return shell(<ImageInput value={value as ImageValue | null} onChange={onChange} env={env} />);
+    case "price":
+      return shell(
+        <div className="relative">
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-fg-subtle [font-family:var(--font-editor-bn),system-ui,sans-serif]">৳</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="any"
+            className="pl-7"
+            value={typeof value === "number" ? String(value) : ""}
+            onChange={(e) => {
+              const raw = e.target.value.trim();
+              if (raw === "") return onChange(null);
+              const n = Number(raw);
+              onChange(Number.isFinite(n) ? n : raw);
+            }}
+            aria-invalid={errors.length > 0}
+          />
+        </div>,
+      );
     case "cta":
       return shell(<CtaInput value={value as CtaValue} onChange={onChange} env={env} />);
     case "repeater":
@@ -250,6 +278,8 @@ function ImageInput({
         <Input
           value={value.alt}
           maxLength={200}
+          lang={env.locale}
+          className={localeInputClass(env.locale)}
           placeholder="Describe the image (alt text)"
           onChange={(e) => onChange({ ...value, alt: e.target.value })}
         />
@@ -291,7 +321,14 @@ function CtaInput({ value, onChange, env }: { value: CtaValue | undefined; onCha
   const set = (action: CtaAction) => onChange({ ...v, action });
   return (
     <div className="space-y-2 rounded-md border border-stroke/10 p-3">
-      <Input value={v.label} maxLength={60} placeholder="Button text" onChange={(e) => onChange({ ...v, label: e.target.value })} />
+      <Input
+        value={v.label}
+        maxLength={60}
+        placeholder="Button text"
+        lang={env.locale}
+        className={localeInputClass(env.locale)}
+        onChange={(e) => onChange({ ...v, label: e.target.value })}
+      />
       <select className={selectCls} value={a.kind} onChange={(e) => set(blankAction(e.target.value as CtaAction["kind"], env))}>
         {CTA_ACTION_KINDS.map((k) => (
           <option key={k} value={k}>

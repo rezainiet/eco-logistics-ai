@@ -5,6 +5,7 @@ import {
   isEmptyValue,
   valueSchemaFor,
 } from "./fields.js";
+import { type Locale, SUPPORTED_LOCALES, isLocale } from "./locales.js";
 import { SECTION_ID_RE } from "./safe.js";
 import { type SectionTypeDef, getSectionType } from "./sections.js";
 
@@ -46,10 +47,23 @@ const specSectionSchema = z
   })
   .strict();
 
+const localeEnum = z.enum(SUPPORTED_LOCALES);
+
 const specShapeSchema = z
   .object({
     specVersion: z.literal(SPEC_VERSION),
+    /** Locales this template is designed for. Omitted = every supported locale. */
+    locales: z.array(localeEnum).min(1).max(SUPPORTED_LOCALES.length).optional(),
+    /** Locale new pages start in. Omitted = first of `locales`, else "en". */
+    defaultLocale: localeEnum.optional(),
     sections: z.array(specSectionSchema).min(3).max(30),
+    /**
+     * Per-locale default copy: localeDefaults.bn.hero.headline = "...".
+     * Overrides the field default for that locale only; same validation.
+     */
+    localeDefaults: z
+      .record(localeEnum, z.record(z.string(), z.record(z.string(), z.unknown())))
+      .optional(),
   })
   .strict();
 
@@ -138,6 +152,40 @@ export function parseTemplateSpec(
     }
   });
 
+  for (const section of spec.sections) {
+    if (isLocale(section.id)) {
+      issues.push({ path: "sections", message: `Section id "${section.id}" is reserved (it is a locale code)` });
+    }
+  }
+  const locales = templateLocales(spec);
+  if (spec.defaultLocale && !locales.includes(spec.defaultLocale)) {
+    issues.push({ path: "defaultLocale", message: "defaultLocale must be one of the template's locales" });
+  }
+  for (const [loc, bySection] of Object.entries(spec.localeDefaults ?? {})) {
+    for (const [sectionId, byField] of Object.entries(bySection ?? {})) {
+      const section = spec.sections.find((s) => s.id === sectionId);
+      const def = section ? getSectionType(section.type, section.typeVersion) : undefined;
+      if (!section || !def) {
+        issues.push({ path: `localeDefaults.${loc}.${sectionId}`, message: `Unknown section "${sectionId}"` });
+        continue;
+      }
+      for (const [key, value] of Object.entries(byField)) {
+        const field = def.fields.find((f) => f.key === key);
+        if (!field) {
+          issues.push({ path: `localeDefaults.${loc}.${sectionId}.${key}`, message: `Unknown field "${key}"` });
+          continue;
+        }
+        const r = valueSchemaFor(field).safeParse(value);
+        if (!r.success) {
+          issues.push({
+            path: `localeDefaults.${loc}.${sectionId}.${key}`,
+            message: r.error.issues[0]?.message ?? "Invalid default value",
+          });
+        }
+      }
+    }
+  }
+
   for (const singleton of ["theme", "seo"]) {
     const n = counts.get(singleton) ?? 0;
     if (n !== 1) issues.push({ path: "sections", message: `A template needs exactly one "${singleton}" section (found ${n})` });
@@ -148,18 +196,38 @@ export function parseTemplateSpec(
   return issues.length ? { ok: false, issues } : { ok: true, spec };
 }
 
-export function effectiveSections(spec: TemplateSpec): EffectiveSection[] {
+/** Locales a template supports (its declared list, or all supported locales). */
+export function templateLocales(spec: TemplateSpec): Locale[] {
+  return spec.locales?.length ? [...spec.locales] : [...SUPPORTED_LOCALES];
+}
+
+export function templateDefaultLocale(spec: TemplateSpec): Locale {
+  return spec.defaultLocale ?? templateLocales(spec)[0] ?? "en";
+}
+
+/**
+ * Sections with every field's effective definition for `locale`: the
+ * section type's field, merged with the template override, with the
+ * template's per-locale default copy applied last.
+ */
+export function effectiveSections(spec: TemplateSpec, locale: Locale = "en"): EffectiveSection[] {
   const out: EffectiveSection[] = [];
+  const localeDefaults = spec.localeDefaults?.[locale] ?? {};
   for (const section of spec.sections) {
     const def: SectionTypeDef | undefined = getSectionType(section.type, section.typeVersion);
     if (!def) continue;
+    const sectionDefaults = localeDefaults[section.id] ?? {};
     out.push({
       id: section.id,
       type: def.type,
       typeVersion: def.version,
       label: section.label ?? def.label,
       visual: def.visual,
-      fields: def.fields.map((f) => merge(f, section.fields?.[f.key])),
+      fields: def.fields.map((f) => {
+        const eff = merge(f, section.fields?.[f.key]);
+        if (f.key in sectionDefaults) eff.default = sectionDefaults[f.key];
+        return eff;
+      }),
     });
   }
   return out;
@@ -174,9 +242,9 @@ function defaultFor(field: FieldDef): unknown {
 }
 
 /** Initial content for a new page: every editable field at its default. */
-export function defaultContent(spec: TemplateSpec): PageContent {
+export function defaultContent(spec: TemplateSpec, locale: Locale = "en"): PageContent {
   const content: PageContent = {};
-  for (const section of effectiveSections(spec)) {
+  for (const section of effectiveSections(spec, locale)) {
     const values: SectionContent = {};
     for (const field of section.fields) {
       if (field.editable) values[field.key] = defaultFor(field);
@@ -193,7 +261,13 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function requiredIssues(field: FieldDef, value: unknown, path: string): ContentIssue[] {
   const issues: ContentIssue[] = [];
   if (field.required && isEmptyValue(field, value)) {
-    issues.push({ path, message: `${field.label} is required` });
+    issues.push({
+      path,
+      message:
+        field.type === "cta"
+          ? `${field.label} needs somewhere to go (WhatsApp, phone, email or a link)`
+          : `${field.label} is required`,
+    });
   }
   if (field.type === "repeater" && Array.isArray(value)) {
     if (field.minItems && value.length < field.minItems) {
@@ -225,13 +299,14 @@ export function validateContent(
   spec: TemplateSpec,
   raw: unknown,
   mode: "draft" | "publish",
+  locale: Locale = "en",
 ): { ok: boolean; content: PageContent; issues: ContentIssue[] } {
   const issues: ContentIssue[] = [];
   const content: PageContent = {};
   const input = isPlainObject(raw) ? raw : {};
   if (!isPlainObject(raw)) issues.push({ path: "", message: "Content must be an object" });
 
-  const sections = effectiveSections(spec);
+  const sections = effectiveSections(spec, locale);
   const known = new Set(sections.map((s) => s.id));
   for (const id of Object.keys(input)) {
     if (!known.has(id)) issues.push({ path: id, message: `Unknown section "${id}"` });
@@ -290,10 +365,10 @@ function coerceField(field: FieldDef, value: unknown): unknown {
  * every editable value that is still valid under `spec` and replaces the
  * rest with defaults. Used when a page moves to a newer template version.
  */
-export function coerceContent(spec: TemplateSpec, raw: unknown): PageContent {
+export function coerceContent(spec: TemplateSpec, raw: unknown, locale: Locale = "en"): PageContent {
   const input = isPlainObject(raw) ? raw : {};
   const content: PageContent = {};
-  for (const section of effectiveSections(spec)) {
+  for (const section of effectiveSections(spec, locale)) {
     const values = isPlainObject(input[section.id]) ? (input[section.id] as Record<string, unknown>) : {};
     const out: SectionContent = {};
     for (const field of section.fields) {
@@ -310,10 +385,10 @@ export function coerceContent(spec: TemplateSpec, raw: unknown): PageContent {
  * re-validated here even though the API validated it on write, so a
  * tampered database row still cannot reach a component unvalidated.
  */
-export function resolveContent(spec: TemplateSpec, raw: unknown): PageContent {
+export function resolveContent(spec: TemplateSpec, raw: unknown, locale: Locale = "en"): PageContent {
   const input = isPlainObject(raw) ? raw : {};
   const content: PageContent = {};
-  for (const section of effectiveSections(spec)) {
+  for (const section of effectiveSections(spec, locale)) {
     const values = isPlainObject(input[section.id]) ? (input[section.id] as Record<string, unknown>) : {};
     const out: SectionContent = {};
     for (const field of section.fields) {

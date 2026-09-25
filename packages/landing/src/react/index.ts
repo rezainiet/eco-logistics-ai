@@ -2,8 +2,10 @@ export { LandingRenderer, themeStyle } from "./renderer.js";
 export type { LandingRendererProps } from "./renderer.js";
 export { SECTION_COMPONENTS } from "./sections.js";
 export type { SectionProps } from "./sections.js";
-export { Icon, RichText, CtaButton } from "./primitives.js";
-export type { RenderEnv } from "./primitives.js";
+export { Icon, RichText, CtaButton, ProductCard, PriceRow, DiscountBadge, PaymentBadge, ctxOf } from "./primitives.js";
+export type { RenderEnv, ProductValue, Ctx } from "./primitives.js";
+export { uiStrings } from "./strings.js";
+export type { UiStrings } from "./strings.js";
 
 /** Build a RenderEnv that serves assets from `<base>/<assetId>`. */
 export function assetEnv(baseUrl: string | null | undefined) {

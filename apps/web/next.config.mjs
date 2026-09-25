@@ -109,6 +109,9 @@ const CSP_HEADER_NAME = CSP_ENFORCED
  *   frame-src 'self' data:
  *     The billing page renders the merchant's payment-proof PDF in
  *     an iframe with a `data:` URL.
+ *     The landing-page editor embeds the preview frame served by
+ *     apps/sites (NEXT_PUBLIC_LANDING_PREVIEW_URL; dev default
+ *     http://preview.localhost:3002), so its origin is allowed too.
  *
  *   frame-ancestors 'none'
  *     Same intent as X-Frame-Options: DENY. Modern browsers prefer
@@ -162,6 +165,19 @@ function buildCsp({ frameAncestors, allowShopifyScripts }) {
       return null;
     }
   })();
+  const landingPreviewOrigin = (() => {
+    const raw =
+      process.env.NEXT_PUBLIC_LANDING_PREVIEW_URL ??
+      (process.env.NODE_ENV === "production" ? "" : "http://preview.localhost:3002");
+    if (!raw) return null;
+    try {
+      return new URL(raw).origin;
+    } catch {
+      return null;
+    }
+  })();
+  const frameSrc = ["'self'", "data:"];
+  if (landingPreviewOrigin) frameSrc.push(landingPreviewOrigin);
   const connectSrc = ["'self'", "https:", "wss:"];
   if (apiOrigin) connectSrc.push(apiOrigin);
   if (sentryOrigin) connectSrc.push(sentryOrigin);
@@ -183,7 +199,7 @@ function buildCsp({ frameAncestors, allowShopifyScripts }) {
     "img-src 'self' data: blob: https:",
     "font-src 'self' data:",
     `connect-src ${connectSrc.join(" ")}`,
-    "frame-src 'self' data:",
+    `frame-src ${frameSrc.join(" ")}`,
     frameAncestorsDirective,
     "form-action 'self'",
     "base-uri 'self'",

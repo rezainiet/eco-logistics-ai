@@ -147,7 +147,7 @@ describe("content validation", () => {
   it("strips control and bidi-override characters from text", () => {
     const s = spec("launch");
     const content = defaultContent(s);
-    content.hero!.headline = "Hello‮dlrow\u0000 there";
+    content.hero!.headline = "Hello\u202Edlrow\u0000 there";
     const r = validateContent(s, content, "draft");
     expect(r.content.hero!.headline).toBe("Hellodlrow there");
   });

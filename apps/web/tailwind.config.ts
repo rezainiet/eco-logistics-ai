@@ -6,8 +6,6 @@ const config: Config = {
   content: [
     "./src/app/**/*.{ts,tsx}",
     "./src/components/**/*.{ts,tsx}",
-    // Landing-page section components render inside the editor preview.
-    "../../packages/landing/src/react/**/*.{ts,tsx}",
   ],
   theme: {
     container: {

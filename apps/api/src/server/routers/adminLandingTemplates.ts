@@ -6,6 +6,8 @@ import {
   blankTemplateSpec,
   listSectionTypes,
   parseTemplateSpec,
+  templateDefaultLocale,
+  templateLocales,
 } from "@ecom/landing";
 import { LandingPage, LandingPageTemplate, LandingPageTemplateVersion } from "@ecom/db";
 import { router, scopedAdminProcedure } from "../trpc.js";
@@ -134,15 +136,23 @@ export const adminLandingTemplatesRouter = router({
   list: manage.query(async () => {
     const [templates, drafts, usage] = await Promise.all([
       LandingPageTemplate.find({}).sort({ status: 1, sortOrder: 1, createdAt: 1 }).lean(),
-      LandingPageTemplateVersion.find({ status: "draft" }).select("templateId version").lean(),
+      LandingPageTemplateVersion.find({ status: "draft" }).select("templateId version spec").lean(),
       LandingPage.aggregate<{ _id: Types.ObjectId; count: number }>([
         { $match: { status: { $ne: "archived" } } },
         { $group: { _id: "$templateId", count: { $sum: 1 } } },
       ]),
     ]);
-    const draftBy = new Map(drafts.map((d) => [String(d.templateId), d.version]));
+    const draftBy = new Map(drafts.map((d) => [String(d.templateId), d]));
+    const currentIds = templates.map((t) => t.currentVersionId).filter(Boolean);
+    const currents = await LandingPageTemplateVersion.find({ _id: { $in: currentIds } }).select("spec").lean();
+    const currentBy = new Map(currents.map((v) => [String(v._id), v.spec]));
     const usageBy = new Map(usage.map((u) => [String(u._id), u.count]));
-    return templates.map((t) => ({
+    return templates.map((t) => {
+      const draft = draftBy.get(String(t._id));
+      // Thumbnail: the live version, else the open draft.
+      const parsed = parseTemplateSpec((t.currentVersionId && currentBy.get(String(t.currentVersionId))) ?? draft?.spec);
+      const previewSpec = parsed.ok ? parsed.spec : null;
+      return {
       id: String(t._id),
       key: t.key,
       name: t.name,
@@ -151,10 +161,14 @@ export const adminLandingTemplatesRouter = router({
       origin: t.origin,
       status: t.status,
       currentVersion: t.currentVersion ?? null,
-      draftVersion: draftBy.get(String(t._id)) ?? null,
+      draftVersion: draft?.version ?? null,
       pageCount: usageBy.get(String(t._id)) ?? 0,
       updatedAt: t.updatedAt,
-    }));
+      previewSpec,
+      locales: previewSpec ? templateLocales(previewSpec) : [],
+      defaultLocale: previewSpec ? templateDefaultLocale(previewSpec) : null,
+    };
+    });
   }),
 
   get: manage.input(z.object({ id: z.string() })).query(async ({ input }) => {
