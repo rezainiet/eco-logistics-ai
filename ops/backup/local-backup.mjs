@@ -33,9 +33,9 @@ const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace
 const dest = path.resolve(opt("--dest", path.join(repo, "..", "backups")));
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 const git = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" }).trim();
-const tryRun = (cmd, a) => {
+const tryRun = (cmd, a, cwd) => {
   try {
-    return execFileSync(cmd, a, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return execFileSync(cmd, a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return null;
   }
@@ -87,7 +87,8 @@ for (const file of many("--pbx-archive")) {
 }
 for (const f of fs.readdirSync(dirs.pbx).filter((f) => f.endsWith(".tar.gz"))) {
   const name = f.replace(/\.tar\.gz$/, "");
-  const info = tryRun("tar", ["-xzOf", path.join(dirs.pbx, f), `${name}/BACKUP-INFO.txt`]);
+  // Relative name + cwd: GNU tar would read "E:/…" as a remote host:path.
+  const info = tryRun("tar", ["-xzOf", f, `${name}/BACKUP-INFO.txt`], dirs.pbx);
   pbxInfo.push({ file: f, info: Object.fromEntries((info ?? "").split("\n").filter(Boolean).map((l) => l.split(/=(.*)/s).slice(0, 2))) });
 }
 

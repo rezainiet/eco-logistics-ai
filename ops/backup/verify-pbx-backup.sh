@@ -8,7 +8,10 @@
 # depends on are present. Prints names only — never file contents.
 
 set -uo pipefail
-ARCHIVE="$1"
+[ -f "$1" ] || { echo "no such archive: $1"; exit 2; }
+# Work next to the archive with a relative name: GNU tar reads "E:/..." as a remote host:path.
+cd "$(dirname "$1")" || exit 2
+ARCHIVE="$(basename "$1")"
 fail=0
 ok() { printf 'ok    %s\n' "$*"; }
 bad() { printf 'FAIL  %s\n' "$*"; fail=1; }

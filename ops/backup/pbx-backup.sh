@@ -24,7 +24,7 @@ set -uo pipefail
 umask 077
 
 OUT_DIR="${1:-/root/pbx-backups}"
-HOST="$(hostname -s)"
+HOST="$(hostname -s 2>/dev/null || hostname)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="pbx-SENSITIVE-$HOST-$STAMP"
 WORK="$(mktemp -d)"

@@ -1,0 +1,8 @@
+# Files that run or are read on Linux servers must keep LF endings, even when
+# checked out or committed on Windows (core.autocrlf). CRLF breaks bash
+# ("$'\r': command not found"), systemd/Nginx configs and env files (values
+# would end in \r).
+*.sh                     text eol=lf
+deploy/**                text eol=lf
+ops/**                   text eol=lf
+.env*.example            text eol=lf

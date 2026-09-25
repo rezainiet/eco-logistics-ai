@@ -76,7 +76,9 @@ try {
   else {
     const out = path.join(tmp, "src");
     fs.mkdirSync(out);
-    run("tar", ["-xzf", path.join(dest, src.path), "-C", out]);
+    // Relative names + cwd: GNU tar would read "E:/…" as a remote host:path.
+    const tarball = path.join(dest, src.path);
+    run("tar", ["-xzf", path.basename(tarball), "-C", path.relative(path.dirname(tarball), out).split(path.sep).join("/")], path.dirname(tarball));
     const root = path.join(out, fs.readdirSync(out)[0]);
     const n = run("git", ["ls-files"], repo).split("\n").length;
     ok(`source tarball extracts (${src.path}; repo tracks ${n} files)`);
