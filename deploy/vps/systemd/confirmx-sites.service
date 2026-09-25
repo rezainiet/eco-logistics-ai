@@ -1,0 +1,30 @@
+# /etc/systemd/system/confirmx-sites.service
+# Landing-page renderer. Can run before the DOMAIN phase; Nginx does not route to it yet.
+[Unit]
+Description=ConfirmX landing pages (Next.js renderer)
+After=network-online.target confirmx-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=confirmx
+Group=confirmx
+WorkingDirectory=/opt/confirmx/app/apps/sites
+EnvironmentFile=/etc/confirmx/sites.env
+ExecStart=/opt/confirmx/app/node_modules/.bin/next start --hostname 127.0.0.1 -p 3002
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+Nice=5
+CPUWeight=50
+MemoryHigh=500M
+MemoryMax=700M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

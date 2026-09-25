@@ -1,0 +1,31 @@
+# /etc/systemd/system/confirmx-web.service
+[Unit]
+Description=ConfirmX dashboard (Next.js)
+After=network-online.target confirmx-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=confirmx
+Group=confirmx
+WorkingDirectory=/opt/confirmx/app/apps/web
+EnvironmentFile=/etc/confirmx/web.env
+# PORT comes from web.env (3001); HOSTNAME keeps it off public interfaces.
+Environment=HOSTNAME=127.0.0.1
+ExecStart=/opt/confirmx/app/node_modules/.bin/next start --hostname 127.0.0.1
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+
+Nice=5
+CPUWeight=50
+MemoryHigh=700M
+MemoryMax=900M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

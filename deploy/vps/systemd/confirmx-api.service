@@ -1,0 +1,35 @@
+# /etc/systemd/system/confirmx-api.service
+# Express + tRPC API and the BullMQ worker farm (one process).
+[Unit]
+Description=ConfirmX API (Express + tRPC + BullMQ workers)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=confirmx
+Group=confirmx
+WorkingDirectory=/opt/confirmx/app/apps/api
+EnvironmentFile=/etc/confirmx/api.env
+ExecStart=/usr/bin/node dist/index.js
+# Graceful shutdown drains HTTP, workers, Mongo (apps/api/CLAUDE.md); its own watchdog is 25 s.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=3
+
+# Never let ConfirmX starve Asterisk on a shared VPS.
+Nice=5
+CPUWeight=50
+MemoryHigh=900M
+MemoryMax=1200M
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
