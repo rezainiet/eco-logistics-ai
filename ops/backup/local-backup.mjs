@@ -135,7 +135,8 @@ const manifest = {
   operator: { os: `${os.type()} ${os.release()} ${os.arch()}`, hostname: os.hostname() },
   toolchain: {
     node: process.version,
-    npm: tryRun(process.platform === "win32" ? "npm.cmd" : "npm", ["-v"]) ?? tryRun("npm", ["-v"]),
+    // Windows: npm is a .cmd shim, which Node 22 will not execFile directly.
+    npm: process.platform === "win32" ? tryRun("cmd", ["/d", "/c", "npm", "-v"]) : tryRun("npm", ["-v"]),
     packageManager: "npm workspaces (package-lock.json) — pnpm is not used",
     nodeEngine: JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).engines?.node ?? null,
     mongodump: firstLine(tryRun("mongodump", ["--version"])),
