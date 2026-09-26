@@ -62,7 +62,7 @@ Option B: accept that the rollback is "VPS previous release"
 1. `sudo bash deploy/vps/preflight.sh > preflight.txt` — confirm 80/443/3001/3002/4000/6379 are free, Asterisk healthy, enough RAM (ConfirmX needs ~2.5 GB with its caps).
 2. Install Node 22, Nginx, certbot, `redis-server` (bind 127.0.0.1). **Do not** run `ufw reset`/`iptables -F`; only *add* allow rules for 80/443.
 3. Create user `confirmx`, `/opt/confirmx`, `/etc/confirmx/{api,web,sites}.env` (values from the encrypted backup; `TRUSTED_PROXIES=loopback`, `REDIS_URL=redis://127.0.0.1:6379`, `API_PORT=4000`, `LANDING_API_URL=http://127.0.0.1:4000`).
-4. `bash deploy/vps/deploy.sh main` (build in a new release dir, switch symlink).
+4. as root: `bash deploy/vps/deploy.sh <branch|sha> --expect <sha>` (builds as the `confirmx` user in a new release dir, then switches the symlink; `--dry-run` first).
 5. Install the three systemd units from `deploy/vps/systemd/`, `systemctl enable --now`.
 6. Atlas: add the VPS public IP to Network Access.
 
@@ -108,7 +108,7 @@ Triggers: smoke test fails, error rate spikes, auth broken, PBX degraded.
 
 | Situation | Action | Time |
 | --- | --- | --- |
-| Bad release on the VPS | `bash deploy/vps/deploy.sh --rollback` | < 1 min |
+| Bad release on the VPS | as root: `bash deploy/vps/deploy.sh --rollback` | < 1 min |
 | VPS broken, Railway repaired (Step 0 A) | Hostinger: `api.confirmx.ai` CNAME → `ta18xxk6.up.railway.app`; `confirmx.ai` A → `69.46.46.2` (values recorded in INFRA-AUDIT) | TTL (5 min) |
 | PBX affected by ConfirmX | `systemctl stop confirmx-api confirmx-web confirmx-sites` (Nginx can stay); verify `pjsip show registrations` | seconds |
 

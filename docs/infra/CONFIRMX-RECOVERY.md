@@ -155,6 +155,6 @@ Then log in, open Orders, open a landing page in the editor, and confirm
 `asterisk -rx "pjsip show registrations"` is unchanged.
 
 ## 20. Rollback
-- Bad release: `sudo -u confirmx bash /opt/confirmx/app/deploy/vps/deploy.sh --rollback`.
+- Bad release: as root: `bash /opt/confirmx/app/deploy/vps/deploy.sh --rollback` (add `--dry-run` to preview).
 - Bad server: stop ConfirmX (`systemctl stop confirmx-api confirmx-web confirmx-sites`) — Asterisk is unaffected — and point DNS back to the previous host (records in INFRA-AUDIT.md).
 - Bad data restore: restore the dump taken immediately before (step 15 rule).
