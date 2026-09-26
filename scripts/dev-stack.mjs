@@ -3,7 +3,8 @@
  * Local development stack — `npm run dev:sites`.
  *
  * Starts everything needed to use ConfirmX end to end on one machine:
- *   MongoDB  127.0.0.1:27018  persistent data in .dev/mongo (unless MONGODB_URI is set)
+ *   MongoDB  127.0.0.1:27018  single-node replica set "rs0" (transactions), data in
+ *            .dev/mongo (unless MONGODB_URI is set)
  *   API      http://localhost:4000   (tsx watch)
  *   Web      http://localhost:3001   (dashboard + landing editor)
  *   Sites    http://<slug>.localhost:3002, preview frame http://preview.localhost:3002
@@ -81,7 +82,8 @@ env.NODE_ENV = "development";
 
 let startMongo = false;
 if (!env.MONGODB_URI) {
-  env.MONGODB_URI = `mongodb://127.0.0.1:${MONGO_PORT}/confirmx_dev`;
+  // A replica set (of one) — order placement reserves stock in a transaction.
+  env.MONGODB_URI = `mongodb://127.0.0.1:${MONGO_PORT}/confirmx_dev?replicaSet=rs0&directConnection=true`;
   startMongo = true;
 } else {
   const host = (() => {
@@ -131,12 +133,36 @@ if (startMongo) {
     const dbPath = path.join(devDir, "mongo");
     freshDb = !fs.existsSync(dbPath);
     fs.mkdirSync(dbPath, { recursive: true });
-    mongod = spawn(bin, ["--dbpath", dbPath, "--port", String(MONGO_PORT), "--bind_ip", "127.0.0.1", "--quiet"], {
+    mongod = spawn(bin, ["--dbpath", dbPath, "--port", String(MONGO_PORT), "--bind_ip", "127.0.0.1", "--replSet", "rs0", "--quiet"], {
       stdio: ["ignore", "ignore", "inherit"],
     });
     mongod.on("exit", (code) => code && log(`MongoDB exited (${code})`));
     if (!(await waitForPort(MONGO_PORT, 30000))) die("MongoDB did not start");
-    log(`MongoDB  mongodb://127.0.0.1:${MONGO_PORT}/confirmx_dev  (data: .dev/mongo)`);
+    log(`MongoDB  mongodb://127.0.0.1:${MONGO_PORT}/confirmx_dev  replica set rs0  (data: .dev/mongo)`);
+  }
+  await ensureReplicaSet();
+}
+
+/** Initiates the one-member replica set once (also converts an older standalone .dev/mongo). */
+async function ensureReplicaSet() {
+  const { MongoClient } = await import("mongodb");
+  const client = new MongoClient(`mongodb://127.0.0.1:${MONGO_PORT}/?directConnection=true`, { serverSelectionTimeoutMS: 10000 });
+  try {
+    await client.connect();
+    const admin = client.db("admin");
+    const hello = await admin.command({ hello: 1 });
+    if (!hello.setName) {
+      if (!mongod) die(`MongoDB on ${MONGO_PORT} is not a replica set — stop it and re-run (the dev stack restarts it with --replSet rs0).`);
+      await admin.command({ replSetInitiate: { _id: "rs0", members: [{ _id: 0, host: `127.0.0.1:${MONGO_PORT}` }] } });
+      log("MongoDB replica set rs0 initiated");
+    }
+    const until = Date.now() + 30000;
+    while (!(await admin.command({ hello: 1 })).isWritablePrimary) {
+      if (Date.now() > until) die("MongoDB replica set did not elect a primary");
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  } finally {
+    await client.close();
   }
 }
 
