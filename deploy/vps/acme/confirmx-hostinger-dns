@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# /usr/local/sbin/confirmx-hostinger-dns — minimal Hostinger DNS API client for ACME DNS-01.
+#   confirmx-hostinger-dns add-txt <relative-name> <value>   (append; never overwrites other records)
+#   confirmx-hostinger-dns del-txt <relative-name>           (delete TXT records at exactly that name)
+#   confirmx-hostinger-dns wait-txt <relative-name> <value>  (wait until Hostinger's authoritative NS serve it)
+# Token: /etc/confirmx/hostinger.token (root, 0600). Never printed.
+set -euo pipefail
+ZONE="${CONFIRMX_DNS_ZONE:-confirmx.ai}"
+API="https://developers.hostinger.com/api/dns/v1/zones/$ZONE"
+TOKEN_FILE=/etc/confirmx/hostinger.token
+
+call() { # method [json-body]
+  local hdr; hdr=$(mktemp); chmod 600 "$hdr"
+  printf 'Authorization: Bearer %s\n' "$(tr -d '[:space:]' < "$TOKEN_FILE")" > "$hdr"
+  local code
+  if [ -n "${2:-}" ]; then
+    code=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X "$1" -H @"$hdr" -H 'Accept: application/json' -H 'Content-Type: application/json' --data "$2" "$API")
+  else
+    code=$(curl -s -m 30 -o /dev/null -w '%{http_code}' -X "$1" -H @"$hdr" -H 'Accept: application/json' "$API")
+  fi
+  rm -f "$hdr"
+  echo "$code"
+}
+
+name_ok() { [[ "$1" =~ ^_[a-z0-9_-]+(\.[a-z0-9_-]+)*$ ]] || { echo "refusing name '$1' (only _underscore names)" >&2; exit 2; }; }
+
+case "${1:-}" in
+  add-txt)
+    name_ok "$2"; val="$3"; [[ "$val" =~ ^[A-Za-z0-9_-]{8,128}$ ]] || { echo "bad TXT value" >&2; exit 2; }
+    body=$(printf '{"overwrite":false,"zone":[{"name":"%s","type":"TXT","ttl":60,"records":[{"content":"%s"}]}]}' "$2" "$val")
+    code=$(call PUT "$body"); [ "$code" = 200 ] || { echo "add-txt: HTTP $code" >&2; exit 1; } ;;
+  del-txt)
+    name_ok "$2"
+    body=$(printf '{"filters":[{"name":"%s","type":"TXT"}]}' "$2")
+    code=$(call DELETE "$body"); [ "$code" = 200 ] || { echo "del-txt: HTTP $code" >&2; exit 1; } ;;
+  wait-txt)
+    name_ok "$2"; want="$3"; fqdn="$2.$ZONE"
+    mapfile -t ns < <(dig +short NS "$ZONE" | sed 's/\.$//')
+    [ "${#ns[@]}" -gt 0 ] || { echo "no NS for $ZONE" >&2; exit 1; }
+    for i in $(seq 1 60); do
+      ok=1
+      for n in "${ns[@]}"; do dig +short TXT "$fqdn" @"$n" | tr -d '"' | grep -qxF "$want" || ok=0; done
+      [ "$ok" = 1 ] && exit 0
+      sleep 10
+    done
+    echo "wait-txt: not visible on all authoritative NS after 10 min" >&2; exit 1 ;;
+  *) echo "usage: $0 add-txt|del-txt|wait-txt <name> [value]" >&2; exit 2 ;;
+esac

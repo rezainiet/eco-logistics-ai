@@ -1,0 +1,7 @@
+#!/bin/sh
+# certbot --manual-auth-hook for *.confirmx.ai (DNS-01 via the Hostinger DNS API).
+set -e
+[ "$CERTBOT_DOMAIN" = "confirmx.ai" ] || { echo "unexpected domain $CERTBOT_DOMAIN" >&2; exit 1; }
+/usr/local/sbin/confirmx-hostinger-dns add-txt _acme-challenge "$CERTBOT_VALIDATION"
+/usr/local/sbin/confirmx-hostinger-dns wait-txt _acme-challenge "$CERTBOT_VALIDATION"
+sleep 20   # let Let's Encrypt's resolvers see it on every authoritative server

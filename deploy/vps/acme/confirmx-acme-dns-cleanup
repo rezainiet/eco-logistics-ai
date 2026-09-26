@@ -1,0 +1,4 @@
+#!/bin/sh
+# certbot --manual-cleanup-hook: remove the _acme-challenge TXT record(s) again.
+[ "$CERTBOT_DOMAIN" = "confirmx.ai" ] || exit 0
+/usr/local/sbin/confirmx-hostinger-dns del-txt _acme-challenge
