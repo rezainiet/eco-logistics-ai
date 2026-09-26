@@ -1,5 +1,6 @@
 # /etc/systemd/system/confirmx-api.service
 # Express + tRPC API and the BullMQ worker farm (one process).
+# api.env must set API_HOST=127.0.0.1 so the API listens on loopback only (Nginx proxies to it).
 [Unit]
 Description=ConfirmX API (Express + tRPC + BullMQ workers)
 After=network-online.target redis-server.service
@@ -15,7 +16,7 @@ ExecStart=/usr/bin/node dist/index.js
 # Graceful shutdown drains HTTP, workers, Mongo (apps/api/CLAUDE.md); its own watchdog is 25 s.
 KillSignal=SIGTERM
 TimeoutStopSec=30
-Restart=always
+Restart=on-failure
 RestartSec=3
 
 # Never let ConfirmX starve Asterisk on a shared VPS.

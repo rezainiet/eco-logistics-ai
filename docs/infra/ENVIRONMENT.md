@@ -27,6 +27,8 @@ Production secrets are never copied into git, CI logs or staging.
 | --- | --- | --- | --- | --- |
 | `NODE_ENV` | runtime mode; production enables strict checks | R | ✔ | env.ts |
 | `API_PORT` | listen port (VPS: 4000 on 127.0.0.1) | O (4000) | ✔ | index.ts |
+| `API_HOST` | listen interface; VPS `127.0.0.1` (loopback only, Nginx proxies). Unset = all interfaces | P | — | index.ts |
+| `LANDING_PROXY_SECRET` | shared with the Sites checkout proxy; only then is its forwarded customer IP trusted | P | — | server/landing-orders.ts |
 | `MONGODB_URI` | MongoDB connection (Atlas) | R | ✔ | lib/db.ts |
 | `REDIS_URL` | BullMQ queues, repeatable jobs, cache | P | ✔ | lib/queue.ts, lib/redis |
 | `JWT_SECRET` | signs API access tokens (≥16) — changing it signs everyone out | R | ✔ | auth |
@@ -80,6 +82,7 @@ Production secrets are never copied into git, CI logs or staging.
 | `LANDING_ASSET_ORIGIN` | public origin serving `/api/landing-assets` (CSP img-src) | R | B |
 | `LANDING_ROOT_DOMAIN` | landing parent domain (DOMAIN phase) | O | B |
 | `LANDING_PREVIEW_HOST`, `LANDING_EDITOR_ORIGINS` | editor preview host + allowed editor origins | O | B |
+| `LANDING_PROXY_SECRET` | same value as the API's; sent with checkout requests so the API trusts the forwarded customer IP | P | |
 | `LANDING_ALLOW_INDEXING` | `true` lets search engines index pages | O | |
 | `LANDING_ANALYTICS` | `off` disables merchant Meta Pixels platform-wide | O | B |
 

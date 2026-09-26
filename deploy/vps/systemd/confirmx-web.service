@@ -10,10 +10,15 @@ User=confirmx
 Group=confirmx
 WorkingDirectory=/opt/confirmx/app/apps/web
 EnvironmentFile=/etc/confirmx/web.env
-# PORT comes from web.env (3001); HOSTNAME keeps it off public interfaces.
-Environment=HOSTNAME=127.0.0.1
-ExecStart=/opt/confirmx/app/node_modules/.bin/next start --hostname 127.0.0.1
-Restart=always
+# Next.js normalises 127.0.0.1 to "localhost" inside middleware; the server must use the
+# same name, or every middleware rewrite/redirect becomes an external proxy to itself
+# (Sites: self-proxy loop until OOM; Web: redirects to https://localhost:3001).
+# ipv4first makes "localhost" bind 127.0.0.1 on hosts that list ::1 first.
+Environment=NODE_OPTIONS=--dns-result-order=ipv4first
+# PORT comes from web.env (3001); "localhost" keeps it off public interfaces.
+Environment=HOSTNAME=localhost
+ExecStart=/opt/confirmx/app/node_modules/.bin/next start --hostname localhost
+Restart=on-failure
 RestartSec=3
 TimeoutStopSec=20
 

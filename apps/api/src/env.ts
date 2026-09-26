@@ -10,6 +10,12 @@ config();
 const schema = z
   .object({
     API_PORT: z.coerce.number().default(4000),
+    /**
+     * Interface to listen on. Unset = all interfaces (local development).
+     * Production on the VPS sets 127.0.0.1: only Nginx on the same host may
+     * reach the API.
+     */
+    API_HOST: z.string().trim().min(1).max(255).optional(),
     MONGODB_URI: z.string().url().or(z.string().startsWith("mongodb")),
     REDIS_URL: z.string().optional(),
     JWT_SECRET: z.string().min(16),

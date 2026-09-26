@@ -527,9 +527,12 @@ async function main() {
     },
   );
 
-  const server = app.listen(env.API_PORT, () => {
-    console.log(`[api] listening on http://localhost:${env.API_PORT}`);
-  });
+  const onListening = () => {
+    console.log(`[api] listening on http://${env.API_HOST ?? "localhost"}:${env.API_PORT}`);
+  };
+  const server = env.API_HOST
+    ? app.listen(env.API_PORT, env.API_HOST, onListening)
+    : app.listen(env.API_PORT, onListening);
 
   /**
    * Graceful shutdown sequence. Order matters:
