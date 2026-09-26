@@ -65,13 +65,16 @@ describe("Meta Pixel ID validation", () => {
 });
 
 describe("event catalogue", () => {
-  it("never includes e-commerce events that have no real action behind them", () => {
+  it("includes only events with a real action behind them", () => {
     const names = Object.keys(LANDING_EVENTS);
-    for (const fake of ["Purchase", "AddToCart", "InitiateCheckout", "Lead", "AddPaymentInfo", "CompleteRegistration"]) {
+    // No payment is taken and there are no forms/sign-ups (yet).
+    for (const fake of ["Lead", "AddPaymentInfo", "CompleteRegistration", "Subscribe"]) {
       expect(names).not.toContain(fake);
     }
     const standard = names.filter((n) => LANDING_EVENTS[n as keyof typeof LANDING_EVENTS].kind === "standard");
-    expect(standard.sort()).toEqual(["Contact", "PageView", "ViewContent"]);
+    expect(standard.sort()).toEqual(["AddToCart", "Contact", "InitiateCheckout", "PageView", "Purchase", "ViewContent"]);
+    // Purchase is tied to a server-created order, never to opening a form.
+    expect(LANDING_EVENTS.Purchase.when).toMatch(/server created the order/i);
   });
 
   it("classifies links by kind without exposing the destination", () => {

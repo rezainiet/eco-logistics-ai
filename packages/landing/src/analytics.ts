@@ -7,14 +7,20 @@ import { type PageContent, type TemplateSpec, effectiveSections } from "./spec.j
  * public renderer (runtime) and the docs.
  *
  * Honesty rules:
- *   - Only actions that really exist on a landing page are reported. There
- *     is no cart, checkout or payment, so AddToCart, InitiateCheckout and
- *     Purchase are never sent; a WhatsApp or phone click is a `Contact`,
- *     not a sale. `Lead` is reserved for a future form submission.
- *   - No personal data: never phone numbers, emails, message text, link
- *     URLs, or merchant/page database ids. Products are identified by their
- *     position key ("products-0"), prices in BDT.
- *   - The editor preview never loads a pixel (it is not mounted there).
+ *   - Only actions that really happen are reported. A WhatsApp or phone
+ *     click is a `Contact`, not a sale. Commerce events exist only on pages
+ *     that sell catalog products through the built-in cart:
+ *       AddToCart         a product really went into the cart
+ *       InitiateCheckout  the customer moved from the cart to checkout
+ *       Purchase          the SERVER accepted an order (never on opening a
+ *                         form). Orders are cash on delivery: Purchase means
+ *                         "order placed", not "paid" (payment_method: cod).
+ *     `Lead` is reserved for a future form submission.
+ *   - No personal data: never names, phone numbers, addresses, emails,
+ *     message text, link URLs, or merchant/page database ids. Catalog
+ *     products are identified by their product id (content_ids), page
+ *     product cards by their position key ("products-0").
+ *   - The editor preview and the dashboard never load a pixel.
  */
 
 /** Meta Pixel (dataset) IDs are 15–16 digit numbers. Anything else is rejected. */
@@ -48,6 +54,9 @@ export type ContactMethod = "whatsapp" | "phone" | "email" | "messenger";
 /** Every event a landing page can send. `kind` = Meta standard vs custom event. */
 export const LANDING_EVENTS = {
   PageView: { kind: "standard", when: "Page loaded (once per page load)" },
+  AddToCart: { kind: "standard", when: "A catalog product was added to the cart (quantity actually increased)" },
+  InitiateCheckout: { kind: "standard", when: "The customer continued from the cart to checkout" },
+  Purchase: { kind: "standard", when: "The server created the order (cash on delivery — placed, not paid); once per order" },
   ViewContent: { kind: "standard", when: "Page loaded — the offer/products were shown (once per page load)" },
   Contact: { kind: "standard", when: "Click on a WhatsApp, phone, email or Messenger link" },
   whatsapp_click: { kind: "custom", when: "Click on a WhatsApp link (not inside a product card)" },

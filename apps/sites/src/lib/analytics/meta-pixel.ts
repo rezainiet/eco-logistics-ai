@@ -33,10 +33,11 @@ declare global {
   }
 }
 
-export type PixelParams = Record<string, string | number | string[] | undefined>;
+export type PixelParams = Record<string, string | number | string[] | Array<Record<string, string | number>> | undefined>;
 
 export interface MetaPixel {
-  track(event: string, params?: PixelParams): void;
+  /** `eventId` makes an event deterministic (e.g. one Purchase per order) for de-duplication. */
+  track(event: string, params?: PixelParams, eventId?: string): void;
   trackCustom(event: string, params?: PixelParams): void;
 }
 
@@ -84,15 +85,15 @@ export function metaPixel(pixelId: string): MetaPixel {
     fbq("init", pixelId);
     initialised.add(pixelId);
   }
-  const send = (method: "trackSingle" | "trackSingleCustom", name: string, params?: PixelParams) => {
+  const send = (method: "trackSingle" | "trackSingleCustom", name: string, params?: PixelParams, id?: string) => {
     try {
-      window.fbq?.(method, pixelId, name, clean(params), { eventID: eventId(name) });
+      window.fbq?.(method, pixelId, name, clean(params), { eventID: id ?? eventId(name) });
     } catch {
       // Analytics must never break the page.
     }
   };
   return {
-    track: (name, params) => send("trackSingle", name, params),
+    track: (name, params, id) => send("trackSingle", name, params, id),
     trackCustom: (name, params) => send("trackSingleCustom", name, params),
   };
 }

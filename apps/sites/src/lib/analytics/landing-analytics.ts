@@ -1,4 +1,5 @@
 import { type LandingAnalyticsConfig, type LandingEventName, type TrackedProduct, linkKind } from "@ecom/landing";
+import { COMMERCE_EVENT, type CommerceEvent, type CommerceLine } from "./commerce-events";
 import { type MetaPixel, type PixelParams, metaPixel } from "./meta-pixel";
 
 /**
@@ -16,7 +17,41 @@ import { type MetaPixel, type PixelParams, metaPixel } from "./meta-pixel";
  *   - Per click: at most one standard event (Contact) and one custom event.
  *   - No personal data: link URLs, phone numbers, emails and message text
  *     are never read into an event — only the kind of link.
+ *   - Commerce events come from the cart (see commerce-events.ts), never
+ *     from DOM guesses. Purchase is sent only for an order the server
+ *     created, once per order (deterministic eventID, remembered for the
+ *     browser session), with payment_method "cod": placed, not paid.
  */
+
+const STANDARD = new Set<LandingEventName>(["PageView", "ViewContent", "Contact", "AddToCart", "InitiateCheckout", "Purchase"]);
+const purchasesSent = new Set<string>();
+
+function purchaseSeen(ref: string): boolean {
+  if (purchasesSent.has(ref)) return true;
+  try {
+    return window.sessionStorage.getItem(`confirmx:purchase:${ref}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberPurchase(ref: string): void {
+  purchasesSent.add(ref);
+  try {
+    window.sessionStorage.setItem(`confirmx:purchase:${ref}`, "1");
+  } catch {
+    // In-memory guard still applies.
+  }
+}
+
+function contentsOf(lines: CommerceLine[]) {
+  return {
+    content_type: "product",
+    content_ids: lines.map((l) => l.id),
+    contents: lines.map((l) => ({ id: l.id, quantity: l.quantity, item_price: l.price })),
+    num_items: lines.reduce((s, l) => s + l.quantity, 0),
+  };
+}
 
 export interface LandingPageContext {
   slug: string;
@@ -25,7 +60,6 @@ export interface LandingPageContext {
   title: string;
 }
 
-type Send = (name: LandingEventName, params?: PixelParams) => void;
 
 const pageViews = new Set<string>();
 
@@ -42,9 +76,9 @@ export function startLandingAnalytics(
 
   const pixel: MetaPixel = metaPixel(config.metaPixelId);
   const base: PixelParams = { lp_slug: page.slug, lp_template: page.template, lp_locale: page.locale };
-  const send: Send = (name, params) => {
+  const send = (name: LandingEventName, params?: PixelParams, eventId?: string) => {
     const payload = { ...base, ...params };
-    if (name === "PageView" || name === "ViewContent" || name === "Contact") pixel.track(name, payload);
+    if (STANDARD.has(name)) pixel.track(name, payload, eventId);
     else pixel.trackCustom(name, payload);
   };
 
@@ -112,6 +146,30 @@ export function startLandingAnalytics(
     send("cta_click", { lp_cta_type: kind, lp_location: location_ });
   };
 
+  const onCommerce = (e: Event) => {
+    const ev = (e as CustomEvent<CommerceEvent>).detail;
+    if (!ev || typeof ev !== "object") return;
+    if (ev.type === "add_to_cart") {
+      send("AddToCart", {
+        ...contentsOf([ev.line]),
+        content_name: ev.name.slice(0, 100),
+        value: Math.round(ev.line.price * ev.line.quantity * 100) / 100,
+        currency: ev.currency,
+      });
+    } else if (ev.type === "initiate_checkout") {
+      if (!ev.lines.length) return;
+      send("InitiateCheckout", { ...contentsOf(ev.lines), value: ev.value, currency: ev.currency });
+    } else if (ev.type === "purchase") {
+      if (!ev.orderRef || !ev.lines.length || purchaseSeen(ev.orderRef)) return;
+      rememberPurchase(ev.orderRef);
+      send("Purchase", { ...contentsOf(ev.lines), value: ev.value, currency: ev.currency, payment_method: "cod" }, `Purchase.${ev.orderRef}`);
+    }
+  };
+
   document.addEventListener("click", onClick, true);
-  return () => document.removeEventListener("click", onClick, true);
+  window.addEventListener(COMMERCE_EVENT, onCommerce);
+  return () => {
+    document.removeEventListener("click", onClick, true);
+    window.removeEventListener(COMMERCE_EVENT, onCommerce);
+  };
 }
