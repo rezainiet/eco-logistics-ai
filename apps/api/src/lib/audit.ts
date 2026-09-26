@@ -63,6 +63,12 @@ type AuditAction =
   | "landing.page_archived"
   | "landing.slug_claimed"
   | "landing.tracking_updated"
+  | "landing.products_updated"
+  | "product.created"
+  | "product.updated"
+  | "product.archived"
+  | "inventory.adjusted"
+  | "order.landing_placed"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
   | "merchant.gdpr_redact_customer"
@@ -126,7 +132,8 @@ type SubjectType =
   | "admin"
   | "system"
   | "landing_template"
-  | "landing_page";
+  | "landing_page"
+  | "product";
 
 export interface AuditEntry {
   /** Optional for system-level events that don't tie to one merchant. */

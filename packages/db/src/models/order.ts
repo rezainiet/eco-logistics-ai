@@ -44,7 +44,35 @@ const itemSchema = new Schema(
     name: { type: String, required: true, trim: true },
     sku: { type: String, trim: true },
     quantity: { type: Number, required: true, min: 1 },
+    /** Unit price at order time (a snapshot — later product edits never change it). */
     price: { type: Number, required: true, min: 0 },
+    /** Catalog product this line was bought from (landing-page orders). */
+    productId: { type: Schema.Types.ObjectId, ref: "Product" },
+    imageAssetId: { type: Schema.Types.ObjectId },
+  },
+  { _id: false }
+);
+
+/**
+ * Stock held by this order (orders with catalog items only). Moved by
+ * apps/api/src/lib/inventory.ts `reconcileOrderInventory`, which derives
+ * the target from `order.status` and applies the change once:
+ *   reserved  → released   (cancelled / rto: reserved units go back)
+ *   reserved  → fulfilled  (delivered: units leave on-hand stock)
+ *   released  → reserved   (a cancelled order is restored, stock permitting)
+ * `cycle` counts reservations so movement keys stay unique per cycle.
+ */
+export const ORDER_INVENTORY_STATES = ["reserved", "released", "fulfilled"] as const;
+
+const orderInventorySchema = new Schema(
+  {
+    state: { type: String, enum: ORDER_INVENTORY_STATES, required: true },
+    cycle: { type: Number, required: true, default: 1, min: 1 },
+    reservedAt: { type: Date },
+    releasedAt: { type: Date },
+    fulfilledAt: { type: Date },
+    /** Why a restore could not re-reserve stock, if it could not. */
+    note: { type: String, trim: true, maxlength: 200 },
   },
   { _id: false }
 );
@@ -53,6 +81,15 @@ const orderDetailsSchema = new Schema(
   {
     cod: { type: Number, required: true, min: 0 },
     total: { type: Number, required: true, min: 0 },
+    /** Items subtotal and delivery charge (landing-page orders; total = both). */
+    subtotal: { type: Number, min: 0 },
+    deliveryCharge: { type: Number, min: 0 },
+    /** Absent on older orders, which are BDT. */
+    currency: { type: String, trim: true, uppercase: true, maxlength: 3 },
+    /** Delivery zone chosen at checkout (label from the landing page). */
+    deliveryArea: { type: String, trim: true, maxlength: 60 },
+    /** Customer's note at checkout. */
+    customerNote: { type: String, trim: true, maxlength: 500 },
     status: { type: String, enum: ORDER_STATUSES, default: "pending", index: true },
     /**
      * Mirror of `automation.preRejectState` for the high-level order status.
@@ -291,7 +328,7 @@ const sourceSchema = new Schema(
     canonicalAddress: { type: canonicalAddressSchema, default: undefined },
     channel: {
       type: String,
-      enum: ["dashboard", "bulk_upload", "api", "webhook", "system"],
+      enum: ["dashboard", "bulk_upload", "api", "webhook", "system", "landing_page"],
       default: "dashboard",
     },
     /** Upstream id (Shopify/Woo/custom) used for ingestion idempotency. */
@@ -307,8 +344,13 @@ const sourceSchema = new Schema(
     /** Provider that delivered this order — null for dashboard-created. */
     sourceProvider: {
       type: String,
-      enum: ["shopify", "woocommerce", "custom_api", "csv", "dashboard"],
+      enum: ["shopify", "woocommerce", "custom_api", "csv", "dashboard", "landing_page"],
     },
+    /** Landing-page orders: the page, its public label and revision, and the language shown. */
+    landingPageId: { type: Schema.Types.ObjectId, ref: "LandingPage" },
+    landingSlug: { type: String, trim: true, maxlength: 63 },
+    landingRevision: { type: Number },
+    locale: { type: String, trim: true, maxlength: 5 },
     integrationId: { type: Schema.Types.ObjectId, ref: "Integration" },
     customerEmail: { type: String, trim: true, lowercase: true, maxlength: 200 },
     placedAt: { type: Date },
@@ -539,6 +581,7 @@ const orderSchema = new Schema(
      */
     preActionSnapshot: { type: Schema.Types.Mixed },
     source: { type: sourceSchema, default: () => ({}) },
+    inventory: { type: orderInventorySchema, default: undefined },
     /**
      * Intent Intelligence v1. Stamped fire-and-forget post-identity-
      * resolution at ingest. Absent on legacy orders and on orders whose
@@ -600,6 +643,11 @@ orderSchema.index({
   _id: -1,
 });
 orderSchema.index({ "logistics.trackingNumber": 1 }, { sparse: true });
+// Orders per landing page (merchant dashboard filter / page stats).
+orderSchema.index(
+  { merchantId: 1, "source.landingPageId": 1, createdAt: -1 },
+  { partialFilterExpression: { "source.landingPageId": { $exists: true } } },
+);
 orderSchema.index({ merchantId: 1, _id: -1 });
 orderSchema.index({ merchantId: 1, "order.status": 1, _id: -1 });
 // listOrders + listCouriers + per-courier analytics — slice the merchant's

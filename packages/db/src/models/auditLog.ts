@@ -148,6 +148,13 @@ export const AUDIT_ACTIONS = [
   "landing.page_archived",
   "landing.slug_claimed",
   "landing.tracking_updated",
+  "landing.products_updated",
+  // --- Commerce ---
+  "product.created",
+  "product.updated",
+  "product.archived",
+  "inventory.adjusted",
+  "order.landing_placed",
 ] as const;
 
 export const AUDIT_SUBJECT_TYPES = [
@@ -163,6 +170,7 @@ export const AUDIT_SUBJECT_TYPES = [
   "system",
   "landing_template",
   "landing_page",
+  "product",
 ] as const;
 
 const auditLogSchema = new Schema(

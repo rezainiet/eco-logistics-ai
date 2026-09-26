@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   Activity,
   BarChart3,
+  Boxes,
   CreditCard,
   LayoutDashboard,
   LayoutTemplate,
@@ -45,6 +46,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { label: "Orders", href: "/dashboard/orders", icon: Package },
+      { label: "Products", href: "/dashboard/products", icon: Boxes },
       {
         label: "Order verification",
         href: "/dashboard/fraud-review",

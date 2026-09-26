@@ -111,3 +111,11 @@ export function initialsFromLabel(label: string | undefined | null): string {
   const last = parts[parts.length - 1] ?? first;
   return ((first[0] ?? "") + (last[0] ?? "")).toUpperCase() || "M";
 }
+
+/** Amount in a product/order currency (BDT → "৳ 1,290"; others → "USD 12.50"). */
+export function formatMoney(n: number | undefined | null, currency: string | null | undefined = "BDT"): string {
+  const value = typeof n === "number" && Number.isFinite(n) ? n : 0;
+  const c = (currency ?? "BDT").toUpperCase();
+  if (c === "BDT") return formatBDT(value);
+  return `${c} ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}

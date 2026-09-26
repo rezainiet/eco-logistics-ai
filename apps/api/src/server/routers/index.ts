@@ -18,6 +18,7 @@ import { trackingRouter } from "./tracking.js";
 import { recoveryRouter } from "./recovery.js";
 import { feedbackRouter } from "./feedback.js";
 import { landingPagesRouter, publicLandingRouter } from "./landingPages.js";
+import { productsRouter } from "./products.js";
 import { adminLandingTemplatesRouter } from "./adminLandingTemplates.js";
 import {
   adminBrandingRouter,
@@ -52,6 +53,7 @@ export const appRouter = router({
   // Landing pages: merchant CRUD/draft/publish, super_admin template
   // management, and the unauthenticated host resolver used by apps/sites.
   landingPages: landingPagesRouter,
+  products: productsRouter,
   adminLandingTemplates: adminLandingTemplatesRouter,
   publicLanding: publicLandingRouter,
 });

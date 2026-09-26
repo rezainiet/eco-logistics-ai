@@ -37,3 +37,4 @@ export * from "./models/landingPageTemplate.js";
 export * from "./models/landingPage.js";
 export * from "./models/landingPageHost.js";
 export * from "./models/landingAsset.js";
+export * from "./models/product.js";

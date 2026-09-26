@@ -191,6 +191,8 @@ async function main() {
         LandingPageRevision,
         LandingPageHost,
         LandingAsset,
+        Product,
+        InventoryMovement,
       } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
         ["CallEvent", CallEvent as unknown as { syncIndexes: () => Promise<unknown> }],
@@ -224,6 +226,10 @@ async function main() {
         ["LandingPageRevision", LandingPageRevision as unknown as { syncIndexes: () => Promise<unknown> }],
         ["LandingPageHost", LandingPageHost as unknown as { syncIndexes: () => Promise<unknown> }],
         ["LandingAsset", LandingAsset as unknown as { syncIndexes: () => Promise<unknown> }],
+        // Commerce — unique SKU per merchant, and the unique movement key
+        // that makes order-driven stock movements idempotent.
+        ["Product", Product as unknown as { syncIndexes: () => Promise<unknown> }],
+        ["InventoryMovement", InventoryMovement as unknown as { syncIndexes: () => Promise<unknown> }],
       ];
       for (const [name, model] of models) {
         try {
