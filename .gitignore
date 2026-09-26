@@ -39,3 +39,6 @@ test-results/
 playwright-report/
 playwright/.cache/
 blob-report/
+
+# Local development stack data (scripts/dev-stack.mjs): Mongo data + generated local secrets
+.dev/
