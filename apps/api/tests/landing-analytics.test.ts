@@ -13,7 +13,7 @@ import {
   productCatalog,
 } from "@ecom/landing";
 import { LandingRenderer, assetEnv } from "@ecom/landing/react";
-import { AuditLog, Merchant } from "@ecom/db";
+import { AuditLog, LandingPage } from "@ecom/db";
 import { ensureSystemTemplates, __resetTemplateCacheForTests } from "../src/lib/landing/templates.js";
 import { resolveLandingPageByHost } from "../src/lib/landing/resolve.js";
 import { authUserFor, callerFor, createMerchant, disconnectDb, resetDb } from "./helpers.js";
@@ -109,69 +109,85 @@ describe("event catalogue", () => {
   });
 });
 
-describe("tracking settings (API)", () => {
+describe("per-page Meta Pixel settings (API)", () => {
   beforeEach(async () => {
     await resetDb();
     __resetTemplateCacheForTests();
   });
   afterAll(disconnectDb);
 
-  async function publishedPage(slug: string) {
+  async function publishedPage(slug: string, merchant?: Awaited<ReturnType<typeof createMerchant>>) {
     await ensureSystemTemplates();
-    const merchant = await createMerchant();
-    const caller = callerFor(authUserFor(merchant));
+    const owner = merchant ?? (await createMerchant({ email: `${slug}@shop.test` }));
+    const caller = callerFor(authUserFor(owner));
     const shop = (await caller.landingPages.templates()).find((t) => t.key === "bd-modern-shop")!;
-    const page = await caller.landingPages.create({ templateId: shop.id, name: "Shop" });
+    const page = await caller.landingPages.create({ templateId: shop.id, name: `Shop ${slug}` });
     const got = await caller.landingPages.get({ id: page.id });
     const bn = (got.draftContent as Record<string, Record<string, Record<string, unknown>>>).bn!;
     bn.order!.cta = { label: "অর্ডার", action: { kind: "whatsapp", phone: "+8801711000000", message: "" } };
     const saved = await caller.landingPages.saveDraft({ id: page.id, content: { bn }, expectedRevision: 1 });
     await caller.landingPages.setSlug({ id: page.id, slug });
     await caller.landingPages.publish({ id: page.id, expectedRevision: saved.page.draftRevision });
-    return { merchant, caller };
+    return { merchant: owner, caller, pageId: page.id };
   }
 
   it("rejects invalid IDs and enabling without an ID", async () => {
-    const { caller } = await publishedPage("pixel-a");
-    await expect(caller.landingPages.setTracking({ metaPixelId: "<script>alert(1)</script>", enabled: true })).rejects.toThrow(/15 or 16 digits/);
-    await expect(caller.landingPages.setTracking({ metaPixelId: "javascript:1", enabled: false })).rejects.toThrow(/15 or 16 digits/);
-    await expect(caller.landingPages.setTracking({ metaPixelId: null, enabled: true })).rejects.toThrow(/Pixel ID/);
-    expect(await caller.landingPages.tracking()).toMatchObject({ metaPixelId: null, enabled: false });
+    const { caller, pageId } = await publishedPage("pixel-a");
+    await expect(caller.landingPages.setTracking({ id: pageId, metaPixelId: "<script>alert(1)</script>", enabled: true })).rejects.toThrow(/15 or 16 digits/);
+    await expect(caller.landingPages.setTracking({ id: pageId, metaPixelId: "javascript:1", enabled: false })).rejects.toThrow(/15 or 16 digits/);
+    await expect(caller.landingPages.setTracking({ id: pageId, metaPixelId: "123456789012345');fbq('init','1", enabled: true })).rejects.toThrow(/15 or 16 digits/);
+    await expect(caller.landingPages.setTracking({ id: pageId, metaPixelId: null, enabled: true })).rejects.toThrow(/Pixel ID/);
+    expect(await caller.landingPages.tracking({ id: pageId })).toMatchObject({ metaPixelId: null, enabled: false });
   });
 
-  it("serves the Pixel ID with published pages only while enabled, and takes effect without republishing", async () => {
-    const { caller, merchant } = await publishedPage("pixel-b");
+  it("serves the page's Pixel ID only while enabled, and takes effect without republishing", async () => {
+    const { caller, merchant, pageId } = await publishedPage("pixel-b");
     const resolve = () => resolveLandingPageByHost("pixel-b.pages.test", { rootDomain: "pages.test" }); // cached path
 
     const before = await resolve();
     expect(before.kind === "ok" && before.analytics).toBeNull();
     expect(before.kind === "ok" && before.template.key).toBe("bd-modern-shop");
 
-    const saved = await caller.landingPages.setTracking({ metaPixelId: " 1234 5678 9012 345 ", enabled: true });
+    const saved = await caller.landingPages.setTracking({ id: pageId, metaPixelId: " 1234 5678 9012 345 ", enabled: true });
     expect(saved).toMatchObject({ metaPixelId: PIXEL, enabled: true });
     const on = await resolve();
     expect(on.kind === "ok" && on.analytics).toEqual({ metaPixelId: PIXEL });
 
-    await caller.landingPages.setTracking({ metaPixelId: PIXEL, enabled: false });
+    await caller.landingPages.setTracking({ id: pageId, metaPixelId: PIXEL, enabled: false });
     const off = await resolve();
     expect(off.kind === "ok" && off.analytics).toBeNull();
 
-    // Audited, with before/after — and nothing secret is stored.
+    // Audited per page, with before/after — and nothing secret is stored.
     const audits = await AuditLog.find({ merchantId: merchant._id, action: "landing.tracking_updated" }).lean();
     expect(audits).toHaveLength(2);
-    const stored = await Merchant.findById(merchant._id).select("landingTracking").lean();
-    expect(Object.keys(stored!.landingTracking!).sort()).toEqual(["enabled", "metaPixelId", "updatedAt"]);
+    expect(audits.every((a) => a.subjectType === "landing_page" && String(a.subjectId) === pageId)).toBe(true);
+    const stored = await LandingPage.findById(pageId).select("tracking").lean();
+    expect(Object.keys(stored!.tracking!).sort()).toEqual(["enabled", "metaPixelId", "updatedAt"]);
   });
 
-  it("is tenant-isolated: one merchant's pixel never appears on another's page", async () => {
+  it("two pages of the SAME merchant each load only their own pixel", async () => {
+    const one = await publishedPage("campaign-one");
+    const two = await publishedPage("campaign-two", one.merchant);
+    const three = await publishedPage("no-pixel", one.merchant);
+    await one.caller.landingPages.setTracking({ id: one.pageId, metaPixelId: PIXEL, enabled: true });
+    await one.caller.landingPages.setTracking({ id: two.pageId, metaPixelId: "9876543210987654", enabled: true });
+    const r = (slug: string) => resolveLandingPageByHost(`${slug}.pages.test`, { rootDomain: "pages.test", useCache: false });
+    const [p1, p2, p3] = await Promise.all([r("campaign-one"), r("campaign-two"), r("no-pixel")]);
+    expect(p1.kind === "ok" && p1.analytics).toEqual({ metaPixelId: PIXEL });
+    expect(p2.kind === "ok" && p2.analytics).toEqual({ metaPixelId: "9876543210987654" });
+    expect(p3.kind === "ok" && p3.analytics).toBeNull();
+    expect(await one.caller.landingPages.tracking({ id: three.pageId })).toMatchObject({ metaPixelId: null, enabled: false });
+  });
+
+  it("is tenant-isolated: nobody can read or set another merchant's page pixel", async () => {
     const a = await publishedPage("tenant-a");
     const b = await publishedPage("tenant-b");
-    await a.caller.landingPages.setTracking({ metaPixelId: PIXEL, enabled: true });
-    await b.caller.landingPages.setTracking({ metaPixelId: "9876543210987654", enabled: true });
+    await a.caller.landingPages.setTracking({ id: a.pageId, metaPixelId: PIXEL, enabled: true });
+    await expect(b.caller.landingPages.tracking({ id: a.pageId })).rejects.toThrow(/not found/i);
+    await expect(b.caller.landingPages.setTracking({ id: a.pageId, metaPixelId: "9876543210987654", enabled: true })).rejects.toThrow(/not found/i);
     const pa = await resolveLandingPageByHost("tenant-a.pages.test", { rootDomain: "pages.test", useCache: false });
     const pb = await resolveLandingPageByHost("tenant-b.pages.test", { rootDomain: "pages.test", useCache: false });
     expect(pa.kind === "ok" && pa.analytics).toEqual({ metaPixelId: PIXEL });
-    expect(pb.kind === "ok" && pb.analytics).toEqual({ metaPixelId: "9876543210987654" });
-    expect(await b.caller.landingPages.tracking()).toMatchObject({ metaPixelId: "9876543210987654" });
+    expect(pb.kind === "ok" && pb.analytics).toBeNull();
   });
 });

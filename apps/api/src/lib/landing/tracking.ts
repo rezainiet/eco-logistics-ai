@@ -1,17 +1,17 @@
 import { TRPCError } from "@trpc/server";
 import { normalizeMetaPixelId } from "@ecom/landing";
-import { Merchant } from "@ecom/db";
+import { LandingPage, LandingPageHost } from "@ecom/db";
 import { writeAudit } from "../audit.js";
-import type { Actor } from "./pages.js";
-import { invalidateMerchantLandingHosts } from "./resolve.js";
+import { type Actor, getOwnedPage } from "./pages.js";
+import { invalidateLandingHost } from "./resolve.js";
 
 /**
- * Merchant-level analytics for published landing pages.
+ * Per-landing-page analytics (page Settings → Analytics & Tracking).
  *
- * Only a Meta Pixel ID is stored — public by design — plus an on/off
- * switch. It applies to every published page of the merchant, served live
- * with the page (not snapshotted into revisions), so changing or disabling
- * it takes effect without republishing.
+ * Each page carries its own Meta Pixel ID — usually the pixel of the ad
+ * account that promotes that page — plus an on/off switch. A published
+ * page loads only its own pixel. Only the (public) Pixel ID is stored;
+ * it is served live with the page, so changes apply without republishing.
  */
 
 export interface LandingTrackingSettings {
@@ -20,9 +20,9 @@ export interface LandingTrackingSettings {
   updatedAt: string | null;
 }
 
-export async function getLandingTracking(merchantId: Actor["merchantId"]): Promise<LandingTrackingSettings> {
-  const m = await Merchant.findById(merchantId).select("landingTracking").lean();
-  const t = m?.landingTracking;
+type Stored = { metaPixelId?: string | null; enabled?: boolean | null; updatedAt?: Date | null } | null | undefined;
+
+function view(t: Stored): LandingTrackingSettings {
   return {
     metaPixelId: t?.metaPixelId ?? null,
     enabled: t?.enabled === true && !!t?.metaPixelId,
@@ -30,36 +30,41 @@ export async function getLandingTracking(merchantId: Actor["merchantId"]): Promi
   };
 }
 
-export async function setLandingTracking(
+export async function getPageTracking(merchantId: Actor["merchantId"], pageId: string): Promise<LandingTrackingSettings> {
+  const page = await getOwnedPage(merchantId, pageId);
+  return view(page.tracking as Stored);
+}
+
+export async function setPageTracking(
   actor: Actor,
-  input: { metaPixelId: string | null; enabled: boolean },
+  input: { pageId: string; metaPixelId: string | null; enabled: boolean },
 ): Promise<LandingTrackingSettings> {
+  const page = await getOwnedPage(actor.merchantId, input.pageId);
   const raw = (input.metaPixelId ?? "").trim();
   const pixel = raw === "" ? null : normalizeMetaPixelId(raw);
   if (raw !== "" && !pixel) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "A Meta Pixel ID is 15 or 16 digits, e.g. 123456789012345." });
   }
   if (input.enabled && !pixel) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Add your Meta Pixel ID before turning tracking on." });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Add this page's Meta Pixel ID before turning tracking on." });
   }
-  const before = await getLandingTracking(actor.merchantId);
-  const now = new Date();
-  await Merchant.updateOne(
-    { _id: actor.merchantId },
-    { $set: { landingTracking: { metaPixelId: pixel, enabled: input.enabled && !!pixel, updatedAt: now } } },
-  );
-  await invalidateMerchantLandingHosts(actor.merchantId);
+  const before = view(page.tracking as Stored);
+  const next = { metaPixelId: pixel, enabled: input.enabled && !!pixel, updatedAt: new Date() };
+  await LandingPage.updateOne({ _id: page._id, merchantId: actor.merchantId }, { $set: { tracking: next } });
+  // Only this page's cached public payloads change.
+  const hosts = await LandingPageHost.find({ pageId: page._id, merchantId: actor.merchantId, status: "active" }).select("hostname").lean();
+  await Promise.all(hosts.map((h) => invalidateLandingHost(h.hostname)));
   await writeAudit({
     merchantId: actor.merchantId,
     actorId: actor.actorId,
     actorEmail: actor.email,
     actorType: "merchant",
     action: "landing.tracking_updated",
-    subjectType: "merchant",
-    subjectId: actor.merchantId,
-    meta: { before: { metaPixelId: before.metaPixelId, enabled: before.enabled }, after: { metaPixelId: pixel, enabled: input.enabled && !!pixel } },
+    subjectType: "landing_page",
+    subjectId: page._id,
+    meta: { before: { metaPixelId: before.metaPixelId, enabled: before.enabled }, after: { metaPixelId: pixel, enabled: next.enabled } },
     ip: actor.ip ?? null,
     userAgent: actor.userAgent ?? null,
   });
-  return { metaPixelId: pixel, enabled: input.enabled && !!pixel, updatedAt: now.toISOString() };
+  return view(next);
 }

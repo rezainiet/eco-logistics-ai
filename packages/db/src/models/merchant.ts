@@ -327,23 +327,6 @@ const merchantSchema = new Schema(
     branding: { type: brandingSchema, default: () => ({}) },
     automationConfig: { type: automationConfigSchema, default: () => ({}) },
     /**
-     * Analytics for the merchant's PUBLISHED landing pages (apps/sites).
-     * Only the Meta Pixel ID is stored — it is public by design (it appears
-     * in every page's HTML). No Meta access token or other secret lives here.
-     * Validated as digits by @ecom/landing `isMetaPixelId` before saving.
-     */
-    landingTracking: {
-      type: new Schema(
-        {
-          metaPixelId: { type: String, trim: true, maxlength: 20, default: null },
-          enabled: { type: Boolean, default: false },
-          updatedAt: { type: Date },
-        },
-        { _id: false },
-      ),
-      default: undefined,
-    },
-    /**
      * Public tracking key embedded in the JS SDK on the merchant's storefront.
      * Resolves to merchantId server-side at the collector boundary. Safe to
      * expose — it can only write events for this merchant, never read.

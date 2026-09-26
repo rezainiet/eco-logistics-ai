@@ -11,7 +11,6 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { LandingStatusBadge } from "./status-badge";
-import { TrackingSettings } from "./tracking-settings";
 
 export function LandingPagesList() {
   const utils = trpc.useUtils();
@@ -50,8 +49,6 @@ export function LandingPagesList() {
           </Button>
         }
       />
-
-      <TrackingSettings />
 
       {list.isLoading ? (
         <div className="flex items-center gap-2 text-sm text-fg-subtle">

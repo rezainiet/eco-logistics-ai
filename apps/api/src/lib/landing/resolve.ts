@@ -93,12 +93,6 @@ export function landingHostCacheKey(label: string, locale: Locale | null = null)
   return `landing:host:${label}:${locale ?? "default"}`;
 }
 
-/** Drop every cached public payload for a merchant's pages (e.g. tracking settings changed). */
-export async function invalidateMerchantLandingHosts(merchantId: unknown): Promise<void> {
-  const hosts = await LandingPageHost.find({ merchantId, status: "active" }).select("hostname").lean();
-  await Promise.all(hosts.map((h) => invalidateLandingHost(h.hostname)));
-}
-
 /** Drop every cached public payload for a label (publish, unpublish, slug change, archive). */
 export async function invalidateLandingHost(label: string | null | undefined): Promise<void> {
   if (!label) return;
@@ -176,11 +170,11 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Ca
   if (!host) return { kind: "not_found" };
 
   const page = await LandingPage.findOne({ _id: host.pageId, merchantId: host.merchantId })
-    .select("status publishedRevisionId")
+    .select("status publishedRevisionId tracking")
     .lean();
   if (!page || page.status !== "published" || !page.publishedRevisionId) return { kind: "not_found" };
 
-  const merchant = await Merchant.findById(host.merchantId).select("subscription.status landingTracking").lean();
+  const merchant = await Merchant.findById(host.merchantId).select("subscription.status").lean();
   if (!merchant) return { kind: "not_found" };
   if (OFFLINE_SUBSCRIPTION.has(String(merchant.subscription?.status ?? ""))) return { kind: "unavailable" };
 
@@ -219,7 +213,8 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Ca
     content,
     seo: resolveSeo(version.spec, content),
     assetBaseUrl: landingAssetBaseUrl(),
-    analytics: analyticsConfigOf(merchant.landingTracking),
+    // This page's own pixel — never another page's, never merchant-wide.
+    analytics: analyticsConfigOf(page.tracking),
     productScope: revision.products?.length
       ? {
           merchantId: String(host.merchantId),

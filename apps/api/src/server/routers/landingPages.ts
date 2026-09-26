@@ -35,7 +35,7 @@ import {
 import { loadTemplateVersion } from "../../lib/landing/templates.js";
 import { storeLandingAsset } from "../../lib/landing/assets.js";
 import { landingAssetBaseUrl, resolveLandingPageByHost } from "../../lib/landing/resolve.js";
-import { getLandingTracking, setLandingTracking } from "../../lib/landing/tracking.js";
+import { getPageTracking, setPageTracking } from "../../lib/landing/tracking.js";
 import { getPageProducts, setPageProducts } from "../../lib/landing/products.js";
 
 /**
@@ -257,13 +257,15 @@ export const landingPagesRouter = router({
       setPageProducts(actorOf(ctx), { pageId: input.id, expectedRevision: input.expectedRevision, products: input.products }),
     ),
 
-  /** Analytics & tracking for all of the merchant's published pages. */
-  tracking: protectedProcedure.query(({ ctx }) => getLandingTracking(merchantObjectId(ctx))),
+  /** This page's Analytics & Tracking (its own Meta Pixel). */
+  tracking: protectedProcedure.input(z.object({ id: pageId })).query(({ ctx, input }) => getPageTracking(merchantObjectId(ctx), input.id)),
 
   // Turning tracking OFF must work for lapsed merchants too, so this is not billable.
   setTracking: protectedProcedure
-    .input(z.object({ metaPixelId: z.string().max(40).nullable(), enabled: z.boolean() }))
-    .mutation(({ ctx, input }) => setLandingTracking(actorOf(ctx), input)),
+    .input(z.object({ id: pageId, metaPixelId: z.string().max(40).nullable(), enabled: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      setPageTracking(actorOf(ctx), { pageId: input.id, metaPixelId: input.metaPixelId, enabled: input.enabled }),
+    ),
 });
 
 /**

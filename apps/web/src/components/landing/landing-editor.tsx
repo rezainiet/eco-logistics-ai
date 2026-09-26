@@ -665,7 +665,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 )}
               </div>
 
-              <TrackingSettings />
+              <TrackingSettings pageId={pageId} />
 
               <div className="space-y-2 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-fg">

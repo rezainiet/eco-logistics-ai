@@ -71,6 +71,25 @@ const landingPageSchema = new Schema(
     unpublishedAt: { type: Date },
     archivedAt: { type: Date },
 
+    /**
+     * Analytics for THIS page (each page usually belongs to its own ad
+     * account). Only the Meta Pixel ID is stored — public by design, it is
+     * in the page's HTML; never an access token. Live config: served with
+     * the published page, not snapshotted into revisions, so changes apply
+     * without republishing. Validated as digits (@ecom/landing isMetaPixelId).
+     */
+    tracking: {
+      type: new Schema(
+        {
+          metaPixelId: { type: String, trim: true, maxlength: 20, default: null },
+          enabled: { type: Boolean, default: false },
+          updatedAt: { type: Date },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+
     /** Denormalised from the active LandingPageHost, for listing only. */
     slug: { type: String, trim: true, lowercase: true, maxlength: 63 },
   },
