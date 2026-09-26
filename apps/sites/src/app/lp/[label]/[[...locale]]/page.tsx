@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { LOCALE_LABELS, type Locale, isMetaPixelId, productCatalog } from "@ecom/landing";
-import { LandingRenderer, assetEnv } from "@ecom/landing/react";
+import { LOCALE_LABELS, type Locale, type NumeralMode, effectiveSections, isMetaPixelId, productCatalog } from "@ecom/landing";
+import { LandingRenderer, assetEnv, themeStyle } from "@ecom/landing/react";
 import { analyticsAllowed, indexingAllowed } from "@/lib/config";
 import { resolveCurrentHost } from "@/lib/resolve";
 import { LandingAnalytics } from "./landing-analytics";
+import { LandingCommerce } from "./landing-commerce";
 
 // Always resolve against the API: publish/unpublish must take effect
 // immediately and one tenant's response must never be reused for another.
@@ -74,17 +75,38 @@ export default async function PublicLandingPage({ params }: Props) {
     );
   }
   if (r.kind !== "ok") notFound();
+  const commerce = r.commerce && r.commerce.products.length > 0 ? r.commerce : null;
+  const themeId = effectiveSections(r.spec, r.locale).find((s) => s.type === "theme")?.id;
+  const theme = (themeId ? r.content[themeId] : undefined) as Record<string, unknown> | undefined;
+  const numerals = typeof theme?.numerals === "string" ? (theme.numerals as NumeralMode) : undefined;
+  // Analytics names/prices: the page's own product cards plus its catalog products (by product id).
+  const tracked = {
+    ...productCatalog(r.spec, r.content, r.locale),
+    ...Object.fromEntries((commerce?.products ?? []).map((p) => [p.id, { name: p.name, price: p.price }])),
+  };
   return (
     <>
       <LanguageSwitch current={r.locale} locales={r.locales} defaultLocale={r.defaultLocale} />
-      <LandingRenderer spec={r.spec} content={r.content} locale={r.locale} env={assetEnv(r.assetBaseUrl)} className="min-h-screen" />
+      <LandingRenderer
+        spec={r.spec}
+        content={r.content}
+        locale={r.locale}
+        env={{ ...assetEnv(r.assetBaseUrl), ...(commerce ? { catalog: commerce.products } : {}) }}
+        className="min-h-screen"
+      />
+      {commerce ? (
+        // Themed like the page (colours, radius, Bangla typography).
+        <div style={themeStyle(theme, r.locale)} className="contents">
+          <LandingCommerce commerce={commerce} locale={r.locale} slug={r.slug} numerals={numerals} assetBaseUrl={r.assetBaseUrl} />
+        </div>
+      ) : null}
       {/* Published page only — the preview frame never mounts analytics. The
           Pixel ID is re-checked here: only digits ever reach the browser. */}
       {analyticsAllowed() && r.analytics && isMetaPixelId(r.analytics.metaPixelId) ? (
         <LandingAnalytics
           config={{ metaPixelId: r.analytics.metaPixelId }}
           page={{ slug: r.slug, template: r.template?.key ?? "custom", locale: r.locale, title: r.seo.title }}
-          products={productCatalog(r.spec, r.content, r.locale)}
+          products={tracked}
         />
       ) : null}
     </>

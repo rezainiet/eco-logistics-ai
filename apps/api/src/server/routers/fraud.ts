@@ -13,6 +13,7 @@ import {
 import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 import { invalidate } from "../../lib/cache.js";
 import { writeAudit } from "../../lib/audit.js";
+import { syncOrderInventory } from "../../lib/inventory.js";
 import { collectRiskHistory, computeRisk, hashAddress, type RiskOptions } from "../risk.js";
 import { getPlan } from "../../lib/plans.js";
 import { releaseQuota, reserveQuota } from "../../lib/usage.js";
@@ -572,6 +573,7 @@ export const fraudRouter = router({
       if (prevStatus !== "cancelled") {
         await releaseQuota(merchantId, "ordersCreated", 1);
       }
+      await syncOrderInventory([_id]);
 
       if (prevStatus !== "cancelled") {
         await MerchantStats.updateOne(

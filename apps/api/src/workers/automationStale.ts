@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import { Types } from "mongoose";
 import { Order } from "@ecom/db";
+import { syncOrderInventory } from "../lib/inventory.js";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications.js";
@@ -129,6 +130,7 @@ export async function sweepStalePendingConfirmations(): Promise<AutomationStaleR
       }
       if (updated) {
         expired += 1;
+        await syncOrderInventory([orderOid]);
         await writeAudit({
           merchantId: merchantOid,
           actorId: merchantOid,

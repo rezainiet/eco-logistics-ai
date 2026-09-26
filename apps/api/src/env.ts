@@ -106,6 +106,13 @@ const schema = z
     /** Days a released slug stays reserved before another merchant may claim it. */
     LANDING_SLUG_HOLD_DAYS: z.coerce.number().int().min(0).max(365).default(90),
     LANDING_MAX_PAGES_PER_MERCHANT: z.coerce.number().int().min(1).max(1000).default(50),
+    /**
+     * Shared secret between the public renderer (apps/sites) and the API for
+     * landing-page checkout. When set, the renderer's server-side order
+     * proxy may pass the customer's IP (for fraud scoring and per-IP limits);
+     * without it that header is ignored. Never exposed to browsers.
+     */
+    LANDING_PROXY_SECRET: z.string().trim().min(24).max(200).optional().or(z.literal("").transform(() => undefined)),
     /** Canonical merchant-facing frontend origin (no trailing slash).
      *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),

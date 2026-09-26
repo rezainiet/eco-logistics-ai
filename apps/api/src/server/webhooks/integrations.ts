@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import { syncOrderInventory } from "../../lib/inventory.js";
 import { Types } from "mongoose";
 import {
   Integration,
@@ -340,6 +341,7 @@ integrationsWebhookRouter.post(
         { $set: { "order.status": "cancelled" } },
       );
       const wasFlipped = flipped.modifiedCount > 0;
+      if (wasFlipped && liveOrder?._id) await syncOrderInventory([liveOrder._id]);
       const liveStatus = liveOrder?.order?.status;
       const hasActiveCourier =
         wasFlipped &&

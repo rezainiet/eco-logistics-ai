@@ -36,5 +36,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|robots.txt|icon.svg|healthz|readyz).*)"],
+  // /api/checkout: the page's same-origin order proxy (POST only; the API
+  // resolves the page from the Host header itself).
+  matcher: ["/((?!_next/static|_next/image|robots.txt|icon.svg|healthz|readyz|api/checkout).*)"],
 };

@@ -32,6 +32,7 @@ import { smsInboundWebhookRouter } from "./server/webhooks/sms-inbound.js";
 import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
 import { trackingRouter as trackingCollectorRouter } from "./server/tracking/collector.js";
 import { webhookLimiter } from "./middleware/rateLimit.js";
+import { landingOrdersRouter } from "./server/landing-orders.js";
 import { registerTrackingSyncWorker, scheduleTrackingSync } from "./workers/trackingSync.js";
 import { registerRiskRecomputeWorker } from "./workers/riskRecompute.js";
 import {
@@ -455,6 +456,8 @@ async function main() {
   // Landing-page images (public, GET-only, immutable). Served with a fixed
   // sniffed content type, nosniff and a deny-all CSP — see lib/landing/assets.ts.
   app.use("/api/landing-assets", landingAssetRouter);
+  // Landing-page checkout (public, rate-limited, idempotent).
+  app.use("/api/landing/orders", landingOrdersRouter);
   // Behavior tracker collector. CORS is wide-open so storefronts on any
   // origin can post events; they prove ownership via the merchant's
   // public tracking key.

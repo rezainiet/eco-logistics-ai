@@ -11,6 +11,7 @@ import {
 import { adapterFor, CourierError, hasCourierAdapter } from "../lib/couriers/index.js";
 import type { CourierName, TrackingInfo } from "../lib/couriers/types.js";
 import { invalidate } from "../lib/cache.js";
+import { syncOrderInventory } from "../lib/inventory.js";
 import { enqueueRescore } from "../workers/riskRecompute.js";
 import { contributeOutcome, hashPhoneForNetwork } from "../lib/fraud-network.js";
 import { recordCourierOutcome } from "../lib/courier-intelligence.js";
@@ -181,6 +182,11 @@ export async function applyTrackingEvents(
   const persisted = writeResult.modifiedCount > 0 || writeResult.matchedCount > 0;
   const effectivelyAppended = persisted ? newEvents.length : 0;
 
+  if (nextStatus !== prevStatus && persisted) {
+    // Courier outcome moves stock: delivered → fulfilled, rto → returned.
+    // Idempotent — a repeated webhook can never deduct twice.
+    await syncOrderInventory([order._id]);
+  }
   if (nextStatus !== prevStatus) {
     await MerchantStats.updateOne(
       { merchantId: order.merchantId },

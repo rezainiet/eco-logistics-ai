@@ -55,6 +55,8 @@ const secrets = fs.existsSync(secretsFile) ? JSON.parse(fs.readFileSync(secretsF
 secrets.JWT_SECRET ??= randomBytes(32).toString("hex");
 secrets.COURIER_ENC_KEY ??= randomBytes(32).toString("base64");
 secrets.NEXTAUTH_SECRET ??= randomBytes(32).toString("hex");
+// Shared by apps/sites (checkout proxy) and the API, so the API can trust the forwarded customer IP.
+secrets.LANDING_PROXY_SECRET ??= randomBytes(24).toString("hex");
 fs.writeFileSync(secretsFile, JSON.stringify(secrets, null, 2), { mode: 0o600 });
 
 const fromFile = readDotEnv(path.join(root, ".env"));
@@ -200,7 +202,7 @@ if (freshDb) {
 }
 
 // ── Apps ─────────────────────────────────────────────────────────────────────
-const shown = ["MONGODB_URI", "JWT_SECRET", "COURIER_ENC_KEY", "NEXTAUTH_SECRET", "NEXTAUTH_URL", "NEXT_PUBLIC_API_URL", "LANDING_API_URL"];
+const shown = ["MONGODB_URI", "JWT_SECRET", "COURIER_ENC_KEY", "NEXTAUTH_SECRET", "LANDING_PROXY_SECRET", "NEXTAUTH_URL", "NEXT_PUBLIC_API_URL", "LANDING_API_URL"];
 log(`env: ${shown.map((k) => `${k}=${env[k] ? "set" : "MISSING"}`).join(" ")}  (Redis: not used in development)`);
 log("API    http://localhost:4000   (health: /health, /ready)");
 log("Web    http://localhost:3001   (dashboard, landing editor)");

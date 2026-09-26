@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { Types } from "mongoose";
 import { Order, Merchant } from "@ecom/db";
+import { syncOrderInventory } from "../../lib/inventory.js";
 import { parseSmsInbound } from "../../lib/sms-inbound.js";
 import { writeAudit } from "../../lib/audit.js";
 import { canTransitionAutomation } from "../../lib/automation.js";
@@ -275,6 +276,7 @@ smsInboundWebhookRouter.post(
           },
         },
       );
+      await syncOrderInventory([orderOid]);
     }
 
     void writeAudit({
