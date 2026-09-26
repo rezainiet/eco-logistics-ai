@@ -36,6 +36,7 @@ import { loadTemplateVersion } from "../../lib/landing/templates.js";
 import { storeLandingAsset } from "../../lib/landing/assets.js";
 import { landingAssetBaseUrl, resolveLandingPageByHost } from "../../lib/landing/resolve.js";
 import { getLandingTracking, setLandingTracking } from "../../lib/landing/tracking.js";
+import { getPageProducts, setPageProducts } from "../../lib/landing/products.js";
 
 /**
  * Merchant landing pages. Tenant = the authenticated merchant: every
@@ -231,6 +232,30 @@ export const landingPagesRouter = router({
       const stored = await storeLandingAsset({ merchantId: id, actorId: id, dataUrl: input.dataUrl });
       return { ...stored, url: `${landingAssetBaseUrl()}/${stored.id}` };
     }),
+
+  /** Products linked to the page's draft, with live product data and the preview catalog. */
+  products: protectedProcedure.input(z.object({ id: pageId })).query(({ ctx, input }) => getPageProducts(merchantObjectId(ctx), input.id)),
+
+  setProducts: billableProcedure
+    .input(
+      z.object({
+        id: pageId,
+        expectedRevision: z.number().int().min(1),
+        products: z
+          .array(
+            z.object({
+              productId: z.string().max(24),
+              ctaText: z.string().max(40).nullish(),
+              badge: z.string().max(24).nullish(),
+              featured: z.boolean().optional(),
+            }),
+          )
+          .max(24),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      setPageProducts(actorOf(ctx), { pageId: input.id, expectedRevision: input.expectedRevision, products: input.products }),
+    ),
 
   /** Analytics & tracking for all of the merchant's published pages. */
   tracking: protectedProcedure.query(({ ctx }) => getLandingTracking(merchantObjectId(ctx))),

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Monitor, Smartphone, Tablet } from "lucide-react";
 import {
+  type CatalogProduct,
   type Locale,
   PREVIEW_DEVICES,
   PREVIEW_MESSAGE_SOURCE,
@@ -84,6 +85,7 @@ export function DevicePreview({
   className,
   title = "Landing page preview",
   edit,
+  catalog,
 }: {
   spec: TemplateSpec;
   content: unknown;
@@ -101,6 +103,8 @@ export function DevicePreview({
    * switches and reloads. Omit for plain previews and thumbnails.
    */
   edit?: { selected: string | null; onSelect: (msg: PreviewSelectMessage) => void };
+  /** Products linked to the page (live data) — catalog product grids preview with them. */
+  catalog?: CatalogProduct[];
 }) {
   const url = previewUrl();
   const target = url ? originOf(url) : null;
@@ -124,10 +128,18 @@ export function DevicePreview({
     const win = frame.current?.contentWindow;
     if (!win || !target) return;
     win.postMessage(
-      { source: PREVIEW_MESSAGE_SOURCE, type: "render", spec, content, locale, ...(edit ? { edit: { selected: edit.selected } } : {}) },
+      {
+        source: PREVIEW_MESSAGE_SOURCE,
+        type: "render",
+        spec,
+        content,
+        locale,
+        ...(edit ? { edit: { selected: edit.selected } } : {}),
+        ...(catalog ? { catalog } : {}),
+      },
       target,
     );
-  }, [spec, content, locale, target, edit?.selected, !!edit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [spec, content, locale, target, edit?.selected, !!edit, catalog]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSelect = useRef(edit?.onSelect);
   onSelect.current = edit?.onSelect;

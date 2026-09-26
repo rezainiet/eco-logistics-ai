@@ -174,7 +174,7 @@ describe("resolveEditTarget", () => {
     expect(resolveEditTarget(s, "bn", "hero.headline")).toMatchObject({ kind: "field", sectionId: "hero", label: "Promotional hero → Headline" });
     const price = resolveEditTarget(s, "bn", "products.items.2.price");
     expect(price).toMatchObject({ kind: "field", sectionId: "products" });
-    expect((price as { label: string }).label).toBe("Products → Product 3 → Price (BDT)");
+    expect((price as { label: string }).label).toBe("Products → Custom cards → Product 3 → Price (BDT)");
     expect(resolveEditTarget(s, "bn", "products.items.2")).toMatchObject({ kind: "field" });
     expect(resolveEditTarget(s, "bn", "footer")).toMatchObject({ kind: "section", sectionId: "footer" });
   });

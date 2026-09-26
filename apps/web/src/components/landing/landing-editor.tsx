@@ -43,6 +43,7 @@ import { DevicePreview, DeviceToggle } from "./device-preview";
 import { type FieldEditorEnv, FieldInput, LockedField, issuesAt } from "./field-editor";
 import { LandingStatusBadge } from "./status-badge";
 import { TrackingSettings } from "./tracking-settings";
+import { PageProductsPanel } from "@/components/commerce/page-products-panel";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -66,6 +67,8 @@ const FLASH = ["ring-2", "ring-brand/60", "ring-offset-2", "ring-offset-surface"
 export function LandingEditor({ pageId }: { pageId: string }) {
   const utils = trpc.useUtils();
   const query = trpc.landingPages.get.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
+  // Linked products (live data) — the preview shows them in catalog product grids.
+  const linkedProducts = trpc.landingPages.products.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
   const data = query.data;
 
   const [content, setContent] = useState<LocalizedContent | null>(null);
@@ -76,7 +79,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [slugInput, setSlugInput] = useState("");
   const [name, setName] = useState("");
-  const [tab, setTab] = useState<"content" | "publish">("content");
+  const [tab, setTab] = useState<"content" | "products" | "publish">("content");
   const [pane, setPane] = useState<"edit" | "preview">("edit");
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [langDraft, setLangDraft] = useState<{ locales: Locale[]; defaultLocale: Locale } | null>(null);
@@ -331,6 +334,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         locale={locale}
         device={device}
         edit={{ selected: selected?.path ?? null, onSelect: onPreviewSelect }}
+        catalog={linkedProducts.data?.catalog}
         viewportHeight={typeof window !== "undefined" ? Math.max(420, Math.round(window.innerHeight * 0.74)) : 640}
       />
     </div>
@@ -434,7 +438,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
       <div className="grid gap-6 lg:grid-cols-[minmax(360px,420px)_minmax(0,1fr)]">
         <div className={cn("space-y-3", pane === "preview" && "hidden lg:block")}>
           <div className="flex gap-1 rounded-lg bg-surface-raised p-1 text-sm">
-            {(["content", "publish"] as const).map((t) => (
+            {(["content", "products", "publish"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -444,7 +448,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                   tab === t ? "bg-surface text-fg shadow-sm" : "text-fg-subtle hover:text-fg",
                 )}
               >
-                {t === "content" ? "Content" : "Settings & publishing"}
+                {t === "content" ? "Content" : t === "products" ? "Products" : "Settings & publishing"}
               </button>
             ))}
           </div>
@@ -509,6 +513,16 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 );
               })}
             </div>
+          ) : tab === "products" ? (
+            <PageProductsPanel
+              pageId={pageId}
+              expectedRevision={baseRevision}
+              disabled={archived}
+              onSaved={(rev) => {
+                setBaseRevision(rev);
+                void linkedProducts.refetch();
+              }}
+            />
           ) : (
             <div className="space-y-4">
               <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">

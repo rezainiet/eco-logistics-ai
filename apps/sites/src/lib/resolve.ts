@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { headers } from "next/headers";
-import type { LandingAnalyticsConfig, Locale, PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
+import type { LandingAnalyticsConfig, LandingCommerce, Locale, PageContent, ResolvedSeo, TemplateSpec } from "@ecom/landing";
 import { normalizeHost } from "@ecom/landing";
 import { landingApiUrl } from "./config";
 
@@ -19,6 +19,8 @@ export type PublicLanding =
       seo: ResolvedSeo;
       assetBaseUrl: string;
       analytics?: LandingAnalyticsConfig | null;
+      /** Linked products (live price/stock) and delivery options; null without products. */
+      commerce?: LandingCommerce | null;
     }
   | { kind: "not_found" }
   | { kind: "unavailable" }

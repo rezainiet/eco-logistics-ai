@@ -88,6 +88,7 @@ function PreviewShell({
 /** Saved draft of a merchant's page, at a real device width. */
 export function DraftPreview({ pageId, initialLocale }: { pageId: string; initialLocale: string | null }) {
   const q = trpc.landingPages.get.useQuery({ id: pageId }, { refetchOnWindowFocus: true });
+  const products = trpc.landingPages.products.useQuery({ id: pageId }, { refetchOnWindowFocus: true });
   const [locale, setLocale] = useState<Locale | null>(isLocale(initialLocale) ? initialLocale : null);
   if (!q.data) return <Loading error={q.error?.message} />;
   const locales = q.data.page.locales;
@@ -101,7 +102,14 @@ export function DraftPreview({ pageId, initialLocale }: { pageId: string; initia
       onLocale={setLocale}
     >
       {(device, height) => (
-        <DevicePreview spec={q.data.spec as TemplateSpec} content={content} locale={current} device={device} viewportHeight={height} />
+        <DevicePreview
+          spec={q.data.spec as TemplateSpec}
+          content={content}
+          locale={current}
+          device={device}
+          viewportHeight={height}
+          catalog={products.data?.catalog}
+        />
       )}
     </PreviewShell>
   );

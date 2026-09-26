@@ -1,11 +1,13 @@
 import {
   type LandingAnalyticsConfig,
+  type LandingCommerce,
   type Locale,
   type PageContent,
   type ResolvedSeo,
   SUPPORTED_LOCALES,
   type TemplateSpec,
   analyticsConfigOf,
+  deliveryOptions,
   extractLandingLabel,
   isLocale,
   normalizeLocaleSettings,
@@ -16,6 +18,7 @@ import {
 import { LandingPage, LandingPageHost, LandingPageRevision, LandingPageTemplate, Merchant } from "@ecom/db";
 import { env } from "../../env.js";
 import { cached, invalidate } from "../cache.js";
+import { catalogFor } from "./products.js";
 import { loadTemplateVersion } from "./templates.js";
 
 /**
@@ -51,7 +54,24 @@ export type PublicLandingResult =
       assetBaseUrl: string;
       /** Browser analytics for this page (public Pixel ID only), or null when off. */
       analytics: LandingAnalyticsConfig | null;
+      /**
+       * Products linked to the published revision with LIVE price and stock,
+       * plus the page's delivery options; null when it links no products.
+       */
+      commerce: LandingCommerce | null;
     }
+  | { kind: "not_found" }
+  | { kind: "unavailable" };
+
+type OkResult = Extract<PublicLandingResult, { kind: "ok" }>;
+
+/**
+ * What is cached per host: everything except live product data, which is
+ * joined on every request so price and stock are never stale. The product
+ * references stay server-side (never part of the public payload).
+ */
+type CachedResult =
+  | (Omit<OkResult, "commerce"> & { productScope: { merchantId: string; pageId: string; refs: Array<{ productId: string; ctaText?: string | null; badge?: string | null; featured?: boolean | null }> } | null; delivery: LandingCommerce["delivery"] })
   | { kind: "not_found" }
   | { kind: "unavailable" };
 
@@ -103,11 +123,53 @@ export async function resolveLandingPageByHost(
     if (!isLocale(opts.locale)) return { kind: "not_found" };
     locale = opts.locale;
   }
-  if (opts.useCache === false) return resolveLabel(label, locale);
-  return cached(landingHostCacheKey(label, locale), CACHE_TTL_S, () => resolveLabel(label, locale));
+  const base =
+    opts.useCache === false
+      ? await resolveLabel(label, locale)
+      : await cached(landingHostCacheKey(label, locale), CACHE_TTL_S, () => resolveLabel(label, locale));
+  return withLiveCommerce(base);
 }
 
-async function resolveLabel(label: string, requested: Locale | null): Promise<PublicLandingResult> {
+async function withLiveCommerce(base: CachedResult): Promise<PublicLandingResult> {
+  if (base.kind !== "ok") return base;
+  const { productScope, delivery, ...rest } = base;
+  if (!productScope || productScope.refs.length === 0) return { ...rest, commerce: null };
+  const products = await catalogFor(productScope.merchantId, productScope.refs);
+  if (products.length === 0) return { ...rest, commerce: null };
+  return { ...rest, commerce: { products, delivery, currency: products[0]!.currency } };
+}
+
+/**
+ * Server-side view of a published page for order placement: the page, its
+ * merchant, the published revision's product refs and delivery options.
+ * Same checks as the public resolve (published, merchant online), never
+ * cached, and it never trusts anything but the hostname.
+ */
+export async function resolvePublishedForOrder(hostname: string | null | undefined, locale: string | null) {
+  const root = landingRootDomain();
+  if (!root) return null;
+  const label = extractLandingLabel(hostname, root);
+  if (!label) return null;
+  // The default language is served at "/" (requested as null), others by code.
+  const wanted = locale && isLocale(locale) ? locale : null;
+  let r = await resolveLabel(label, wanted);
+  if (r.kind === "not_found" && wanted) {
+    r = await resolveLabel(label, null);
+    if (r.kind === "ok" && r.locale !== wanted) return null;
+  }
+  if (r.kind !== "ok" || !r.productScope) return null;
+  return {
+    label,
+    locale: r.locale,
+    revision: r.revision.number,
+    merchantId: r.productScope.merchantId,
+    pageId: r.productScope.pageId,
+    refs: r.productScope.refs,
+    delivery: r.delivery,
+  };
+}
+
+async function resolveLabel(label: string, requested: Locale | null): Promise<CachedResult> {
   const host = await LandingPageHost.findOne({ hostname: label, status: "active" })
     .select("merchantId pageId")
     .lean();
@@ -158,5 +220,18 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Pu
     seo: resolveSeo(version.spec, content),
     assetBaseUrl: landingAssetBaseUrl(),
     analytics: analyticsConfigOf(merchant.landingTracking),
+    productScope: revision.products?.length
+      ? {
+          merchantId: String(host.merchantId),
+          pageId: String(page._id),
+          refs: revision.products.map((r) => ({
+            productId: String(r.productId),
+            ctaText: r.ctaText ?? null,
+            badge: r.badge ?? null,
+            featured: r.featured === true,
+          })),
+        }
+      : null,
+    delivery: deliveryOptions(version.spec, content, locale),
   };
 }

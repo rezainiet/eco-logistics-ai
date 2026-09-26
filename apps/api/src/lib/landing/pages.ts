@@ -26,6 +26,7 @@ import {
 import { env } from "../../env.js";
 import { writeAudit } from "../audit.js";
 import { assertAssetsOwned } from "./assets.js";
+import { publishableRefs } from "./products.js";
 import { invalidateLandingHost } from "./resolve.js";
 import { type LoadedVersion, loadTemplateVersion } from "./templates.js";
 
@@ -245,6 +246,7 @@ export async function publishPage(actor: Actor, input: { pageId: string; expecte
   ).lean();
   if (!allocated) return conflictOrMissing(actor.merchantId, input.pageId);
 
+  const products = await publishableRefs(actor.merchantId, page.draftProducts);
   const revision = await LandingPageRevision.create({
     pageId: page._id,
     merchantId: actor.merchantId,
@@ -254,6 +256,7 @@ export async function publishPage(actor: Actor, input: { pageId: string; expecte
     content: result.content,
     locales: settings.locales,
     defaultLocale: settings.defaultLocale,
+    products,
     fromDraftRevision: input.expectedRevision,
     createdBy: actor.actorId,
   });
@@ -352,6 +355,7 @@ export async function duplicatePage(actor: Actor, input: { pageId: string; name?
     status: "draft",
     ...settingsOf(source),
     draftContent: readLocalized(source.draftContent),
+    ...(source.draftProducts?.length ? { draftProducts: source.draftProducts } : {}),
     draftRevision: 1,
     draftUpdatedAt: new Date(),
     draftUpdatedBy: actor.actorId,
@@ -458,6 +462,7 @@ export async function restoreRevision(
     {
       $set: {
         draftContent: readLocalized(revision.content),
+        draftProducts: revision.products ?? [],
         ...settingsOf(revision),
         templateVersionId: revision.templateVersionId,
         draftUpdatedAt: new Date(),

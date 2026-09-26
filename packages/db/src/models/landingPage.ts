@@ -23,6 +23,21 @@ export type LandingPageStatus = (typeof LANDING_PAGE_STATUSES)[number];
 /** Content locales (mirrors @ecom/landing SUPPORTED_LOCALES). */
 export const LANDING_LOCALES = ["en", "bn"] as const;
 
+/**
+ * A product linked to a page: a REFERENCE to the merchant's product plus
+ * display-only overrides. Price, name, stock and ownership always come from
+ * the live Product; array order is display order.
+ */
+const pageProductSchema = new Schema(
+  {
+    productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    ctaText: { type: String, trim: true, maxlength: 40 },
+    badge: { type: String, trim: true, maxlength: 24 },
+    featured: { type: Boolean },
+  },
+  { _id: false },
+);
+
 const landingPageSchema = new Schema(
   {
     merchantId: { type: Schema.Types.ObjectId, ref: "Merchant", required: true },
@@ -43,6 +58,8 @@ const landingPageSchema = new Schema(
     draftRevision: { type: Number, required: true, default: 1, min: 1 },
     draftUpdatedAt: { type: Date },
     draftUpdatedBy: { type: Schema.Types.ObjectId, ref: "Merchant" },
+    /** Products linked in the draft (published with the next revision). */
+    draftProducts: { type: [pageProductSchema], default: undefined },
 
     /** Last allocated LandingPageRevision.number for this page. */
     revisionCounter: { type: Number, default: 0 },
@@ -84,6 +101,8 @@ const landingPageRevisionSchema = new Schema(
     content: { type: Schema.Types.Mixed, required: true },
     locales: { type: [{ type: String, enum: LANDING_LOCALES }], default: undefined },
     defaultLocale: { type: String, enum: LANDING_LOCALES },
+    /** Products linked when this revision was published (references only). */
+    products: { type: [pageProductSchema], default: undefined },
     /** The draftRevision this snapshot was taken from. */
     fromDraftRevision: { type: Number, required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "Merchant" },

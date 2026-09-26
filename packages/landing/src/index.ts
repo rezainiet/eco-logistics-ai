@@ -72,6 +72,25 @@ export type { PreviewDevice, PreviewRenderMessage, PreviewSelectMessage } from "
 export { isEditPath, resolveEditTarget } from "./edit-target.js";
 
 export {
+  MAX_CART_LINES,
+  MAX_LINE_QUANTITY,
+  MAX_PAGE_PRODUCTS,
+  commerceStrings,
+  deliveryOptions,
+  formatMoney,
+  normalizeBdMobile,
+  parseCatalog,
+} from "./commerce.js";
+export type {
+  CatalogProduct,
+  CatalogStockStatus,
+  CommerceStrings,
+  DeliveryOption,
+  LandingCommerce,
+  PageProductRef,
+} from "./commerce.js";
+
+export {
   LANDING_EVENTS,
   META_PIXEL_ID_RE,
   analyticsConfigOf,

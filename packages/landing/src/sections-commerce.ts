@@ -11,10 +11,10 @@ import {
 /**
  * E-commerce section types (landing-page building blocks for shops).
  *
- * These are presentation sections only: prices, discounts and payment
- * methods are content the merchant displays. There is no cart, checkout,
- * inventory or payment processing behind them — buttons point to the
- * merchant's own order channel (WhatsApp, phone, an external shop URL).
+ * Mostly presentation sections: prices, discounts and payment methods are
+ * content the merchant displays, and buttons point to the merchant's own
+ * channels. The exception is a product grid showing the page's linked
+ * catalog products — those have live price/stock and go into the cart.
  */
 export const COMMERCE_SECTIONS: SectionTypeDef[] = [
   {
@@ -178,9 +178,21 @@ export const COMMERCE_SECTIONS: SectionTypeDef[] = [
         default: "cards",
       },
       {
+        key: "source",
+        type: "select",
+        label: "Products shown",
+        help: "Your products are the ones linked on the Products tab: live price and stock, and customers can order them. Custom cards are display only.",
+        options: [
+          { value: "catalog", label: "Your products (Products tab)" },
+          { value: "manual", label: "Custom cards (display only)" },
+        ],
+        default: "catalog",
+      },
+      {
         key: "items",
         type: "repeater",
-        label: "Products",
+        label: "Custom cards",
+        help: "Shown when this page has no linked products, or when “Custom cards” is selected above.",
         itemLabel: "Product",
         minItems: 1,
         maxItems: 12,

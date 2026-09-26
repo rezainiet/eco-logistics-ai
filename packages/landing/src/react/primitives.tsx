@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { type CatalogProduct, commerceStrings, formatMoney } from "../commerce.js";
 import { ctaHref, hasCta } from "../cta.js";
 import type { CtaValue, ImageValue } from "../fields.js";
 import { type NumeralMode, discountPercent, formatBDT, formatPercent } from "../format.js";
@@ -27,6 +28,11 @@ export interface RenderEnv {
    * pages, whose markup therefore carries no editor attributes.
    */
   editable?: boolean;
+  /**
+   * Products linked to this page (live data from the merchant's catalog).
+   * Product grids set to "catalog" show these instead of their own cards.
+   */
+  catalog?: CatalogProduct[];
 }
 
 /** Attributes naming the schema field an element shows — empty unless editable. */
@@ -460,6 +466,81 @@ export function ProductCard({
         <PriceRow price={price} oldPrice={oldPrice} ctx={ctx} base={path || undefined} />
         <div className="mt-auto pt-2">
           <CtaButton value={S.cta(product.cta)} size="sm" variant={minimal ? "secondary" : "primary"} className="w-full" edit={at("cta")} />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * A product from the merchant's catalog. Name, price, currency and stock
+ * are live product data — never page content. The button is a plain
+ * `<button data-lp-cart-add>`: the public page's cart (apps/sites) picks it
+ * up by delegation; in the editor preview nothing listens, so it is inert.
+ * Unavailable products stay visible but cannot be added.
+ */
+export function CatalogProductCard({ product, ctx, variant = "cards" }: { product: CatalogProduct; ctx: Ctx; variant?: "cards" | "minimal" }) {
+  const t = commerceStrings(ctx.locale);
+  const minimal = variant === "minimal";
+  const money = (v: number) => formatMoney(v, product.currency, { locale: ctx.locale, numerals: ctx.env.numerals });
+  const old = product.compareAtPrice !== null && product.compareAtPrice > product.price ? product.compareAtPrice : null;
+  const image = product.imageAssetId ? { assetId: product.imageAssetId, alt: product.name } : null;
+  return (
+    <article
+      data-lp-product={product.id}
+      data-lp-catalog=""
+      className={cx(
+        "flex h-full flex-col overflow-hidden",
+        minimal ? "bg-transparent" : "rounded-[var(--lp-radius)] bg-[var(--lp-bg)] shadow-sm ring-1 ring-black/5",
+      )}
+    >
+      <div className="relative">
+        <LandingImage value={image} env={ctx.env} placeholder="soft" icon="bag" className={cx("aspect-square w-full", minimal && "rounded-[var(--lp-radius)]", !product.available && "opacity-60")} />
+        {product.badge ? (
+          <span className="absolute left-2 top-2 rounded-full bg-[var(--lp-primary)] px-2.5 py-1 text-xs font-semibold text-[color:var(--lp-on-primary)]">{product.badge}</span>
+        ) : null}
+        {product.available ? <DiscountBadge price={product.price} oldPrice={old} ctx={ctx} className="absolute right-2 top-2" /> : null}
+        {!product.available ? (
+          <span className="absolute inset-x-2 bottom-2 rounded-full bg-black/75 px-3 py-1 text-center text-xs font-semibold text-white">{t.outOfStock}</span>
+        ) : null}
+      </div>
+      <div className={cx("flex flex-1 flex-col gap-2", minimal ? "pt-4" : "p-3 sm:p-4")}>
+        <h3 className={cx("line-clamp-2 min-h-[2lh] font-semibold leading-[var(--lp-lh-snug)]", minimal ? "text-lg" : "text-base")}>{product.name}</h3>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className="whitespace-nowrap text-lg font-bold text-[color:var(--lp-primary)]">{money(product.price)}</span>
+          {old !== null ? <span className="whitespace-nowrap text-sm text-[color:var(--lp-muted)] line-through">{money(old)}</span> : null}
+        </div>
+        {product.available && product.stockStatus === "low_stock" ? (
+          <span className="text-xs font-semibold text-[#b45309]" data-lp-stock="low">
+            {t.lowStock}
+          </span>
+        ) : null}
+        <div className="mt-auto pt-2">
+          {product.available ? (
+            <button
+              type="button"
+              data-lp-cart-add={product.id}
+              className={cx(
+                "inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--lp-radius)] px-4 py-2 text-center text-sm font-semibold leading-snug transition-opacity hover:opacity-90",
+                minimal ? "border border-current bg-transparent text-[color:var(--lp-primary)]" : "bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)] shadow-sm",
+              )}
+            >
+              <Icon name="bag" className="h-4 w-4" />
+              {product.ctaText || t.addToCart}
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                className="inline-flex min-h-11 w-full cursor-not-allowed items-center justify-center rounded-[var(--lp-radius)] bg-black/10 px-4 py-2 text-sm font-semibold text-[color:var(--lp-muted)]"
+              >
+                {t.outOfStock}
+              </button>
+              <p className="mt-1.5 text-center text-xs text-[color:var(--lp-muted)]">{t.unavailable}</p>
+            </>
+          )}
         </div>
       </div>
     </article>

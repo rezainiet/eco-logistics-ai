@@ -12,6 +12,7 @@ import {
   PaymentBadge,
   PriceRow,
   ProductCard,
+  CatalogProductCard,
   RichText,
   S,
   SectionHeading,
@@ -299,6 +300,8 @@ function ProductGrid({ id, values: v, env }: SectionProps) {
   const ctx = ctxOf(env);
   const minimal = S.str(v.style) === "minimal";
   const cols = S.str(v.columns);
+  // Linked catalog products win unless the merchant chose custom cards.
+  const catalog = S.str(v.source) !== "manual" && env.catalog && env.catalog.length > 0 ? env.catalog : null;
   return (
     <div className={cx(!minimal && "bg-[var(--lp-surface)]")}>
       <Container className="py-14 md:py-20">
@@ -310,9 +313,15 @@ function ProductGrid({ id, values: v, env }: SectionProps) {
             minimal && "gap-y-10 sm:gap-x-8",
           )}
         >
-          {S.arr(v.items).map((p, i) => (
-            <ProductCard key={i} product={p} ctx={ctx} variant={minimal ? "minimal" : "cards"} path={`items.${i}`} trackKey={productKey(id, i)} />
-          ))}
+          {catalog
+            ? catalog.map((p) => (
+                <div key={p.id} {...ed(env, "source")} className="h-full">
+                  <CatalogProductCard product={p} ctx={ctx} variant={minimal ? "minimal" : "cards"} />
+                </div>
+              ))
+            : S.arr(v.items).map((p, i) => (
+                <ProductCard key={i} product={p} ctx={ctx} variant={minimal ? "minimal" : "cards"} path={`items.${i}`} trackKey={productKey(id, i)} />
+              ))}
         </div>
         <div className="mt-10 flex justify-center">
           <CtaButton value={S.cta(v.viewAll)} variant="secondary" requireLink edit={ed(env, "viewAll")} />

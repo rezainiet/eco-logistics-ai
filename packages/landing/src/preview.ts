@@ -1,3 +1,4 @@
+import { type CatalogProduct, parseCatalog } from "./commerce.js";
 import { isEditPath } from "./edit-target.js";
 import { type Locale, isLocale } from "./locales.js";
 import { type TemplateSpec, parseTemplateSpec } from "./spec.js";
@@ -11,8 +12,12 @@ import { type TemplateSpec, parseTemplateSpec } from "./spec.js";
  * components as the published page — PREVIEW = PUBLISHED PAGE.
  *
  *   frame  → parent : { source, type: "ready" }
- *   parent → frame  : { source, type: "render", spec, content, locale, edit? }
+ *   parent → frame  : { source, type: "render", spec, content, locale, edit?, catalog? }
  *   frame  → parent : { source, type: "select", path, locale }   (edit mode only)
+ *
+ * `catalog` is the page's linked products (draft selection, live product
+ * data) so catalog product grids preview as they will publish; it is
+ * re-validated with parseCatalog and images stay asset ids.
  *
  * `edit` switches the frame into click-to-edit mode: elements carry their
  * schema path, hovering outlines them and a click reports the path back.
@@ -39,6 +44,7 @@ export interface PreviewRenderMessage {
   content: unknown;
   locale: Locale;
   edit?: { selected: string | null };
+  catalog?: CatalogProduct[];
 }
 
 export interface PreviewSelectMessage {
@@ -73,6 +79,7 @@ export function parsePreviewMessage(data: unknown): PreviewRenderMessage | null 
   const spec = parseTemplateSpec(m.spec);
   if (!spec.ok) return null;
   const msg: PreviewRenderMessage = { source: PREVIEW_MESSAGE_SOURCE, type: "render", spec: spec.spec, content: m.content, locale: m.locale };
+  if (m.catalog !== undefined) msg.catalog = parseCatalog(m.catalog);
   if (m.edit && typeof m.edit === "object") {
     const selected = (m.edit as { selected?: unknown }).selected;
     msg.edit = { selected: isEditPath(selected) ? selected : null };

@@ -85,7 +85,7 @@ export function PreviewFrame({ allowedOrigins, assetBaseUrl }: { allowedOrigins:
         spec={msg.spec}
         content={msg.content}
         locale={msg.locale}
-        env={{ ...assetEnv(assetBaseUrl), editable: editing }}
+        env={{ ...assetEnv(assetBaseUrl), editable: editing, catalog: msg.catalog }}
         className="min-h-screen"
       />
       {editing ? <EditOverlay spec={msg.spec} locale={msg.locale} selected={msg.edit?.selected ?? null} parentOrigin={editorOrigin} /> : null}
