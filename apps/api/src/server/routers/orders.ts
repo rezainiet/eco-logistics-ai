@@ -76,6 +76,7 @@ import { enqueueRescore } from "../../workers/riskRecompute.js";
 import { resolveIdentityForOrder } from "../ingest.js";
 import { normalizePhoneOrRaw } from "../../lib/phone.js";
 import { reconcileOrderInventory, syncOrderInventory } from "../../lib/inventory.js";
+import { assetUrlOf } from "../../lib/commerce/products.js";
 import {
   afterOrderCreated,
   fraudDocFromRisk,
@@ -1334,6 +1335,8 @@ export const ordersRouter = router({
             reviewStatus: o.fraud?.reviewStatus ?? "not_required",
             automationState: o.automation?.state ?? "not_evaluated",
             bookedByAutomation: o.automation?.bookedByAutomation ?? false,
+            source: o.source?.channel ?? "dashboard",
+            landingSlug: o.source?.landingSlug ?? null,
             createdAt: o.createdAt,
           };
         }),
@@ -1528,10 +1531,48 @@ export const ordersRouter = router({
         id: String(order._id),
         orderNumber: order.orderNumber,
         status: order.order.status,
+        /** Statuses the merchant may move this order to (same rules as updateOrder). */
+        nextStatuses: [...(ALLOWED_STATUS_TRANSITIONS[order.order.status] ?? [])],
         cod: order.order.cod,
         total: order.order.total,
         customer: order.customer,
         items: order.items,
+        /**
+         * Commerce view: line items (price snapshot at order time), totals,
+         * where the order came from (landing page slug/revision/language)
+         * and the stock it holds. Present for every order; landing fields
+         * are null for other sources.
+         */
+        commerce: {
+          lineItems: (order.items ?? []).map((i) => ({
+            name: i.name,
+            sku: i.sku ?? null,
+            quantity: i.quantity,
+            price: i.price,
+            lineTotal: Math.round(i.price * i.quantity * 100) / 100,
+            productId: i.productId ? String(i.productId) : null,
+            imageUrl: assetUrlOf(i.imageAssetId),
+          })),
+          currency: order.order.currency ?? "BDT",
+          subtotal: order.order.subtotal ?? null,
+          deliveryCharge: order.order.deliveryCharge ?? null,
+          deliveryArea: order.order.deliveryArea ?? null,
+          customerNote: order.order.customerNote ?? null,
+          customerEmail: order.source?.customerEmail ?? null,
+          source: order.source?.channel ?? "dashboard",
+          sourceProvider: order.source?.sourceProvider ?? null,
+          landing: order.source?.landingPageId
+            ? {
+                pageId: String(order.source.landingPageId),
+                slug: order.source.landingSlug ?? null,
+                revision: order.source.landingRevision ?? null,
+                locale: order.source.locale ?? null,
+              }
+            : null,
+          inventory: order.inventory
+            ? { state: order.inventory.state, note: order.inventory.note ?? null }
+            : null,
+        },
         courier: order.logistics?.courier,
         trackingNumber: order.logistics?.trackingNumber,
         normalizedStatus: latest?.normalizedStatus,

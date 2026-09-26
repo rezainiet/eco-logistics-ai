@@ -28,6 +28,7 @@ import {
   AddressQualityPanel,
   IntentPanel,
 } from "@/components/orders/intelligence-panels";
+import { OrderCommercePanel } from "./order-commerce-panel";
 import { OperationalHintPanel } from "@/components/orders/operational-hint-panel";
 import { DeliveryReliabilityPanel } from "@/components/orders/delivery-reliability-panel";
 import { ExternalDeliveryHistoryCard } from "@/components/orders/external-delivery-history-card";
@@ -180,6 +181,8 @@ export function TrackingTimelineDrawer({
                   </div>
                 )}
               </div>
+
+              <OrderCommercePanel order={order as never} />
 
               {/* Operational hint — highest-priority callout. The panel
                   returns null when the order looks healthy, so this slot

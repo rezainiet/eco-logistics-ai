@@ -48,6 +48,7 @@ import { CreateOrderDialog } from "@/components/orders/create-order-dialog";
 import { BulkUploadDialog } from "@/components/orders/bulk-upload-dialog";
 import { BookShipmentDialog } from "@/components/orders/book-shipment-dialog";
 import { TrackingTimelineDrawer } from "@/components/orders/tracking-timeline-drawer";
+import { sourceLabel } from "@/components/orders/order-commerce-panel";
 import {
   AutomationBadge,
   type AutomationState,
@@ -87,6 +88,8 @@ type OrderRow = {
   reviewStatus: ReviewStatus;
   automationState?: AutomationState;
   bookedByAutomation?: boolean;
+  source?: string;
+  landingSlug?: string | null;
   createdAt: string | Date;
 };
 
@@ -267,8 +270,15 @@ export default function OrdersPage() {
       {
         header: "Order #",
         accessorKey: "orderNumber",
-        cell: ({ getValue }) => (
-          <span className="font-mono text-xs text-fg">{getValue<string>()}</span>
+        cell: ({ row }) => (
+          <div className="min-w-0">
+            <span className="font-mono text-xs text-fg">{row.original.orderNumber}</span>
+            {row.original.source === "landing_page" ? (
+              <p className="truncate text-[11px] text-fg-subtle" title="Placed on a landing page">
+                {sourceLabel(row.original.source, row.original.landingSlug)}
+              </p>
+            ) : null}
+          </div>
         ),
       },
       {
@@ -421,10 +431,11 @@ export default function OrdersPage() {
           <button
             type="button"
             onClick={() => setTimelineId(row.original.id)}
+            aria-label={`View order ${row.original.orderNumber}`}
             className="inline-flex items-center gap-1 rounded-md border border-stroke/12 bg-transparent px-2 py-1 text-xs text-fg-muted transition-colors hover:bg-surface-raised hover:text-fg"
           >
             <Timer className="h-3 w-3" />
-            Timeline
+            View
           </button>
         ),
       },
