@@ -530,6 +530,13 @@ export function loadEnv(): Env {
     throw new Error(`Invalid environment variables:\n${issues}`);
   }
   if (result.data.NODE_ENV === "production") {
+    if (!result.data.RESEND_API_KEY) {
+      console.warn(
+        "[env] WARNING: RESEND_API_KEY is unset in production — verification, " +
+          "password-reset and every other transactional email will fail " +
+          "(email_provider_not_configured). Set RESEND_API_KEY and EMAIL_FROM.",
+      );
+    }
     if (!result.data.SMS_WEBHOOK_SHARED_SECRET) {
       console.warn(
         "[env] WARNING: SMS_WEBHOOK_SHARED_SECRET is unset in production — " +

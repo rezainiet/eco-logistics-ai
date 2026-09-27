@@ -95,7 +95,8 @@ export class SslWirelessTransport implements SmsTransport {
   async send(input: SmsSendInput): Promise<SmsSendResult> {
     const phone = normalizeBdPhone(input.to);
     if (!phone) {
-      return { ok: false, error: `invalid phone: ${input.to}`, providerStatus: "client_invalid_phone" };
+      const tail = String(input.to).replace(/\D/g, "").slice(-4);
+      return { ok: false, error: `invalid phone: ***${tail}`, providerStatus: "client_invalid_phone" };
     }
     const sender = input.sender ?? this.cfg.defaultSender ?? this.cfg.sid;
     const url = `${this.cfg.baseUrl.replace(/\/$/, "")}/api/v3/send-sms/dynamic`;

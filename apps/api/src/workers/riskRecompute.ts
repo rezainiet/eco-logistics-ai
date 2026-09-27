@@ -2,6 +2,7 @@ import type { Job } from "bullmq";
 import { Types } from "mongoose";
 import { Merchant, type MerchantFraudConfig, Order } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
+import { bullJobId } from "../lib/queue-ids.js";
 import { writeAudit } from "../lib/audit.js";
 import { fireFraudAlert } from "../lib/alerts.js";
 import { updateOrderWithVersion } from "../lib/orderConcurrency.js";
@@ -260,7 +261,7 @@ export async function enqueueRescore(
       removeOnComplete: { count: 500, age: 3600 },
       removeOnFail: { count: 1000, age: 24 * 3600 },
       // Dedupe against a burst of identical events within a short window.
-      jobId: `${data.merchantId}:${data.phone}:${data.trigger}:${Math.floor(Date.now() / 10_000)}`,
+      jobId: bullJobId("rescore", data.merchantId, data.phone, data.trigger, Math.floor(Date.now() / 10_000)),
     });
   } catch (err) {
     // In test / dev without Redis, fall back to synchronous processing so

@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { Order, MAX_ATTEMPTED_COURIERS } from "@ecom/db";
 import { adapterFor, type CourierName } from "../lib/couriers/index.js";
 import { getQueue, QUEUE_NAMES, registerWorker, safeEnqueue } from "../lib/queue.js";
+import { bullJobId } from "../lib/queue-ids.js";
 import { writeAudit } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications.js";
 import { recordCourierBookFailure, selectBestCourier } from "../lib/courier-intelligence.js";
@@ -68,7 +69,10 @@ export async function enqueueAutoBook(input: AutoBookJobData): Promise<void> {
   // Re-enqueue of the SAME attempt (e.g. retry-after-process-crash) still
   // collapses thanks to the deterministic suffix.
   const attemptCount = input.attempted?.length ?? 0;
-  const jobId = `auto-book:${input.orderId}` + (attemptCount > 0 ? `:try-${attemptCount}` : "");
+  const jobId =
+    attemptCount > 0
+      ? bullJobId("auto-book", input.orderId, `try${attemptCount}`)
+      : bullJobId("auto-book", input.orderId);
   await safeEnqueue(
     QUEUE_NAMES.automationBook,
     "auto-book",
@@ -97,6 +101,14 @@ export async function enqueueAutoBook(input: AutoBookJobData): Promise<void> {
  */
 const FALLBACK_MAX_COURIERS = MAX_ATTEMPTED_COURIERS;
 
+/**
+ * Oldest confirmation an automatic booking may still act on. Automatic
+ * booking is a reaction to a fresh confirmation; an order that has sat
+ * confirmed for longer (a queue outage, a job replayed from the dead-letter
+ * store) is shipped by the merchant, never by a delayed job.
+ */
+export const MAX_AUTO_BOOK_AGE_MS = 24 * 60 * 60 * 1000;
+
 async function bookOrThrow(
   data: AutoBookJobData,
 ): Promise<AutoBookJobResult> {
@@ -106,7 +118,7 @@ async function bookOrThrow(
   // Read the current order + the merchant's enabled couriers + automationConfig
   // in a single round-trip each.
   const order = await Order.findOne({ _id: orderOid, merchantId: merchantOid })
-    .select("orderNumber order.status logistics.trackingNumber customer.district automation.attemptedCouriers automation.pinnedCourier version")
+    .select("orderNumber order.status logistics.trackingNumber customer.district automation.attemptedCouriers automation.pinnedCourier automation.confirmedAt createdAt version")
     .lean();
   if (!order) {
     void writeAudit({
@@ -150,6 +162,30 @@ async function bookOrThrow(
       status: "skipped",
       error: `order status ${order.order.status} — not bookable`,
     };
+  }
+
+  // Every enqueue path requires the merchant's auto-book switch; re-check it
+  // at run time (the merchant may have turned it off, or the job was
+  // re-enqueued by a sweep) and refuse stale confirmations.
+  const merchantCfg = await Merchant.findById(merchantOid).select("automationConfig.autoBookEnabled").lean();
+  const autoBookEnabled =
+    (merchantCfg as { automationConfig?: { autoBookEnabled?: boolean } } | null)?.automationConfig?.autoBookEnabled === true;
+  const confirmedAt =
+    (order as { automation?: { confirmedAt?: Date } }).automation?.confirmedAt ??
+    (order as { createdAt?: Date }).createdAt;
+  const tooOld = !confirmedAt || Date.now() - new Date(confirmedAt).getTime() > MAX_AUTO_BOOK_AGE_MS;
+  if (!autoBookEnabled || tooOld) {
+    const reason = !autoBookEnabled ? "auto_book_disabled" : "stale_confirmation";
+    void writeAudit({
+      merchantId: merchantOid,
+      actorId: merchantOid,
+      actorType: "system",
+      action: "automation.worker_skipped",
+      subjectType: "order",
+      subjectId: orderOid,
+      meta: { worker: "auto-book", reason },
+    }).catch(() => {});
+    return { ok: true, status: "skipped", error: reason };
   }
 
   // ---- 1. Resolve the courier to try this attempt -----------------------
@@ -416,4 +452,4 @@ export function attachAutoBookFailureSink(): void {
  * Test-only — pull the configured retry policy. Asserts the production
  * defaults haven't drifted.
  */
-export const __TEST = { REPEAT_OPTS };
+export const __TEST = { REPEAT_OPTS, bookOrThrow };

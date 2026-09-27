@@ -19,6 +19,7 @@ import {
   type TrackingInfo,
   type ValidationResult,
 } from "./types.js";
+import { normalizeCourierStatus } from "./status-map.js";
 
 /**
  * Pathao Aladdin API v1 adapter. Works against live endpoints when credentials
@@ -195,17 +196,9 @@ function tokenCacheKey(creds: CourierCredentials, baseUrl: string): string {
 
 const tokenCache = new LRUCache<string, string>({ max: 500, ttl: TOKEN_TTL_MS });
 
+/** Exact table in status-map.ts — no substring matching. */
 function normalizeStatus(raw: string): NormalizedTrackingStatus {
-  const s = raw.toLowerCase();
-  if (s.includes("delivered")) return "delivered";
-  if (s.includes("return") || s.includes("rto")) return "rto";
-  if (s.includes("out_for_delivery") || s.includes("out for delivery")) return "out_for_delivery";
-  if (s.includes("pickup") && s.includes("requested")) return "pending";
-  if (s.includes("picked") || s.includes("pickup")) return "picked_up";
-  if (s.includes("transit") || s.includes("hub") || s.includes("sorting")) return "in_transit";
-  if (s.includes("fail") || s.includes("cancel")) return "failed";
-  if (s.includes("placed") || s.includes("pending")) return "pending";
-  return "unknown";
+  return normalizeCourierStatus("pathao", raw);
 }
 
 export interface PathaoAdapterOptions {

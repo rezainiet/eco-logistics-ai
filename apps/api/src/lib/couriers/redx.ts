@@ -18,6 +18,7 @@ import {
   type TrackingInfo,
   type ValidationResult,
 } from "./types.js";
+import { normalizeCourierStatus } from "./status-map.js";
 
 /**
  * RedX Open API adapter.
@@ -158,16 +159,9 @@ export class MockRedxTransport implements RedxTransport {
   }
 }
 
+/** Exact table in status-map.ts — no substring matching. */
 function normalizeStatus(raw: string): NormalizedTrackingStatus {
-  const s = raw.toLowerCase();
-  if (s.includes("delivered") && !s.includes("partial")) return "delivered";
-  if (s.includes("return")) return "rto";
-  if (s.includes("cancel") || s.includes("fail")) return "failed";
-  if (s.includes("out-for-delivery") || s.includes("out_for_delivery")) return "out_for_delivery";
-  if (s.includes("picked-up") || s.includes("picked_up") || s.includes("pickup-success")) return "picked_up";
-  if (s.includes("pickup-pending") || s.includes("pending") || s.includes("created")) return "pending";
-  if (s.includes("hub") || s.includes("transit") || s.includes("received")) return "in_transit";
-  return "unknown";
+  return normalizeCourierStatus("redx", raw);
 }
 
 export interface RedxAdapterOptions {

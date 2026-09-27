@@ -45,7 +45,7 @@ export const QUEUE_NAMES = {
   /**
    * Transactional email. Pre-rendered HTML/text payloads delivered via
    * Resend by `workers/email.worker.ts`. Event-driven (no schedule),
-   * idempotent via `jobId = email:<correlationId>`. The worker is also
+   * idempotent via `jobId = email-<correlationId>` (bullJobId). The worker is also
    * what handles dead-letter replay for email failures — every other
    * queue's PendingJob row is drained by the generic replay sweeper.
    */

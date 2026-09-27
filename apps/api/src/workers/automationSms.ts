@@ -2,6 +2,7 @@ import type { Job } from "bullmq";
 import { Types } from "mongoose";
 import { Order } from "@ecom/db";
 import { QUEUE_NAMES, registerWorker, safeEnqueue } from "../lib/queue.js";
+import { bullJobId } from "../lib/queue-ids.js";
 import { sendOrderConfirmationSms } from "../lib/sms/index.js";
 import { writeAudit } from "../lib/audit.js";
 
@@ -17,7 +18,7 @@ import { writeAudit } from "../lib/audit.js";
  * actually went out.
  *
  * Idempotent: a duplicate enqueue for the same order collapses on
- * `jobId: auto-sms:<orderId>`. The worker also short-circuits if the
+ * `jobId: auto-sms-<orderId>` (bullJobId). The worker also short-circuits if the
  * order has already moved out of pending_confirmation.
  */
 
@@ -55,7 +56,7 @@ export async function enqueueOrderConfirmationSms(input: AutoSmsJobData): Promis
     input,
     {
       ...REPEAT_OPTS,
-      jobId: `auto-sms:${input.orderId}`,
+      jobId: bullJobId("auto-sms", input.orderId),
     },
     {
       merchantId: input.merchantId,

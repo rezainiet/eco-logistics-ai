@@ -32,6 +32,11 @@ import { env } from "../env.js";
  * transitions (delivered / rto) and the shipped→in_transit step mutate order
  * status; the rest live purely on the tracking timeline so merchants still
  * see granular provider events.
+ *
+ * `failed` (a delivery attempt failed, or the parcel is on its way back) is
+ * deliberately absent: the parcel is still with the courier, so the order
+ * stays in transit and its stock stays reserved. Only `rto` — the courier
+ * saying the parcel is back with the merchant — releases stock.
  */
 const STATUS_MAP: Partial<Record<TrackingInfo["normalizedStatus"], string>> = {
   picked_up: "in_transit",
@@ -39,10 +44,35 @@ const STATUS_MAP: Partial<Record<TrackingInfo["normalizedStatus"], string>> = {
   out_for_delivery: "in_transit",
   delivered: "delivered",
   rto: "rto",
-  failed: "rto",
 };
 
 const ACTIVE_STATUSES = ["shipped", "in_transit"] as const;
+
+/** Statuses a courier event may move an order out of, per target status. */
+const COURIER_TRANSITIONS_FROM: Readonly<Record<string, ReadonlySet<string>>> = {
+  // Forward progress only — never out of delivered / cancelled / rto.
+  in_transit: new Set(["pending", "confirmed", "packed", "shipped", "in_transit"]),
+  rto: new Set(["pending", "confirmed", "packed", "shipped", "in_transit"]),
+  // "Delivered" is the one courier fact allowed to override a cancellation
+  // or a return: the goods reached the customer (the inventory ledger
+  // books released → fulfilled for exactly this case). Nothing moves a
+  // delivered order — later returns are booked by the merchant.
+  delivered: new Set(["pending", "confirmed", "packed", "shipped", "in_transit", "cancelled", "rto"]),
+};
+
+/**
+ * The order status a courier event should produce, or `null` when the event
+ * must not change the order (unmapped status, same status, or a transition
+ * the rules above forbid — e.g. a late "in transit" after "delivered").
+ */
+export function courierOrderTransition(
+  currentStatus: string,
+  normalizedStatus: TrackingInfo["normalizedStatus"],
+): string | null {
+  const target = STATUS_MAP[normalizedStatus];
+  if (!target || target === currentStatus) return null;
+  return COURIER_TRANSITIONS_FROM[target]?.has(currentStatus) ? target : null;
+}
 
 export interface TrackingEventInput {
   /** Provider-supplied event time. Falls back to `new Date()` if absent. */
@@ -68,6 +98,11 @@ export interface ApplyTrackingOptions {
   source?: "poll" | "webhook";
   /** Provider-supplied actual delivery time, used when status === delivered. */
   deliveredAt?: Date;
+  /**
+   * Internal: set on the single re-evaluation after the compare-and-set
+   * missed because the order's status moved. Callers never pass it.
+   */
+  reevaluated?: boolean;
 }
 
 export interface ApplyTrackingResult {
@@ -116,7 +151,7 @@ export async function applyTrackingEvents(
   }
 
   const prevStatus = order.order.status;
-  const nextStatus = STATUS_MAP[normalizedStatus] ?? prevStatus;
+  const nextStatus = courierOrderTransition(prevStatus, normalizedStatus) ?? prevStatus;
 
   // Single canonical terminal timestamp. Used for both `Order.logistics
   // .deliveredAt` / `returnedAt` AND propagated to the delivery-reliability
@@ -136,11 +171,14 @@ export async function applyTrackingEvents(
     set["logistics.pollErrorCount"] = 0;
   }
   if (nextStatus !== prevStatus) set["order.status"] = nextStatus;
-  if (normalizedStatus === "delivered" && !order.logistics?.deliveredAt) {
+  // Terminal timestamps only when the order actually is (or becomes) that
+  // status — a refused late "rto" on a delivered order must not stamp
+  // returnedAt.
+  if (normalizedStatus === "delivered" && nextStatus === "delivered" && !order.logistics?.deliveredAt) {
     set["logistics.deliveredAt"] = terminalNow;
     set["logistics.actualDelivery"] = terminalNow;
   }
-  if (normalizedStatus === "rto" && !order.logistics?.returnedAt) {
+  if (normalizedStatus === "rto" && nextStatus === "rto" && !order.logistics?.returnedAt) {
     set["logistics.returnedAt"] = terminalNow;
   }
 
@@ -159,19 +197,21 @@ export async function applyTrackingEvents(
   }
 
   // Two write-time guards:
-  //  1. Status guard — refuse to mutate when the order has already moved
-  //     to a status outside the active set (out-of-order events from a
-  //     stale snapshot can not clobber a fresher status).
+  //  1. Status guard (compare-and-set) — the write only lands while the
+  //     order is still in the status `nextStatus` was computed from. If a
+  //     merchant action or another courier event changed it in between,
+  //     nothing is written; the next poll / webhook re-evaluates against
+  //     the fresh status. Which transitions are allowed at all is decided
+  //     by `courierOrderTransition` (terminal states never move backwards).
   //  2. Dedupe guard — refuse to push if any of the new dedupe keys are
   //     already present in `logistics.trackingEvents`. Closes the race
   //     where two concurrent writers each computed "no existing" before
   //     either had landed. If this guard fails the update is a no-op and
   //     `newEvents` will be reported back, but the actual append did not
   //     happen — caller must accept this as duplicate-suppressed.
-  const guardStatus = new Set<string>([...ACTIVE_STATUSES, prevStatus]);
   const filter: Record<string, unknown> = {
     _id: order._id,
-    "order.status": { $in: [...guardStatus] },
+    "order.status": prevStatus,
   };
   if (newKeys.length > 0) {
     filter["logistics.trackingEvents.dedupeKey"] = { $nin: newKeys };
@@ -182,12 +222,56 @@ export async function applyTrackingEvents(
   const persisted = writeResult.modifiedCount > 0 || writeResult.matchedCount > 0;
   const effectivelyAppended = persisted ? newEvents.length : 0;
 
+  // Compare-and-set missed because the status moved under this writer (a
+  // stale snapshot, or a webhook racing a poll). Re-evaluate the SAME event
+  // once against the order as it is now, so the event still reaches the
+  // timeline and the transition rules decide against the real status —
+  // e.g. a late "rto" on an order that just became delivered is refused.
+  if (writeResult.matchedCount === 0 && !options.reevaluated) {
+    const current = await Order.findOne({ _id: order._id, merchantId: order.merchantId })
+      .select("_id merchantId order logistics")
+      .lean();
+    if (current && current.order.status !== prevStatus) {
+      if (nextStatus !== prevStatus && (nextStatus === "delivered" || nextStatus === "rto" || nextStatus === "cancelled")) {
+        recordReliabilityOutcome({
+          event: "invalid_transition",
+          merchantId: String(order.merchantId),
+          reason: "atomic_guard_rejected_write",
+          meta: { from: prevStatus, to: nextStatus, actual: current.order.status, newEventsAttempted: newEvents.length },
+        });
+      }
+      return applyTrackingEvents(
+        current as Parameters<typeof applyTrackingEvents>[0],
+        normalizedStatus,
+        events,
+        { ...options, reevaluated: true },
+      );
+    }
+  }
+
   if (nextStatus !== prevStatus && persisted) {
     // Courier outcome moves stock: delivered → fulfilled, rto → returned.
     // Idempotent — a repeated webhook can never deduct twice.
     await syncOrderInventory([order._id]);
   }
-  if (nextStatus !== prevStatus) {
+  if (nextStatus !== prevStatus && !persisted) {
+    // The write still did not land after re-evaluation (the order moved
+    // again, or the event was already recorded). The writer that won owns
+    // the stats and outcome fan-outs; running them here too would count one
+    // outcome twice.
+    if (nextStatus === "delivered" || nextStatus === "rto" || nextStatus === "cancelled") {
+      recordReliabilityOutcome({
+        event: "invalid_transition",
+        merchantId: String(order.merchantId),
+        reason: "atomic_guard_rejected_write",
+        meta: {
+          from: prevStatus,
+          to: nextStatus,
+          newEventsAttempted: newEvents.length,
+        },
+      });
+    }
+  } else if (nextStatus !== prevStatus) {
     await MerchantStats.updateOne(
       { merchantId: order.merchantId },
       {
@@ -215,24 +299,8 @@ export async function applyTrackingEvents(
     // merchant's experience. Privacy-safe (only hashes are persisted).
     // Best-effort, never blocks the tracking pipeline.
     if (nextStatus === "delivered" || nextStatus === "rto" || nextStatus === "cancelled") {
-      // Observability — chokepoint entered the terminal block but the
-      // atomic Order.updateOne filter rejected the write. This is the
-      // documented §6.2 caveat manifesting; existing fan-outs (FraudPrediction,
-      // contributeOutcome, recordCourierOutcome) STILL fire under v1's
-      // gating semantics. The log line gives ops a way to spot stale-snapshot
-      // writers without changing the gate. No mutation, no decision.
-      if (!persisted) {
-        recordReliabilityOutcome({
-          event: "invalid_transition",
-          merchantId: String(order.merchantId),
-          reason: "atomic_guard_rejected_write",
-          meta: {
-            from: prevStatus,
-            to: nextStatus,
-            newEventsAttempted: newEvents.length,
-          },
-        });
-      }
+      // Only reached when the transition persisted (rejected writes stop in
+      // the branch above), so each fan-out runs once per real transition.
       // Feedback loop: stamp the outcome on the prediction row so the monthly
       // tuner can compute per-signal precision/recall. Idempotent via the
       // `orderId` unique index — if the row already has an outcome, a later

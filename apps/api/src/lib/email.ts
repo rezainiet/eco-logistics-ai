@@ -11,10 +11,10 @@ import { env } from "../env.js";
  * Backed by Resend's HTTP API so we don't need a new SDK dependency. In
  * development, when `RESEND_API_KEY` is unset, emails are written to
  * stdout instead of sent — keeps local signup/reset flows working
- * without external accounts. In production an unset key causes
- * `sendEmail` to no-op with a loud warning rather than crashing the
- * request path; merchants still see the in-app reset link via
- * `WebUrlBuilder`.
+ * without external accounts. In production an unset key makes `sendEmail`
+ * return `ok: false` (error EMAIL_NOT_CONFIGURED) without crashing the
+ * request path, and it never logs the body: bodies carry verification and
+ * password-reset links, which are credentials.
  *
  * Branding: every template reads from the centralized `@ecom/branding`
  * resolver. Subject lines, sender, footer, accent, support line, and
@@ -30,6 +30,9 @@ import { env } from "../env.js";
  */
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
+
+/** `EmailDeliveryResult.error` when production has no RESEND_API_KEY. Not retryable. */
+export const EMAIL_NOT_CONFIGURED = "email_provider_not_configured";
 
 export interface EmailMessage {
   to: string;
@@ -141,6 +144,16 @@ export async function sendEmail(
   opts: { branding?: BrandingConfig } = {},
 ): Promise<EmailDeliveryResult> {
   const apiKey = env.RESEND_API_KEY;
+  if (!apiKey && env.NODE_ENV === "production") {
+    console.error(
+      JSON.stringify({
+        evt: "email.not_configured",
+        tag: msg.tag ?? null,
+        to: maskEmailForLog(msg.to),
+      }),
+    );
+    return { ok: false, error: EMAIL_NOT_CONFIGURED };
+  }
   if (!apiKey) {
     console.log(
       `[email:dev] to=${msg.to} subject="${msg.subject}" tag=${msg.tag ?? "-"}\n` +

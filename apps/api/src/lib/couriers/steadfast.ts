@@ -18,6 +18,7 @@ import {
   type TrackingInfo,
   type ValidationResult,
 } from "./types.js";
+import { normalizeCourierStatus } from "./status-map.js";
 
 /**
  * Steadfast Courier API (Packzy) adapter.
@@ -148,18 +149,9 @@ export class MockSteadfastTransport implements SteadfastTransport {
   }
 }
 
+/** Exact table in status-map.ts — no substring matching. */
 function normalizeStatus(raw: string): NormalizedTrackingStatus {
-  const s = raw.toLowerCase();
-  if (s.includes("delivered")) return "delivered";
-  if (s.includes("partial_delivered")) return "delivered";
-  if (s.includes("hold")) return "in_transit";
-  if (s.includes("return")) return "rto";
-  if (s.includes("cancel")) return "failed";
-  if (s.includes("unknown")) return "unknown";
-  if (s.includes("in_review") || s.includes("pending")) return "pending";
-  if (s.includes("delivery") || s.includes("out")) return "out_for_delivery";
-  if (s.includes("transit")) return "in_transit";
-  return "unknown";
+  return normalizeCourierStatus("steadfast", raw);
 }
 
 export interface SteadfastAdapterOptions {

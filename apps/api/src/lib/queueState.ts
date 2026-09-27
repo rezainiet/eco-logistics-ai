@@ -26,7 +26,7 @@ import { enqueueOrderConfirmationSms } from "../workers/automationSms.js";
  *     the courier API call. The merchant must click Book again, or
  *     wait for the next manual / scheduled trigger.
  *
- * Idempotency: the auto-sms worker uses `jobId: auto-sms:<orderId>`,
+ * Idempotency: the auto-sms worker uses `jobId: auto-sms-<orderId>` (bullJobId),
  * so repeated rebuildQueueState calls collapse on BullMQ's dedupe.
  * The order's own state guards (the worker checks
  * `automation.state === "pending_confirmation"` again before sending)

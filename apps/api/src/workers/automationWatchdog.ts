@@ -1,10 +1,10 @@
 import type { Job } from "bullmq";
 import { Types } from "mongoose";
-import { Order } from "@ecom/db";
+import { Merchant, Order } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
 import { dispatchNotification } from "../lib/notifications.js";
-import { enqueueAutoBook } from "./automationBook.js";
+import { enqueueAutoBook, MAX_AUTO_BOOK_AGE_MS } from "./automationBook.js";
 
 /**
  * Automation watchdog.
@@ -73,10 +73,17 @@ export async function runAutomationWatchdog(): Promise<AutomationWatchdogResult>
   };
 
   // ---------- 1. Stuck-order recovery -----------------------------------
+  // Only orders automatic booking still applies to: bookable status, a
+  // confirmation from the last MAX_AUTO_BOOK_AGE_MS, and (checked below) a
+  // merchant with auto-book switched on. Without these bounds the sweep
+  // re-enqueued months-old confirmed orders every 5 minutes, including
+  // semi_auto merchants' orders that were never meant to be auto-booked.
   const cutoff = new Date(Date.now() - STUCK_AGE_MIN * 60 * 1000);
+  const oldest = new Date(Date.now() - MAX_AUTO_BOOK_AGE_MS);
   const stuck = await Order.find({
     "automation.state": { $in: ["auto_confirmed", "confirmed"] },
-    "automation.confirmedAt": { $lt: cutoff },
+    "automation.confirmedAt": { $lt: cutoff, $gte: oldest },
+    "order.status": { $in: ["pending", "confirmed", "packed"] },
     $and: [
       {
         $or: [
@@ -94,8 +101,19 @@ export async function runAutomationWatchdog(): Promise<AutomationWatchdogResult>
     .lean();
 
   result.scanned = stuck.length;
+  const autoBookOn = new Set(
+    (
+      await Merchant.find({
+        _id: { $in: [...new Set(stuck.map((o) => String(o.merchantId)))].map((id) => new Types.ObjectId(id)) },
+        "automationConfig.autoBookEnabled": true,
+      })
+        .select("_id")
+        .lean()
+    ).map((m) => String(m._id)),
+  );
 
   for (const o of stuck) {
+    if (!autoBookOn.has(String(o.merchantId))) continue;
     try {
       const attempted = (o as { automation?: { attemptedCouriers?: string[] } }).automation
         ?.attemptedCouriers ?? [];

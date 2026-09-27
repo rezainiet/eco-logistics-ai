@@ -87,6 +87,12 @@ export interface SendSmsOptions {
   csmsId?: string;
 }
 
+/** Last 4 digits only — customer phone numbers are PII and must not reach logs. */
+function maskPhone(raw: string): string {
+  const digits = String(raw).replace(/\D/g, "");
+  return digits.length > 4 ? `***${digits.slice(-4)}` : "***";
+}
+
 /**
  * Send a single SMS. Never throws — returns a result object so callers can
  * decide whether to retry, log, or silently absorb the failure.
@@ -99,7 +105,8 @@ export async function sendSms(
   const tag = opts.tag ?? "untagged";
   const phone = normalizeBdPhone(to);
   if (!phone) {
-    return { ok: false, error: `invalid phone: ${to}`, providerStatus: "client_invalid_phone" };
+    // The error string ends up in logs and job rows — never echo the number.
+    return { ok: false, error: `invalid phone: ${maskPhone(to)}`, providerStatus: "client_invalid_phone" };
   }
   const clamped = clampBody(body, tag);
   const transport = loadTransport();
@@ -107,7 +114,7 @@ export async function sendSms(
   if (!transport) {
     if (env.NODE_ENV === "production") {
       console.warn(
-        `[sms] PROD with SSL Wireless keys unset — dropping message tag=${tag} to=${phone}`,
+        `[sms] PROD with SSL Wireless keys unset — dropping message tag=${tag} to=${maskPhone(phone)}`,
       );
       return { ok: false, error: "sms provider not configured", providerStatus: "no_provider" };
     }

@@ -1,7 +1,8 @@
-import type { Job } from "bullmq";
+import { type Job, UnrecoverableError } from "bullmq";
 import { env } from "../env.js";
 import { QUEUE_NAMES, registerWorker, safeEnqueue } from "../lib/queue.js";
-import { sendEmail } from "../lib/email.js";
+import { bullJobId } from "../lib/queue-ids.js";
+import { EMAIL_NOT_CONFIGURED, sendEmail } from "../lib/email.js";
 
 /**
  * Reliable transactional-email outbound.
@@ -16,7 +17,7 @@ import { sendEmail } from "../lib/email.js";
  * window. The transactional surface no longer drops mail on a 30-second
  * provider blip.
  *
- * Idempotency: `jobId = email:<correlationId>`. Re-enqueueing the same
+ * Idempotency: `jobId = email-<correlationId>` (bullJobId; ":" becomes "_"). Re-enqueueing the same
  * logical send (signup spam-clicks "resend verify", a Stripe webhook
  * replay) collapses on BullMQ's jobId uniqueness — no duplicate Resend
  * call, no duplicate inbox entry within the retention window.
@@ -141,7 +142,7 @@ export async function enqueueEmail(
     payload,
     {
       ...EMAIL_JOB_OPTS,
-      jobId: `email:${args.correlationId}`,
+      jobId: bullJobId("email", args.correlationId),
     },
     {
       description: `email:${args.tag ?? "untagged"}`,
@@ -193,6 +194,9 @@ async function processEmailJob(data: EmailJobData): Promise<EmailJobResult> {
     tag: data.tag,
   });
   if (!result.ok) {
+    // No provider configured: retrying cannot help, so fail the job once
+    // (it lands in the failed set as email.failed_final, never as sent).
+    if (result.error === EMAIL_NOT_CONFIGURED) throw new UnrecoverableError(EMAIL_NOT_CONFIGURED);
     // Throw — BullMQ counts the attempt and re-enqueues per
     // EMAIL_JOB_OPTS.backoff. Resend 5xx and network errors funnel here.
     throw new Error(result.error ?? "resend_unknown");
@@ -232,7 +236,7 @@ export function registerEmailWorker() {
     if (!job) return;
     const attempts = job.opts.attempts ?? EMAIL_JOB_OPTS.attempts;
     const attemptsMade = job.attemptsMade ?? 0;
-    const exhausted = attemptsMade >= attempts;
+    const exhausted = attemptsMade >= attempts || err instanceof UnrecoverableError;
     const data = job.data ?? ({} as Partial<EmailJobData>);
     console.warn(
       JSON.stringify({
@@ -250,4 +254,4 @@ export function registerEmailWorker() {
   return worker;
 }
 
-export const __TEST = { EMAIL_JOB_OPTS };
+export const __TEST = { EMAIL_JOB_OPTS, processEmailJob };

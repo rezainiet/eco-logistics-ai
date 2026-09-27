@@ -6,6 +6,7 @@ import {
   type PendingJob as PendingJobDoc,
 } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker, type QueueName } from "../lib/queue.js";
+import { isBullSafeJobId } from "../lib/queue-ids.js";
 
 /**
  * Dead-letter replay sweeper.
@@ -27,6 +28,13 @@ import { getQueue, QUEUE_NAMES, registerWorker, type QueueName } from "../lib/qu
  *     exponential backoff (1m, 5m, 15m, 60m, 4h).
  *   - attempts hit MAX_REPLAY_ATTEMPTS → status flips to "exhausted",
  *     critical merchant alert fires (best effort).
+ *   - the stored jobOpts carry a custom jobId BullMQ rejects (the legacy
+ *     "email:…" / "auto-book:…" formats) → parked as "exhausted" with
+ *     LEGACY_UNSAFE_JOB_ID on first pick: no replay, no merchant alert.
+ *     Such a row can never succeed as stored, and replaying a stale
+ *     courier booking or reset email under a rewritten id could act on
+ *     intent that no longer holds — those rows go through the dry-run
+ *     triage (scripts/deadLetterTriage.ts) and an explicit decision.
  */
 
 const REPEAT_JOB_NAME = "pending-job-replay:sweep";
@@ -51,7 +59,12 @@ export interface PendingJobReplayResult {
   replayed: number;
   reFailed: number;
   exhausted: number;
+  /** Parked because the stored custom jobId is one BullMQ rejects. */
+  parkedLegacy: number;
 }
+
+export const LEGACY_UNSAFE_JOB_ID =
+  "legacy_unsafe_job_id: parked for manual triage (scripts/deadLetterTriage.ts)";
 
 /**
  * Single sweep — exported for ad-hoc invocation (admin replay button,
@@ -65,6 +78,7 @@ export async function sweepPendingJobs(
     replayed: 0,
     reFailed: 0,
     exhausted: 0,
+    parkedLegacy: 0,
   };
 
   // Claim batch atomically — each `findOneAndUpdate` advances nextAttemptAt
@@ -91,6 +105,30 @@ export async function sweepPendingJobs(
 
   for (const row of claimed) {
     const attemptN = (row.attempts ?? 0) + 1;
+    const storedJobId = (row.jobOpts as { jobId?: unknown } | null | undefined)?.jobId;
+    if (typeof storedJobId === "string" && !isBullSafeJobId(storedJobId)) {
+      await PendingJob.updateOne(
+        { _id: row._id, status: "pending" },
+        {
+          $set: {
+            status: "exhausted",
+            attempts: attemptN,
+            lastError: LEGACY_UNSAFE_JOB_ID,
+            nextAttemptAt: new Date(Date.now() + 365 * 24 * 60 * 60_000),
+          },
+        },
+      );
+      result.parkedLegacy++;
+      console.warn(
+        JSON.stringify({
+          evt: "queue.dead_letter_parked_legacy_id",
+          queue: row.queueName,
+          job: row.jobName,
+          pendingJobId: String(row._id),
+        }),
+      );
+      continue;
+    }
     try {
       const queue = getQueue(row.queueName as QueueName);
       const job = await queue.add(

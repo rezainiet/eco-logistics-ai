@@ -2,6 +2,7 @@ import type { Job } from "bullmq";
 import { Types } from "mongoose";
 import { ImportJob, Integration, type IntegrationProvider } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
+import { bullJobId } from "../lib/queue-ids.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
 import {
   ensureFreshShopifyAccessToken,
@@ -228,7 +229,7 @@ export async function enqueueCommerceImport(
   try {
     const q = getQueue(QUEUE_NAMES.commerceImport);
     await q.add("commerce-import:run", data, {
-      jobId: `import:${data.importJobId}`,
+      jobId: bullJobId("import", data.importJobId),
       attempts: 1, // failures are tracked on the ImportJob row, not BullMQ
       removeOnComplete: { count: 200, age: 24 * 3600 },
       removeOnFail: { count: 500, age: 7 * 24 * 3600 },
