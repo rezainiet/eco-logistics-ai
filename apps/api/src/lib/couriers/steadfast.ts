@@ -1,4 +1,3 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { env } from "../../env.js";
 import {
   classifyHttpStatus,
@@ -19,6 +18,7 @@ import {
   type ValidationResult,
 } from "./types.js";
 import { normalizeCourierStatus } from "./status-map.js";
+import { bearerToken, secretsMatch } from "./webhook-auth.js";
 
 /**
  * Steadfast Courier API (Packzy) adapter.
@@ -27,6 +27,12 @@ import { normalizeCourierStatus } from "./status-map.js";
  *   GET   /api/v1/get_balance                           → auth probe
  *   POST  /api/v1/create_order                          → create shipment
  *   GET   /api/v1/status_by_cid/{consignment_id}        → tracking
+ *
+ * Identifiers: a parcel has a numeric `consignment_id` and an alphanumeric
+ * `tracking_code`. We keep tracking_code as the order's trackingNumber and
+ * store consignment_id as `logistics.providerOrderId`; status_by_cid and
+ * the official webhook (`consignment_id`, tracking_code as fallback — per
+ * Steadfast's own WordPress plugin) are keyed by the consignment_id.
  *
  * Auth: two static headers — Api-Key + Secret-Key. No OAuth dance, no token
  * caching needed. Per-merchant baseUrl overrides STEADFAST_BASE_URL.
@@ -107,7 +113,8 @@ export class MockSteadfastTransport implements SteadfastTransport {
       const body = opts.body as { invoice?: string } | undefined;
       const id = MockSteadfastTransport.counter++;
       const tracking = `SF${Date.now().toString(36).toUpperCase()}${id}`;
-      MockSteadfastTransport.store.set(tracking, {
+      // Keyed by consignment_id, as the real status_by_cid endpoint is.
+      MockSteadfastTransport.store.set(String(id), {
         orderId: body?.invoice ?? "unknown",
         createdAt: new Date(),
         status: "in_review",
@@ -254,12 +261,21 @@ export class SteadfastAdapter implements CourierAdapter {
     });
   }
 
-  async getTracking(trackingNumber: string): Promise<TrackingInfo> {
+  async getTracking(trackingNumber: string, ref?: { providerOrderId?: string }): Promise<TrackingInfo> {
+    const consignmentId = ref?.providerOrderId?.trim();
+    if (!consignmentId) {
+      // status_by_cid takes the consignment_id; polling it with the
+      // tracking_code would query the wrong parcel.
+      throw new CourierError("invalid_input", "steadfast polling needs the consignment_id", {
+        retryable: false,
+        provider: PROVIDER,
+      });
+    }
     return withCourierBreaker(this.breakerKey(), async (signal) => {
       const res = await withRetry(
         () =>
           this.transport.request<SteadfastStatusResp>(
-            `/api/v1/status_by_cid/${encodeURIComponent(trackingNumber)}`,
+            `/api/v1/status_by_cid/${encodeURIComponent(consignmentId)}`,
             { method: "GET", signal },
           ),
         { attempts: 3, signal },
@@ -329,6 +345,8 @@ export interface SteadfastWebhookPayload {
 
 export interface ParsedTrackingWebhook {
   trackingCode: string;
+  /** Steadfast consignment_id — matched against `logistics.providerOrderId`. */
+  providerRef?: string;
   providerStatus: string;
   normalizedStatus: NormalizedTrackingStatus;
   at: Date;
@@ -336,48 +354,40 @@ export interface ParsedTrackingWebhook {
 }
 
 /**
- * Verify a Steadfast webhook HMAC. Steadfast signs the raw request body
- * with the merchant secret using HMAC-SHA256 and ships the hex digest
- * in the `x-steadfast-signature` header. Returns true on a constant-time
- * match. Returns false (never throws) on missing header, missing secret,
- * or mismatch — the caller decides the HTTP response.
+ * Authenticate a Steadfast webhook. Steadfast does not sign the body: per
+ * its own WordPress plugin it sends `Authorization: Bearer <token>`. The
+ * token must equal the courier config's secret; constant-time, never
+ * logged. The plugin's `?token=` fallback exists only for hosts that strip
+ * the Authorization header — ours does not, and a URL token would land in
+ * access logs, so it is not accepted here.
  */
-export function verifySteadfastWebhookSignature(
-  rawBody: string | Buffer,
-  signature: string | string[] | undefined,
+export function verifySteadfastWebhookToken(
+  authorization: string | string[] | undefined,
   secret: string | undefined,
 ): boolean {
-  if (!secret) return false;
-  const provided = Array.isArray(signature) ? signature[0] : signature;
-  if (!provided || typeof provided !== "string" || provided.length === 0) return false;
-  const computed = createHmac("sha256", secret)
-    .update(typeof rawBody === "string" ? rawBody : rawBody)
-    .digest("hex");
-  // Length-safe constant-time compare.
-  const a = Buffer.from(provided, "hex");
-  const b = Buffer.from(computed, "hex");
-  if (a.length === 0 || a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  return secretsMatch(bearerToken(authorization), secret);
 }
 
 /**
  * Convert a Steadfast push payload into the shape our tracking pipeline
  * expects. Returns null if the payload does not name an order (e.g. a
- * test ping) — the caller should 200 those rather than 400.
+ * test ping) — the caller should 200 those rather than 400. The order is
+ * matched on tracking_code (our trackingNumber) or consignment_id (our
+ * providerOrderId), whichever the payload carries.
  */
 export function parseSteadfastWebhook(
   payload: SteadfastWebhookPayload,
 ): ParsedTrackingWebhook | null {
-  const trackingCode = payload.tracking_code ?? (payload.consignment_id != null ? String(payload.consignment_id) : "");
+  const consignmentId = payload.consignment_id != null && String(payload.consignment_id).trim() !== ""
+    ? String(payload.consignment_id).trim()
+    : undefined;
+  const trackingCode = payload.tracking_code?.trim() || consignmentId || "";
   if (!trackingCode) return null;
   const providerStatus = (payload.status ?? "unknown").trim();
   const at = payload.updated_at ? new Date(payload.updated_at) : new Date();
   return {
     trackingCode,
+    ...(consignmentId ? { providerRef: consignmentId } : {}),
     providerStatus,
     normalizedStatus: normalizeStatus(providerStatus),
     at: Number.isNaN(at.getTime()) ? new Date() : at,

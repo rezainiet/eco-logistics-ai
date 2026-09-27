@@ -20,7 +20,7 @@ describe("RedxAdapter (mock transport)", () => {
     MockRedxTransport.reset();
   });
 
-  it("validateCredentials succeeds when /v1/areas returns data", async () => {
+  it("validateCredentials succeeds when /v1.0.0-beta/areas returns data", async () => {
     const res = await makeAdapter(new MockRedxTransport()).validateCredentials();
     expect(res.valid).toBe(true);
   });
@@ -70,7 +70,7 @@ describe("RedxAdapter (mock transport)", () => {
     let calls = 0;
     const flaky: RedxTransport = {
       async request<T>(path: string): Promise<{ status: number; ok: boolean; data: T }> {
-        if (path.endsWith("/v1/parcel")) {
+        if (path.endsWith("/v1.0.0-beta/parcel")) {
           calls++;
           if (calls < 2) {
             throw new CourierError("network", "econnreset", { retryable: true, provider: "redx" });

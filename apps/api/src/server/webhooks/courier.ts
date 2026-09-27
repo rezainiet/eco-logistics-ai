@@ -6,19 +6,22 @@ import { decryptSecret } from "../../lib/crypto.js";
 import {
   parseSteadfastWebhook,
   STEADFAST_PROVIDER,
-  verifySteadfastWebhookSignature,
+  verifySteadfastWebhookToken,
   type SteadfastWebhookPayload,
 } from "../../lib/couriers/steadfast.js";
 import {
   parsePathaoWebhook,
+  PATHAO_INTEGRATION_EVENT,
+  PATHAO_INTEGRATION_HEADER,
+  PATHAO_INTEGRATION_HEADER_VALUE,
   PATHAO_PROVIDER,
-  verifyPathaoWebhookSignature,
+  verifyPathaoWebhookSecret,
   type PathaoWebhookPayload,
 } from "../../lib/couriers/pathao.js";
 import {
   parseRedxWebhook,
   REDX_PROVIDER,
-  verifyRedxWebhookSignature,
+  verifyRedxWebhookToken,
   type RedxWebhookPayload,
 } from "../../lib/couriers/redx.js";
 import { applyTrackingEvents } from "../tracking.js";
@@ -31,8 +34,15 @@ import {
  * Inbound courier webhooks (Steadfast, Pathao, RedX).
  *
  * Each courier has its own URL: `/api/webhooks/courier/<provider>/<merchantId>`.
- * MUST be mounted before the global `express.json` parser so HMAC verifiers
- * see raw bytes.
+ * Mounted before the global `express.json` parser; the raw body is parsed
+ * here.
+ *
+ * Authentication follows each courier's official integration — none of
+ * them signs the body; each presents the shared secret (the courier
+ * config's encrypted `apiSecret`), compared in constant time:
+ *   Pathao    `X-PATHAO-Signature: <secret>`
+ *   Steadfast `Authorization: Bearer <secret>`
+ *   RedX      `?token=<secret>` on the callback URL
  *
  * Idempotency lives in `WebhookInbox` keyed by
  * `(merchantId, provider, externalId)`. We synthesize the externalId from a
@@ -50,6 +60,8 @@ const RAW_BODY_PARSER = express.raw({ type: "*/*", limit: "1mb" });
 
 interface ParsedTrackingEvent {
   trackingCode: string;
+  /** The courier's own parcel id when the payload carries one (Steadfast consignment_id). */
+  providerRef?: string;
   providerStatus: string;
   normalizedStatus:
     | "pending"
@@ -68,50 +80,44 @@ interface ParsedTrackingEvent {
 
 interface CourierWebhookConfig {
   provider: typeof STEADFAST_PROVIDER | typeof PATHAO_PROVIDER | typeof REDX_PROVIDER;
-  signatureHeaders: readonly string[];
-  verify: (rawBody: string, sig: string | string[] | undefined, secret: string | undefined) => boolean;
+  /** True when the request presents the merchant's secret the courier's official way. */
+  authenticate: (req: Request, secret: string) => boolean;
   parse: (payload: unknown) => ParsedTrackingEvent | null;
 }
 
 const COURIER_CONFIGS: Record<string, CourierWebhookConfig> = {
   steadfast: {
     provider: STEADFAST_PROVIDER,
-    signatureHeaders: ["x-steadfast-signature", "x-signature"],
-    verify: verifySteadfastWebhookSignature,
+    authenticate: (req, secret) => verifySteadfastWebhookToken(req.headers.authorization, secret),
     parse: (p) => parseSteadfastWebhook(p as SteadfastWebhookPayload),
   },
   pathao: {
     provider: PATHAO_PROVIDER,
-    signatureHeaders: ["x-pathao-signature", "x-signature"],
-    verify: verifyPathaoWebhookSignature,
+    authenticate: (req, secret) => verifyPathaoWebhookSecret(req.headers["x-pathao-signature"], secret),
     parse: (p) => parsePathaoWebhook(p as PathaoWebhookPayload),
   },
   redx: {
     provider: REDX_PROVIDER,
-    signatureHeaders: ["x-redx-signature", "x-signature"],
-    verify: verifyRedxWebhookSignature,
+    authenticate: (req, secret) => verifyRedxWebhookToken(req.query.token, secret),
     parse: (p) => parseRedxWebhook(p as RedxWebhookPayload),
   },
 };
 
-function readSignature(
-  req: Request,
-  headerCandidates: readonly string[],
-): string | string[] | undefined {
-  for (const h of headerCandidates) {
-    const v = req.headers[h];
-    if (v != null) return v;
-  }
-  return undefined;
-}
-
-function pickFirstHeader(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
+/**
+ * The merchant's order a courier event refers to: by tracking number, or by
+ * the courier's own parcel id when the payload carries one. Always scoped to
+ * the merchant named by the URL — never by anything in the payload.
+ */
+async function findCourierOrder(merchantId: string, parsed: Pick<ParsedTrackingEvent, "trackingCode" | "providerRef">) {
+  const mid = new Types.ObjectId(merchantId);
+  const or: Array<Record<string, string>> = [{ "logistics.trackingNumber": parsed.trackingCode }];
+  if (parsed.providerRef) or.push({ "logistics.providerOrderId": parsed.providerRef });
+  return Order.findOne({ merchantId: mid, $or: or }).select("_id merchantId order logistics").lean();
 }
 
 /**
  * Generic webhook handler. Same flow for every courier; only
- * (verify, parse, signatureHeaders) varies.
+ * (authenticate, parse) varies.
  */
 async function handleCourierWebhook(
   cfg: CourierWebhookConfig,
@@ -119,6 +125,8 @@ async function handleCourierWebhook(
   res: Response,
 ): Promise<Response> {
   const start = Date.now();
+  // Pathao's own integration answers every webhook with this fixed header.
+  if (cfg.provider === PATHAO_PROVIDER) res.setHeader(PATHAO_INTEGRATION_HEADER, PATHAO_INTEGRATION_HEADER_VALUE);
   const { merchantId } = req.params;
   if (!merchantId || !Types.ObjectId.isValid(merchantId)) {
     recordWebhookOutcome({ provider: cfg.provider, outcome: "bad_request" });
@@ -160,10 +168,9 @@ async function handleCourierWebhook(
     return res.status(401).json({ ok: false, error: "courier secret not configured" });
   }
 
-  const sig = readSignature(req, cfg.signatureHeaders);
-  if (!cfg.verify(rawString, sig, secret)) {
+  if (!cfg.authenticate(req, secret)) {
     recordWebhookOutcome({ provider: cfg.provider, outcome: "invalid_signature", merchantId });
-    return res.status(401).json({ ok: false, error: "invalid signature" });
+    return res.status(401).json({ ok: false, error: "invalid credentials" });
   }
 
   let payload: unknown;
@@ -172,6 +179,13 @@ async function handleCourierWebhook(
   } catch {
     recordWebhookOutcome({ provider: cfg.provider, outcome: "bad_request", merchantId });
     return res.status(400).json({ ok: false, error: "invalid json" });
+  }
+
+  // Pathao's portal sends this when the webhook URL is saved; its own
+  // plugin acknowledges it with 202.
+  if (cfg.provider === PATHAO_PROVIDER && (payload as { event?: unknown } | null)?.event === PATHAO_INTEGRATION_EVENT) {
+    recordWebhookOutcome({ provider: cfg.provider, outcome: "ignored", merchantId });
+    return res.status(202).json({ ok: true, integration: true });
   }
 
   const parsed = cfg.parse(payload);
@@ -183,12 +197,7 @@ async function handleCourierWebhook(
   }
 
   // Tenant-scoped order lookup.
-  const order = await Order.findOne({
-    merchantId: new Types.ObjectId(merchantId),
-    "logistics.trackingNumber": parsed.trackingCode,
-  })
-    .select("_id merchantId order logistics")
-    .lean();
+  const order = await findCourierOrder(merchantId, parsed);
 
   // Defence-in-depth: even if Mongoose somehow returned a foreign-merchant
   // doc, refuse to write. We DO NOT trust the database query alone.
@@ -367,5 +376,5 @@ courierWebhookRouter.post(
 
 // Re-exported so the retry worker can replay courier inbox rows without
 // duplicating verify/parse logic.
-export { COURIER_CONFIGS, handleCourierWebhook };
+export { COURIER_CONFIGS, findCourierOrder, handleCourierWebhook };
 export type { CourierWebhookConfig, ParsedTrackingEvent };

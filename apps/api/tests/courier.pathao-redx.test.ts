@@ -1,46 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { createHmac } from "node:crypto";
 import {
   parsePathaoWebhook,
-  verifyPathaoWebhookSignature,
+  verifyPathaoWebhookSecret,
 } from "../src/lib/couriers/pathao.js";
 import {
   parseRedxWebhook,
-  verifyRedxWebhookSignature,
+  verifyRedxWebhookToken,
 } from "../src/lib/couriers/redx.js";
 
 /* -------------------------------------------------------------------------- */
 /* Pathao                                                                      */
 /* -------------------------------------------------------------------------- */
 
-describe("verifyPathaoWebhookSignature", () => {
+// Pathao's X-PATHAO-Signature carries the webhook secret itself (official plugin).
+describe("verifyPathaoWebhookSecret", () => {
   const secret = "pathao-secret";
-  const body = JSON.stringify({ consignment_id: "P-1", order_status: "Delivered" });
-  const sig = createHmac("sha256", secret).update(body).digest("hex");
 
-  it("accepts matching signature", () => {
-    expect(verifyPathaoWebhookSignature(body, sig, secret)).toBe(true);
+  it("accepts the configured secret", () => {
+    expect(verifyPathaoWebhookSecret(secret, secret)).toBe(true);
   });
 
   it("accepts array-form header", () => {
-    expect(verifyPathaoWebhookSignature(body, [sig], secret)).toBe(true);
+    expect(verifyPathaoWebhookSecret([secret], secret)).toBe(true);
   });
 
-  it("rejects missing secret", () => {
-    expect(verifyPathaoWebhookSignature(body, sig, undefined)).toBe(false);
+  it("rejects when no secret is configured", () => {
+    expect(verifyPathaoWebhookSecret(secret, undefined)).toBe(false);
   });
 
-  it("rejects wrong secret", () => {
-    expect(verifyPathaoWebhookSignature(body, sig, "other")).toBe(false);
+  it("rejects a wrong secret, including a prefix of the right one", () => {
+    expect(verifyPathaoWebhookSecret("other", secret)).toBe(false);
+    expect(verifyPathaoWebhookSecret(secret.slice(0, -1), secret)).toBe(false);
   });
 
-  it("rejects tampered body", () => {
-    const tampered = JSON.stringify({ consignment_id: "P-1", order_status: "Returned" });
-    expect(verifyPathaoWebhookSignature(tampered, sig, secret)).toBe(false);
-  });
-
-  it("rejects empty signature", () => {
-    expect(verifyPathaoWebhookSignature(body, "", secret)).toBe(false);
+  it("rejects a missing or empty header", () => {
+    expect(verifyPathaoWebhookSecret(undefined, secret)).toBe(false);
+    expect(verifyPathaoWebhookSecret("", secret)).toBe(false);
   });
 });
 
@@ -91,17 +86,19 @@ describe("parsePathaoWebhook", () => {
 /* RedX                                                                        */
 /* -------------------------------------------------------------------------- */
 
-describe("verifyRedxWebhookSignature", () => {
+// RedX puts the credential in the callback URL's query string (official docs).
+describe("verifyRedxWebhookToken", () => {
   const secret = "redx-secret";
-  const body = JSON.stringify({ tracking_id: "R-1", status: "delivered" });
-  const sig = createHmac("sha256", secret).update(body).digest("hex");
 
-  it("accepts matching signature", () => {
-    expect(verifyRedxWebhookSignature(body, sig, secret)).toBe(true);
+  it("accepts the configured token", () => {
+    expect(verifyRedxWebhookToken(secret, secret)).toBe(true);
   });
 
-  it("rejects bogus signature", () => {
-    expect(verifyRedxWebhookSignature(body, "not-hex", secret)).toBe(false);
+  it("rejects a wrong, missing or non-string token", () => {
+    expect(verifyRedxWebhookToken("nope", secret)).toBe(false);
+    expect(verifyRedxWebhookToken(undefined, secret)).toBe(false);
+    expect(verifyRedxWebhookToken({ token: secret }, secret)).toBe(false);
+    expect(verifyRedxWebhookToken(secret, undefined)).toBe(false);
   });
 });
 

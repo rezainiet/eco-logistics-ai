@@ -53,8 +53,8 @@ const STEADFAST_INSTRUCTIONS = `
 1. Log into your Steadfast portal (https://portal.packzy.com).
 2. Go to Account Settings → Webhooks (or "API & Webhooks").
 3. Paste the URL above into the "Webhook URL" field.
-4. Make sure your "API Secret" matches the one you entered here — Steadfast
-   signs every webhook with HMAC-SHA256 over the request body.
+4. In the "Auth Token (Bearer)" field, enter the API Secret you saved here —
+   Steadfast sends it as "Authorization: Bearer <token>" on every webhook.
 5. Save. Your next status change will arrive via webhook within seconds.
 `.trim();
 
@@ -62,7 +62,8 @@ const PATHAO_INSTRUCTIONS = `
 1. Log into your Pathao Merchant dashboard.
 2. Go to Settings → Webhooks.
 3. Paste the URL above into the "Order Status Webhook" field.
-4. Use the API Secret shown below as the signing secret.
+4. Enter the API Secret you saved here as the webhook secret — Pathao sends
+   it in the X-PATHAO-Signature header of every webhook.
 5. Save and send a test event from the Pathao portal to verify.
 `.trim();
 
@@ -73,7 +74,8 @@ enabled. To request access:
 1. Email your RedX KAM (Key Account Manager) and ask for "webhook
    notifications" to be enabled on your account.
 2. Once enabled, go to RedX dashboard → Settings → Notifications.
-3. Paste the URL above and use your API Secret as the signing secret.
+3. Paste the URL above with "?token=<your API Secret>" added to the end —
+   RedX passes webhook credentials in the URL's query string.
 4. Until webhooks are enabled, this courier falls back to polling — no
    action needed on your side, but tracking updates will lag by up to
    60 minutes (vs seconds via webhook).

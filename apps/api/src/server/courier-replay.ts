@@ -1,7 +1,7 @@
 import { Types } from "mongoose";
-import { Order, WebhookInbox } from "@ecom/db";
+import { WebhookInbox } from "@ecom/db";
 import { applyTrackingEvents } from "./tracking.js";
-import { COURIER_CONFIGS } from "./webhooks/courier.js";
+import { COURIER_CONFIGS, findCourierOrder } from "./webhooks/courier.js";
 import {
   nextRetryDelayMs,
   WEBHOOK_RETRY_MAX_ATTEMPTS,
@@ -68,12 +68,7 @@ export async function replayCourierInbox(args: {
 
   // Re-resolve the order — between the failed attempt and now the order
   // could have been deleted, or its tracking number could have rotated.
-  const order = await Order.findOne({
-    merchantId: inbox.merchantId,
-    "logistics.trackingNumber": parsed.trackingCode,
-  })
-    .select("_id merchantId order logistics")
-    .lean();
+  const order = await findCourierOrder(String(inbox.merchantId), parsed);
 
   if (!order) {
     inbox.status = "succeeded";

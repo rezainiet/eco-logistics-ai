@@ -1,10 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { createHmac } from "node:crypto";
 import { Types } from "mongoose";
 import { Order } from "@ecom/db";
 import {
   parseSteadfastWebhook,
-  verifySteadfastWebhookSignature,
+  verifySteadfastWebhookToken,
 } from "../src/lib/couriers/steadfast.js";
 import { applyTrackingEvents } from "../src/server/tracking.js";
 import { createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
@@ -13,38 +12,32 @@ import { createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
 /* Pure HMAC + parser tests                                                    */
 /* -------------------------------------------------------------------------- */
 
-describe("verifySteadfastWebhookSignature", () => {
+// Steadfast sends "Authorization: Bearer <token>" (its own WordPress plugin).
+describe("verifySteadfastWebhookToken", () => {
   const secret = "shared-secret";
-  const body = JSON.stringify({ tracking_code: "SF1", status: "delivered" });
-  const sig = createHmac("sha256", secret).update(body).digest("hex");
 
-  it("accepts a matching signature", () => {
-    expect(verifySteadfastWebhookSignature(body, sig, secret)).toBe(true);
+  it("accepts a matching Bearer token (any case of the scheme)", () => {
+    expect(verifySteadfastWebhookToken(`Bearer ${secret}`, secret)).toBe(true);
+    expect(verifySteadfastWebhookToken(`bearer ${secret}`, secret)).toBe(true);
   });
 
-  it("accepts the signature when passed inside an array (multi-header form)", () => {
-    expect(verifySteadfastWebhookSignature(body, [sig], secret)).toBe(true);
+  it("accepts the header when passed inside an array (multi-header form)", () => {
+    expect(verifySteadfastWebhookToken([`Bearer ${secret}`], secret)).toBe(true);
   });
 
-  it("rejects when secret is missing", () => {
-    expect(verifySteadfastWebhookSignature(body, sig, undefined)).toBe(false);
+  it("rejects when no secret is configured", () => {
+    expect(verifySteadfastWebhookToken(`Bearer ${secret}`, undefined)).toBe(false);
   });
 
-  it("rejects when signature is missing", () => {
-    expect(verifySteadfastWebhookSignature(body, undefined, secret)).toBe(false);
+  it("rejects when the header is missing, empty or not a Bearer token", () => {
+    expect(verifySteadfastWebhookToken(undefined, secret)).toBe(false);
+    expect(verifySteadfastWebhookToken("", secret)).toBe(false);
+    expect(verifySteadfastWebhookToken(secret, secret)).toBe(false);
+    expect(verifySteadfastWebhookToken(`Basic ${secret}`, secret)).toBe(false);
   });
 
-  it("rejects when body has been tampered with", () => {
-    const tampered = JSON.stringify({ tracking_code: "SF1", status: "rto" });
-    expect(verifySteadfastWebhookSignature(tampered, sig, secret)).toBe(false);
-  });
-
-  it("rejects when using the wrong secret", () => {
-    expect(verifySteadfastWebhookSignature(body, sig, "other-secret")).toBe(false);
-  });
-
-  it("rejects empty signature without crashing", () => {
-    expect(verifySteadfastWebhookSignature(body, "", secret)).toBe(false);
+  it("rejects a wrong token", () => {
+    expect(verifySteadfastWebhookToken("Bearer other-secret", secret)).toBe(false);
   });
 });
 

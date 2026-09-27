@@ -121,6 +121,10 @@ export interface CourierAdapter {
   readonly name: CourierName;
   validateCredentials(): Promise<ValidationResult>;
   createAWB(order: AWBRequest): Promise<AWBResponse>;
-  getTracking(trackingNumber: string): Promise<TrackingInfo>;
+  /**
+   * `ref.providerOrderId` is the courier's own parcel id (AWBResponse.providerOrderId)
+   * for couriers whose status endpoint is keyed by it (Steadfast `status_by_cid`).
+   */
+  getTracking(trackingNumber: string, ref?: { providerOrderId?: string }): Promise<TrackingInfo>;
   priceQuote(input: { district: string; weight: number; cod?: number }): Promise<PriceQuote>;
 }

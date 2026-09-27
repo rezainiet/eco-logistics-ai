@@ -1,4 +1,4 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { env } from "../../env.js";
 import {
@@ -20,6 +20,7 @@ import {
   type ValidationResult,
 } from "./types.js";
 import { normalizeCourierStatus } from "./status-map.js";
+import { secretsMatch } from "./webhook-auth.js";
 
 /**
  * Pathao Aladdin API v1 adapter. Works against live endpoints when credentials
@@ -447,10 +448,14 @@ export function __clearPathaoTokenCache(): void {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Pathao push payload. Pathao Hermes uses a flat shape with snake_case
- * keys; field names align with their merchant-portal webhook docs.
+ * Pathao push payload. Per Pathao's official integration
+ * (github.com/pathao-eng/courier-woocommerce-plugin, plugin-api.php) every
+ * delivery carries an `event` (e.g. "order.delivery-failed"); `order_status`
+ * may be absent, in which case the status comes from the event.
  */
 export interface PathaoWebhookPayload {
+  /** Official: event name, e.g. "order.delivered"; "webhook_integration" is the portal's test ping. */
+  event?: string;
   /** Pathao consignment id (== our trackingNumber). */
   consignment_id?: string;
   merchant_order_id?: string;
@@ -474,35 +479,64 @@ export interface ParsedPathaoTracking {
 }
 
 /**
- * Verify a Pathao webhook signature. Pathao signs the raw request body
- * with the merchant's app secret (HMAC-SHA256, hex digest) and ships
- * it in the `X-PATHAO-Signature` header.
+ * Official event → status names, verbatim from Pathao's plugin
+ * (`$orderEventsStatusMap`). The status names then go through the exact
+ * Pathao table in status-map.ts; events not listed here stay "unknown".
  */
-export function verifyPathaoWebhookSignature(
-  rawBody: string | Buffer,
-  signature: string | string[] | undefined,
+export const PATHAO_EVENT_STATUS: Readonly<Record<string, string>> = Object.freeze({
+  "order.created": "Order_Created",
+  "order.updated": "Order_Updated",
+  "order.pickup-requested": "Pickup_Requested",
+  "order.assigned-for-pickup": "Assigned_for_Pickup",
+  "order.picked": "Picked",
+  "order.pickup-failed": "Pickup_Failed",
+  "order.pickup-cancelled": "Pickup_Cancelled",
+  "order.at-the-sorting-hub": "At_the_Sorting_HUB",
+  "order.in-transit": "In_Transit",
+  "order.received-at-last-mile-hub": "Received_at_Last_Mile_HUB",
+  "order.assigned-for-delivery": "Assigned_for_Delivery",
+  "order.delivered": "Delivered",
+  "order.partial-delivery": "Partial_Delivery",
+  "order.returned": "Return",
+  "order.delivery-failed": "Delivery_Failed",
+  "order.on-hold": "On_Hold",
+  "order.paid-return": "paid_return",
+  "order.exchanged": "exchange",
+  "order.paid": "Payment_Invoice",
+});
+
+/** The portal's test delivery when a webhook URL is saved. */
+export const PATHAO_INTEGRATION_EVENT = "webhook_integration";
+/**
+ * Response header Pathao's own plugin returns on every webhook response.
+ * A fixed, public value from that plugin — not a credential of ours.
+ */
+export const PATHAO_INTEGRATION_HEADER = "X-Pathao-Merchant-Webhook-Integration-Secret";
+export const PATHAO_INTEGRATION_HEADER_VALUE = "f3992ecc-59da-4cbe-a049-a13da2018d51";
+
+/**
+ * Authenticate a Pathao webhook. Pathao does not sign the body: its
+ * `X-PATHAO-Signature` header carries the webhook secret itself (the
+ * official plugin compares it directly). Constant-time, never logged.
+ */
+export function verifyPathaoWebhookSecret(
+  signatureHeader: string | string[] | undefined,
   secret: string | undefined,
 ): boolean {
-  if (!secret) return false;
-  const provided = Array.isArray(signature) ? signature[0] : signature;
-  if (!provided || typeof provided !== "string" || provided.length === 0) return false;
-  const computed = createHmac("sha256", secret)
-    .update(typeof rawBody === "string" ? rawBody : rawBody)
-    .digest("hex");
-  const a = Buffer.from(provided, "hex");
-  const b = Buffer.from(computed, "hex");
-  if (a.length === 0 || a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  return secretsMatch(Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader, secret);
 }
 
 export function parsePathaoWebhook(payload: PathaoWebhookPayload): ParsedPathaoTracking | null {
   const trackingCode = payload.consignment_id ?? "";
   if (!trackingCode) return null;
-  const providerStatus = (payload.order_status ?? payload.order_status_slug ?? "unknown").trim();
+  const fromEvent = payload.event ? PATHAO_EVENT_STATUS[payload.event.trim()] : undefined;
+  const providerStatus = (
+    payload.order_status ??
+    payload.order_status_slug ??
+    fromEvent ??
+    payload.event ??
+    "unknown"
+  ).trim();
   const at = payload.updated_at ? new Date(payload.updated_at) : new Date();
   const safeAt = Number.isNaN(at.getTime()) ? new Date() : at;
   const deliveredRaw = payload.delivered_at ? new Date(payload.delivered_at) : undefined;

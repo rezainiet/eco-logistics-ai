@@ -9,6 +9,7 @@ import {
   type Order as OrderDoc,
 } from "@ecom/db";
 import { adapterFor, CourierError, hasCourierAdapter } from "../lib/couriers/index.js";
+import { resolveProviderOrderId } from "../lib/couriers/provider-ref.js";
 import type { CourierName, TrackingInfo } from "../lib/couriers/types.js";
 import { invalidate } from "../lib/cache.js";
 import { syncOrderInventory } from "../lib/inventory.js";
@@ -650,7 +651,7 @@ export async function syncOrderTracking(
       apiKey: config.apiKey,
       apiSecret: config.apiSecret ?? undefined,
       baseUrl: config.baseUrl ?? undefined,
-    }).getTracking(trackingNumber);
+    }).getTracking(trackingNumber, { providerOrderId: await resolveProviderOrderId(order) });
   } catch (err) {
     const message = err instanceof CourierError ? err.message : (err as Error).message;
     await Order.updateOne(

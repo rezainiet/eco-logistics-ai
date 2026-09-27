@@ -141,6 +141,13 @@ const logisticsSchema = new Schema(
   {
     courier: { type: String, trim: true },
     trackingNumber: { type: String, trim: true },
+    /**
+     * The courier's own parcel id (AWBResponse.providerOrderId) when it
+     * differs from trackingNumber — Steadfast's consignment_id, which its
+     * status_by_cid endpoint and webhooks are keyed by. Unset on orders
+     * booked before this field existed.
+     */
+    providerOrderId: { type: String, trim: true, maxlength: 100 },
     estimatedDelivery: { type: Date },
     actualDelivery: { type: Date },
     /** Stamped when bookSingleShipment succeeds — used to compute delivery hours. */
@@ -643,6 +650,12 @@ orderSchema.index({
   _id: -1,
 });
 orderSchema.index({ "logistics.trackingNumber": 1 }, { sparse: true });
+// Courier webhooks that name the parcel by the courier's own id (Steadfast
+// consignment_id). Merchant-scoped like every webhook lookup.
+orderSchema.index(
+  { merchantId: 1, "logistics.providerOrderId": 1 },
+  { partialFilterExpression: { "logistics.providerOrderId": { $type: "string" } } },
+);
 // Orders per landing page (merchant dashboard filter / page stats).
 orderSchema.index(
   { merchantId: 1, "source.landingPageId": 1, createdAt: -1 },

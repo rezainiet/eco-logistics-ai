@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -271,7 +270,8 @@ describe("courier webhook HTTP route", () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
   }
-  const sign = (body: string) => createHmac("sha256", "ph_secret").update(body).digest("hex");
+  // Pathao presents the webhook secret itself in X-PATHAO-Signature (official plugin).
+  const sign = (_body: string) => "ph_secret";
 
   it("10. foreign merchant: a signed webhook for merchant B cannot touch merchant A's order", async () => {
     const a = await setup("in_transit");

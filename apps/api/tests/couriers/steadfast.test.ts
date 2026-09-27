@@ -52,7 +52,8 @@ describe("SteadfastAdapter (mock transport)", () => {
       items: [{ name: "Item", quantity: 1, price: 100 }],
       cod: 100,
     });
-    const info = await adapter.getTracking(awb.trackingNumber);
+    // status_by_cid is keyed by the consignment_id (AWBResponse.providerOrderId).
+    const info = await adapter.getTracking(awb.trackingNumber, { providerOrderId: awb.providerOrderId });
     expect(info.trackingNumber).toBe(awb.trackingNumber);
     expect([
       "pending",

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createHmac } from "node:crypto";
 import express from "express";
 import { Types } from "mongoose";
 import { AuditLog, InventoryMovement, LandingPage, Merchant, Order, Product } from "@ecom/db";
@@ -412,8 +411,8 @@ describe("signed courier webhook → order → stock", () => {
     const port = (server.address() as { port: number }).port;
     const raw = JSON.stringify(body);
     const headers: Record<string, string> = { "content-type": "application/json" };
-    if (secret) headers["x-steadfast-signature"] = createHmac("sha256", secret).update(raw).digest("hex");
-    else headers["x-steadfast-signature"] = "0".repeat(64);
+    // Steadfast authenticates with "Authorization: Bearer <token>" (its own plugin).
+    headers.authorization = `Bearer ${secret ?? "not-the-token"}`;
     try {
       const r = await fetch(`http://127.0.0.1:${port}/api/webhooks/courier/steadfast/${merchantId}`, { method: "POST", headers, body: raw });
       return r.status;

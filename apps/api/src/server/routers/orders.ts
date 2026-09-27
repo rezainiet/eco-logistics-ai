@@ -34,6 +34,7 @@ import {
   CourierError,
   hasCourierAdapter,
 } from "../../lib/couriers/index.js";
+import { resolveProviderOrderId } from "../../lib/couriers/provider-ref.js";
 import { syncOrderTracking } from "../tracking.js";
 import { enqueueAutoBook } from "../../workers/automationBook.js";
 import { enqueueOrderConfirmationSms } from "../../workers/automationSms.js";
@@ -533,6 +534,9 @@ export async function bookSingleShipment(args: {
         "logistics.shippedAt": new Date(),
         "logistics.courier": args.courier,
         "logistics.trackingNumber": awb.trackingNumber,
+        ...(awb.providerOrderId && awb.providerOrderId !== awb.trackingNumber
+          ? { "logistics.providerOrderId": awb.providerOrderId }
+          : {}),
         "logistics.bookingInFlight": false,
         ...(awb.estimatedDeliveryAt
           ? { "logistics.estimatedDelivery": awb.estimatedDeliveryAt }
@@ -3173,7 +3177,9 @@ export const ordersRouter = router({
           apiKey: config.apiKey,
           apiSecret: config.apiSecret ?? undefined,
           baseUrl: config.baseUrl ?? undefined,
-        }).getTracking(trackingNumber);
+        }).getTracking(trackingNumber, {
+          providerOrderId: await resolveProviderOrderId({ _id: order._id, merchantId, logistics: order.logistics }),
+        });
         return {
           trackingNumber,
           courier,
