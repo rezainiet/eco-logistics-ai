@@ -30,13 +30,13 @@ export type CampaignCategory = "organic" | "paid_social" | "direct" | "unknown";
 
 /** Source domains we recognize as paid-social ad targets. Matched on the
  *  exact lowercased source slug — the lexicon is small on purpose. */
-const PAID_SOCIAL_SOURCES = new Set([
+export const PAID_SOCIAL_SOURCES = new Set([
   "facebook", "fb", "instagram", "ig", "tiktok", "tt",
   "youtube", "yt", "twitter", "x", "snapchat",
 ]);
 
 /** Mediums that imply paid traffic regardless of source domain. */
-const PAID_MEDIUMS = new Set([
+export const PAID_MEDIUMS = new Set([
   "cpc", "ppc", "paid", "paid_social", "paidsocial",
   "social_paid", "display", "banner",
 ]);

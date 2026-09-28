@@ -336,6 +336,28 @@ const canonicalAddressSchema = new Schema(
  * a single address. `addressHash` is a stable fingerprint of the delivery
  * address used to detect reuse across unrelated phones.
  */
+/**
+ * One marketing touch (see @ecom/landing attribution.ts): UTM values, the
+ * TYPE of ad-click id present (never its value), the external referrer's
+ * host and the landing path. `channel` / `paid` are derived by the server.
+ */
+const touchSchema = new Schema(
+  {
+    source: { type: String, trim: true, maxlength: 80 },
+    medium: { type: String, trim: true, maxlength: 80 },
+    campaign: { type: String, trim: true, maxlength: 200 },
+    term: { type: String, trim: true, maxlength: 120 },
+    content: { type: String, trim: true, maxlength: 200 },
+    clickIdType: { type: String, trim: true, maxlength: 16 },
+    referrerHost: { type: String, trim: true, lowercase: true, maxlength: 253 },
+    landingPath: { type: String, trim: true, maxlength: 200 },
+    at: { type: Date },
+    channel: { type: String, trim: true, maxlength: 20 },
+    paid: { type: Boolean },
+  },
+  { _id: false }
+);
+
 const sourceSchema = new Schema(
   {
     ip: { type: String, trim: true, maxlength: 64 },
@@ -601,6 +623,16 @@ const orderSchema = new Schema(
      */
     preActionSnapshot: { type: Schema.Types.Mixed },
     source: { type: sourceSchema, default: () => ({}) },
+    /**
+     * Marketing attribution captured by the landing page and validated by the
+     * server when the order was created. Analytics metadata only — never used
+     * for authorization, pricing or revenue. Absent = not tracked (orders from
+     * other channels, or placed before attribution existed).
+     */
+    attribution: {
+      type: new Schema({ firstTouch: { type: touchSchema }, lastTouch: { type: touchSchema } }, { _id: false }),
+      default: undefined,
+    },
     inventory: { type: orderInventorySchema, default: undefined },
     /**
      * Intent Intelligence v1. Stamped fire-and-forget post-identity-

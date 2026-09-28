@@ -1,4 +1,5 @@
 import mongoose, { Types } from "mongoose";
+import { orderAttribution } from "../marketing/attribution.js";
 import { MAX_CART_LINES, MAX_LINE_QUANTITY, normalizeBdMobile } from "@ecom/landing";
 import { Order, Product, availableStock } from "@ecom/db";
 import { writeAudit } from "../audit.js";
@@ -36,6 +37,12 @@ export interface PlaceOrderInput {
   items: Array<{ productId: string; quantity: number; unitPrice?: number }>;
   customer: { name: string; phone: string; address: string; district: string; email?: string | null; notes?: string | null };
   deliveryOptionId?: string | null;
+  /**
+   * Marketing attribution captured by the page (first/last touch). Untrusted
+   * analytics metadata: sanitized, never required, never used for tenant,
+   * price or stock decisions.
+   */
+  attribution?: unknown;
 }
 
 export interface PlaceOrderMeta {
@@ -205,6 +212,9 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
   });
   if (recent >= PHONE_MAX_ORDERS) return fail({ code: "rate_limited" });
 
+  // ---- Marketing attribution (analytics metadata only) ----------------------
+  const attribution = orderAttribution(input.attribution);
+
   // ---- Price snapshot + totals (server values only) --------------------------
   const currency = [...currencies][0]!;
   const items = [...qty].map(([id, quantity]) => {
@@ -260,6 +270,7 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
               ...(notes ? { customerNote: notes } : {}),
             },
             fraud: fraudDocFromRisk(risk),
+            ...(attribution ? { attribution } : {}),
             inventory: { state: "reserved", cycle: 1, reservedAt: now },
             source: {
               ...(ip ? { ip } : {}),

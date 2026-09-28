@@ -1,4 +1,4 @@
-import { normalizeHost } from "@ecom/landing";
+import { normalizeHost, sanitizeAttribution } from "@ecom/landing";
 import { landingApiUrl, landingRootDomain } from "@/lib/config";
 
 /**
@@ -73,6 +73,8 @@ export async function POST(req: Request): Promise<Response> {
     items: body.items,
     customer: body.customer,
     deliveryOptionId: body.deliveryOptionId ?? null,
+    // Marketing attribution: analytics metadata only (the API re-validates it).
+    attribution: sanitizeAttribution(body.attribution),
   };
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
   const ua = req.headers.get("user-agent");

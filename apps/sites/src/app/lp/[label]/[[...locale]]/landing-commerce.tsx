@@ -12,6 +12,7 @@ import {
   formatNumber,
   normalizeBdMobile,
 } from "@ecom/landing";
+import { captureAttribution, storedAttribution } from "@/lib/analytics/attribution-store";
 import { emitCommerceEvent } from "@/lib/analytics/commerce-events";
 import {
   type CartLine,
@@ -92,6 +93,11 @@ export function LandingCommerce({
   const loaded = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
   const lastFocus = useRef<HTMLElement | null>(null);
+
+  // Where this visit came from (UTM / ad click / referrer) — first-party, sent with the order.
+  useEffect(() => {
+    captureAttribution();
+  }, []);
 
   // Restore this page's cart, checked against live stock.
   useEffect(() => {
@@ -219,6 +225,7 @@ export function LandingCommerce({
             notes: details.notes || null,
           },
           deliveryOptionId: delivery?.id ?? null,
+          attribution: storedAttribution(),
         }),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;

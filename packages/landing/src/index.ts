@@ -101,6 +101,16 @@ export {
   productKey,
 } from "./analytics.js";
 export type { ContactMethod, LandingAnalyticsConfig, LandingEventName, TrackedProduct } from "./analytics.js";
+export {
+  ATTRIBUTION_LIMITS,
+  CLICK_ID_TYPES,
+  isAttributable,
+  mergeTouches,
+  sanitizeAttribution,
+  sanitizeTouch,
+  touchFromVisit,
+} from "./attribution.js";
+export type { Attribution, ClickIdType, Touch } from "./attribution.js";
 export type { EditTarget } from "./edit-target.js";
 
 export {

@@ -53,6 +53,7 @@ landingOrdersRouter.post("/", orderLimiter, async (req, res) => {
         items: Array.isArray(body.items) ? body.items.slice(0, 50) : [],
         customer: (body.customer ?? {}) as PlaceOrderInput["customer"],
         deliveryOptionId: typeof body.deliveryOptionId === "string" ? body.deliveryOptionId.slice(0, 80) : null,
+        attribution: body.attribution,
       },
       { ip: customerIp(req), userAgent: req.header("user-agent") ?? null },
     );
