@@ -21,7 +21,7 @@ export function LandingAnalytics({
     () => startLandingAnalytics(config, page, products),
     // Stable per page load; primitives only so remounts don't restart it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [config.metaPixelId, page.slug, page.locale],
+    [config.metaPixelId, config.ga4MeasurementId, config.googleAds?.id, config.googleAds?.purchaseLabel, config.tiktokPixelId, page.slug, page.locale],
   );
   return null;
 }

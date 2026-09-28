@@ -1,6 +1,9 @@
 import { type LandingAnalyticsConfig, type LandingEventName, type TrackedProduct, linkKind } from "@ecom/landing";
 import { COMMERCE_EVENT, type CommerceEvent, type CommerceLine } from "./commerce-events";
+import { googleTag } from "./google-tag";
 import { type MetaPixel, type PixelParams, metaPixel } from "./meta-pixel";
+import { compact, toGoogle, toTiktok } from "./provider-events";
+import { tiktokPixel } from "./tiktok-pixel";
 
 /**
  * landingAnalytics — the one event layer for published landing pages.
@@ -74,15 +77,35 @@ export function startLandingAnalytics(
 ): () => void {
   if (typeof window === "undefined" || window.top !== window.self) return () => {};
 
-  const pixel: MetaPixel = metaPixel(config.metaPixelId);
+  // Each provider loads only when this page configured it (null otherwise).
+  const pixel: MetaPixel | null = config.metaPixelId ? metaPixel(config.metaPixelId) : null;
+  const google = googleTag({ ga4MeasurementId: config.ga4MeasurementId, googleAds: config.googleAds });
+  const tiktok = config.tiktokPixelId ? tiktokPixel(config.tiktokPixelId) : null;
   const base: PixelParams = { lp_slug: page.slug, lp_template: page.template, lp_locale: page.locale };
   const send = (name: LandingEventName, params?: PixelParams, eventId?: string) => {
     const payload = { ...base, ...params };
-    if (STANDARD.has(name)) pixel.track(name, payload, eventId);
-    else pixel.trackCustom(name, payload);
+    if (pixel) {
+      if (STANDARD.has(name)) pixel.track(name, payload, eventId);
+      else pixel.trackCustom(name, payload);
+    }
+    if (google) {
+      const g = toGoogle(name, payload, eventId);
+      if (g?.kind === "page_view") google.event("page_view", compact(g.params));
+      else if (g?.kind === "analytics") google.analytics(g.name, compact(g.params));
+      else if (g?.kind === "purchase") {
+        google.analytics("purchase", compact(g.params));
+        google.purchaseConversion({ value: g.value, currency: g.currency, transactionId: g.transactionId });
+      }
+    }
+    if (tiktok) {
+      const t = toTiktok(name, payload, eventId);
+      if (t?.kind === "page") tiktok.page();
+      else if (t) tiktok.track(t.event, compact(t.params), t.eventId);
+    }
   };
 
-  const loadKey = `${config.metaPixelId}|${location.pathname}`;
+  const providerKey = [config.metaPixelId, config.ga4MeasurementId, config.googleAds?.id, config.tiktokPixelId].join(",");
+  const loadKey = `${providerKey}|${location.pathname}`;
   if (!pageViews.has(loadKey)) {
     pageViews.add(loadKey);
     send("PageView");

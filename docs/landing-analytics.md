@@ -1,4 +1,4 @@
-# Landing-page analytics (Meta Pixel)
+# Landing-page analytics (Meta Pixel, Google, TikTok) and attribution
 
 Each **published** landing page can send browser events to **its own** Meta
 Pixel. There is no server-side Conversions API (CAPI) yet — see "Not
@@ -111,6 +111,79 @@ catalog) are identified by their product id, which is also what order items
 reference. Custom display-only product cards keep positional keys
 (`<sectionId>-<index>`, e.g. `products-0`).
 
+## Google (GA4 / Google Ads) and TikTok
+
+Configured per landing page next to the Meta Pixel (Settings & publishing →
+Analytics & Tracking), each with its own switch. Only public IDs are stored:
+
+| Setting | Stored as | Format |
+| --- | --- | --- |
+| GA4 measurement ID | `LandingPage.tracking.ga4MeasurementId` | `G-` + 6–14 letters/digits |
+| Google Ads tag ID | `tracking.googleAdsId` | `AW-` + digits |
+| Google Ads purchase conversion label | `tracking.googleAdsPurchaseLabel` | the part after `/` (optional; without it no conversion is sent) |
+| Send events to Google | `tracking.googleEnabled` | needs a GA4 or Ads ID |
+| TikTok Pixel ID | `tracking.tiktokPixelId` | ~20 upper-case letters/digits |
+| Send events to TikTok | `tracking.tiktokEnabled` | needs the Pixel ID |
+
+The Google/TikTok fields are written only once configured. The public page
+payload (`analytics`) contains only the switched-on, valid IDs, and the
+renderer re-validates them before anything reaches the browser. Loaders:
+`lib/analytics/google-tag.ts` (gtag.js, automatic page views off, every event
+has `send_to`) and `lib/analytics/tiktok-pixel.ts` (events.js, calls via
+`ttq.instance(id)`). Both are siblings of `meta-pixel.ts` behind the same
+`startLandingAnalytics` layer, so they share its guarantees (once-per-load
+page view, one Purchase per order, nothing in the preview or in frames).
+
+| Landing event | GA4 | Google Ads | TikTok |
+| --- | --- | --- | --- |
+| PageView | `page_view` | `page_view` | `page()` |
+| ViewContent | `view_item_list` | — | `ViewContent` |
+| AddToCart | `add_to_cart` | — | `AddToCart` |
+| InitiateCheckout | `begin_checkout` | — | `InitiateCheckout` |
+| Purchase (server-created order) | `purchase`, `transaction_id` = order number | `conversion` to `AW-…/label`, same `transaction_id` | `PlaceAnOrder`, `event_id` = `Purchase.<order number>` |
+| Contact | `contact` | — | `Contact` |
+
+Meta-only custom click events (`cta_click`, `product_click`, `*_click`,
+`language_switch`) are not sent to Google or TikTok. TikTok gets
+`PlaceAnOrder`, not `CompletePayment`: orders are cash on delivery (placed,
+not paid).
+
+CSP (apps/sites `next.config.mjs`): with `LANDING_ANALYTICS` on, published
+pages also allow `*.googletagmanager.com`, the GA4/Ads collect hosts
+(`*.google-analytics.com`, `*.analytics.google.com`, `*.g.doubleclick.net`,
+`*.google.com`, `*.google.com.bd`), frames `td.doubleclick.net` /
+`www.googletagmanager.com`, and `analytics.tiktok.com` / `*.tiktok.com`.
+`LANDING_ANALYTICS=off` removes every analytics origin. The preview host
+never allows them.
+
+## Marketing attribution (first / last touch)
+
+`@ecom/landing` `attribution.ts` + `apps/sites` `lib/analytics/attribution-store.ts`.
+
+- On each load of a published commerce page the browser reads the visit's
+  `utm_source/medium/campaign/term/content`, which ad-click id was present
+  (`fbclid`, `gclid`, `gbraid`, `wbraid`, `ttclid`, `msclkid` — the TYPE
+  only, never the id value), the external referrer's host (never the full
+  URL) and the path (never the query string).
+- Stored in that page origin's `localStorage`: `firstTouch` is set by the
+  first attributable visit and never replaced; `lastTouch` moves to each
+  later attributable visit. A direct visit changes nothing. Works with every
+  pixel switched off; no personal data.
+- The checkout sends the pair; the sites proxy and the API both sanitise it
+  (allow-listed keys, clamped lengths, control characters/markup removed,
+  touches older than ~400 days or in the future dropped). The API classifies
+  each touch into a channel (`meta`, `google`, `tiktok`, `organic`,
+  `referral`, `other`) and stores `Order.attribution` once, at creation.
+  Invalid or missing attribution never blocks an order. Attribution is never
+  used for tenant, price, stock or revenue decisions.
+
+Reports (Dashboard → Marketing): orders placed per channel / source /
+medium / campaign, and revenue by Accounting's exact rule (delivered orders
+only). Ad spend is only what was entered in Accounting (Meta / Google /
+TikTok ads categories); cost per order and ROAS are shown only when spend
+exists. Orders without attribution are "direct" (landing page, no signal) or
+"not tracked" (other channels / before attribution).
+
 ## Not implemented (on purpose)
 
 | Meta event | Why not |
@@ -118,6 +191,7 @@ reference. Custom display-only product cards keep positional keys
 | `AddPaymentInfo` | No online payment is taken (cash on delivery). |
 | `Lead` / `CompleteRegistration` | No on-page form or sign-up exists yet. |
 | Conversions API (server-side) | Needs a per-page access token (a secret) and a server event pipeline; browser events already carry deterministic/unique `eventID`s for future de-duplication. |
+| Google / TikTok server-side events | Same reason as CAPI: they need secrets and a server pipeline. Browser Purchase events already carry the order number for future de-duplication. |
 | Google Analytics / TikTok | Not requested yet; the event layer is provider-neutral (`landing-analytics.ts` → one adapter per provider). |
 
 ## How to verify with a real pixel

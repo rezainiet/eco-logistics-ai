@@ -82,7 +82,17 @@ const landingPageSchema = new Schema(
       type: new Schema(
         {
           metaPixelId: { type: String, trim: true, maxlength: 20, default: null },
+          /** Meta on/off (historical name). */
           enabled: { type: Boolean, default: false },
+          /** Google tag: GA4 measurement ID and/or Google Ads tag + purchase conversion label (all public). */
+          // Stored only once configured (a Meta-only page keeps just the Meta fields).
+          ga4MeasurementId: { type: String, trim: true, maxlength: 20 },
+          googleAdsId: { type: String, trim: true, maxlength: 20 },
+          googleAdsPurchaseLabel: { type: String, trim: true, maxlength: 40 },
+          googleEnabled: { type: Boolean },
+          /** TikTok Pixel ID (public). */
+          tiktokPixelId: { type: String, trim: true, maxlength: 24 },
+          tiktokEnabled: { type: Boolean },
           updatedAt: { type: Date },
         },
         { _id: false },

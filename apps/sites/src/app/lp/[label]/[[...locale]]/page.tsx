@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { LOCALE_LABELS, type Locale, type NumeralMode, effectiveSections, isMetaPixelId, productCatalog } from "@ecom/landing";
+import { LOCALE_LABELS, type Locale, type NumeralMode, analyticsConfigOf, effectiveSections, productCatalog } from "@ecom/landing";
 import { LandingRenderer, assetEnv, themeStyle } from "@ecom/landing/react";
 import { analyticsAllowed, indexingAllowed } from "@/lib/config";
 import { resolveCurrentHost } from "@/lib/resolve";
@@ -84,6 +84,18 @@ export default async function PublicLandingPage({ params }: Props) {
     ...productCatalog(r.spec, r.content, r.locale),
     ...Object.fromEntries((commerce?.products ?? []).map((p) => [p.id, { name: p.name, price: p.price }])),
   };
+  const publicTracking = r.analytics
+    ? analyticsConfigOf({
+        metaPixelId: r.analytics.metaPixelId,
+        enabled: !!r.analytics.metaPixelId,
+        ga4MeasurementId: r.analytics.ga4MeasurementId,
+        googleAdsId: r.analytics.googleAds?.id,
+        googleAdsPurchaseLabel: r.analytics.googleAds?.purchaseLabel,
+        googleEnabled: !!(r.analytics.ga4MeasurementId || r.analytics.googleAds),
+        tiktokPixelId: r.analytics.tiktokPixelId,
+        tiktokEnabled: !!r.analytics.tiktokPixelId,
+      })
+    : null;
   return (
     <>
       <LanguageSwitch current={r.locale} locales={r.locales} defaultLocale={r.defaultLocale} />
@@ -101,10 +113,10 @@ export default async function PublicLandingPage({ params }: Props) {
         </div>
       ) : null}
       {/* Published page only — the preview frame never mounts analytics. The
-          Pixel ID is re-checked here: only digits ever reach the browser. */}
-      {analyticsAllowed() && r.analytics && isMetaPixelId(r.analytics.metaPixelId) ? (
+          IDs are re-validated here: only well-formed public IDs reach the browser. */}
+      {analyticsAllowed() && publicTracking ? (
         <LandingAnalytics
-          config={{ metaPixelId: r.analytics.metaPixelId }}
+          config={publicTracking}
           page={{ slug: r.slug, template: r.template?.key ?? "custom", locale: r.locale, title: r.seo.title }}
           products={tracked}
         />

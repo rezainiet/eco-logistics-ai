@@ -257,14 +257,35 @@ export const landingPagesRouter = router({
       setPageProducts(actorOf(ctx), { pageId: input.id, expectedRevision: input.expectedRevision, products: input.products }),
     ),
 
-  /** This page's Analytics & Tracking (its own Meta Pixel). */
+  /** This page's Analytics & Tracking (its own Meta / Google / TikTok IDs). */
   tracking: protectedProcedure.input(z.object({ id: pageId })).query(({ ctx, input }) => getPageTracking(merchantObjectId(ctx), input.id)),
 
   // Turning tracking OFF must work for lapsed merchants too, so this is not billable.
   setTracking: protectedProcedure
-    .input(z.object({ id: pageId, metaPixelId: z.string().max(40).nullable(), enabled: z.boolean() }))
+    .input(
+      z.object({
+        id: pageId,
+        metaPixelId: z.string().max(40).nullable(),
+        enabled: z.boolean(),
+        google: z
+          .object({
+            ga4MeasurementId: z.string().max(40).nullable(),
+            googleAdsId: z.string().max(40).nullable(),
+            googleAdsPurchaseLabel: z.string().max(60).nullable(),
+            enabled: z.boolean(),
+          })
+          .optional(),
+        tiktok: z.object({ pixelId: z.string().max(40).nullable(), enabled: z.boolean() }).optional(),
+      }),
+    )
     .mutation(({ ctx, input }) =>
-      setPageTracking(actorOf(ctx), { pageId: input.id, metaPixelId: input.metaPixelId, enabled: input.enabled }),
+      setPageTracking(actorOf(ctx), {
+        pageId: input.id,
+        metaPixelId: input.metaPixelId,
+        enabled: input.enabled,
+        google: input.google,
+        tiktok: input.tiktok,
+      }),
     ),
 });
 

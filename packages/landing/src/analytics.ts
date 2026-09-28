@@ -37,16 +37,81 @@ export function normalizeMetaPixelId(value: unknown): string | null {
   return isMetaPixelId(digits) ? digits : null;
 }
 
-/** Tracking configuration as served with a published page (public data only). */
+/**
+ * Google tag IDs. GA4 measurement IDs look like "G-ABC123XYZ9"; Google Ads
+ * tags like "AW-123456789", and an Ads conversion label is the short token
+ * after the slash in "AW-123456789/AbC-D_efG-h12". All public by design
+ * (they sit in the page's HTML); never an API credential.
+ */
+export const GA4_MEASUREMENT_ID_RE = /^G-[A-Z0-9]{6,14}$/;
+export const GOOGLE_ADS_ID_RE = /^AW-[0-9]{6,14}$/;
+export const GOOGLE_ADS_LABEL_RE = /^[A-Za-z0-9_-]{6,40}$/;
+/** TikTok Pixel IDs ("pixel code") are 20-ish upper-case letters/digits. */
+export const TIKTOK_PIXEL_ID_RE = /^[A-Z0-9]{16,24}$/;
+
+const upper = (v: unknown) => (typeof v === "string" ? v.replace(/\s/g, "").toUpperCase() : "");
+export const normalizeGa4Id = (v: unknown): string | null => (GA4_MEASUREMENT_ID_RE.test(upper(v)) ? upper(v) : null);
+export const normalizeGoogleAdsId = (v: unknown): string | null => (GOOGLE_ADS_ID_RE.test(upper(v)) ? upper(v) : null);
+export const normalizeGoogleAdsLabel = (v: unknown): string | null => {
+  const s = typeof v === "string" ? v.trim() : "";
+  return GOOGLE_ADS_LABEL_RE.test(s) ? s : null;
+};
+export const normalizeTiktokPixelId = (v: unknown): string | null => (TIKTOK_PIXEL_ID_RE.test(upper(v)) ? upper(v) : null);
+
+/**
+ * Tracking configuration as served with a published page (public data
+ * only). A provider appears only when it is switched on with a valid ID;
+ * a page with nothing on gets `null` and loads no tracking code at all.
+ */
 export interface LandingAnalyticsConfig {
-  metaPixelId: string;
+  metaPixelId?: string;
+  ga4MeasurementId?: string;
+  googleAds?: { id: string; purchaseLabel?: string };
+  tiktokPixelId?: string;
 }
 
-export function analyticsConfigOf(
-  stored: { metaPixelId?: unknown; enabled?: unknown } | null | undefined,
-): LandingAnalyticsConfig | null {
-  if (!stored || stored.enabled !== true || !isMetaPixelId(stored.metaPixelId)) return null;
-  return { metaPixelId: stored.metaPixelId };
+export interface StoredTracking {
+  metaPixelId?: unknown;
+  enabled?: unknown;
+  ga4MeasurementId?: unknown;
+  googleAdsId?: unknown;
+  googleAdsPurchaseLabel?: unknown;
+  googleEnabled?: unknown;
+  tiktokPixelId?: unknown;
+  tiktokEnabled?: unknown;
+}
+
+export function analyticsConfigOf(stored: StoredTracking | null | undefined): LandingAnalyticsConfig | null {
+  if (!stored) return null;
+  const out: LandingAnalyticsConfig = {};
+  if (stored.enabled === true && isMetaPixelId(stored.metaPixelId)) out.metaPixelId = stored.metaPixelId;
+  if (stored.googleEnabled === true) {
+    if (typeof stored.ga4MeasurementId === "string" && GA4_MEASUREMENT_ID_RE.test(stored.ga4MeasurementId)) {
+      out.ga4MeasurementId = stored.ga4MeasurementId;
+    }
+    if (typeof stored.googleAdsId === "string" && GOOGLE_ADS_ID_RE.test(stored.googleAdsId)) {
+      const label =
+        typeof stored.googleAdsPurchaseLabel === "string" && GOOGLE_ADS_LABEL_RE.test(stored.googleAdsPurchaseLabel)
+          ? stored.googleAdsPurchaseLabel
+          : undefined;
+      out.googleAds = label ? { id: stored.googleAdsId, purchaseLabel: label } : { id: stored.googleAdsId };
+    }
+  }
+  if (stored.tiktokEnabled === true && typeof stored.tiktokPixelId === "string" && TIKTOK_PIXEL_ID_RE.test(stored.tiktokPixelId)) {
+    out.tiktokPixelId = stored.tiktokPixelId;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** True when the config would load at least one provider (re-checked by the renderer). */
+export function hasAnyTracking(config: LandingAnalyticsConfig | null | undefined): config is LandingAnalyticsConfig {
+  return (
+    !!config &&
+    ((!!config.metaPixelId && isMetaPixelId(config.metaPixelId)) ||
+      (!!config.ga4MeasurementId && GA4_MEASUREMENT_ID_RE.test(config.ga4MeasurementId)) ||
+      (!!config.googleAds && GOOGLE_ADS_ID_RE.test(config.googleAds.id)) ||
+      (!!config.tiktokPixelId && TIKTOK_PIXEL_ID_RE.test(config.tiktokPixelId)))
+  );
 }
 
 export type ContactMethod = "whatsapp" | "phone" | "email" | "messenger";

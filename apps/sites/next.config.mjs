@@ -40,22 +40,35 @@ const editorOrigins = (process.env.LANDING_EDITOR_ORIGINS ?? (isProd ? "" : "htt
   .map((o) => origin(o.trim()))
   .filter(Boolean);
 
-// Meta Pixel: fbevents.js + its config/plugins, and the /tr event endpoint
-// (image beacon, sendBeacon or fetch). LANDING_ANALYTICS=off removes them.
+// Browser analytics origins, allowed only when LANDING_ANALYTICS is on (the
+// default); LANDING_ANALYTICS=off removes all of them. A page loads a
+// provider only if its own settings enable it — these just permit it.
+//   Meta Pixel: fbevents.js + config, /tr event endpoint.
+//   Google tag (GA4 + Google Ads): gtag.js and its collect/conversion
+//   endpoints, per Google's CSP guide (incl. google.com.bd for Bangladesh).
+//   TikTok Pixel: events.js and its event endpoints.
 const analyticsOn = (process.env.LANDING_ANALYTICS ?? "on").trim().toLowerCase() !== "off";
 const META_SCRIPT = "https://connect.facebook.net";
 const META_EVENTS = "https://www.facebook.com";
+const GOOGLE_SCRIPT = "https://*.googletagmanager.com";
+const GOOGLE_EVENTS =
+  "https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com https://*.g.doubleclick.net https://*.google.com https://*.google.com.bd";
+const GOOGLE_FRAMES = "https://td.doubleclick.net https://www.googletagmanager.com";
+const TIKTOK_SCRIPT = "https://analytics.tiktok.com";
+const TIKTOK_EVENTS = "https://analytics.tiktok.com https://*.tiktok.com";
 
 function csp(frameAncestors, { analytics = false } = {}) {
-  const meta = analytics && analyticsOn;
+  const on = analytics && analyticsOn;
+  const scripts = on ? ` ${META_SCRIPT} ${GOOGLE_SCRIPT} ${TIKTOK_SCRIPT}` : "";
+  const events = on ? ` ${META_EVENTS} ${GOOGLE_EVENTS} ${TIKTOK_EVENTS}` : "";
   return [
     "default-src 'self'",
-    `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}${meta ? ` ${META_SCRIPT}` : ""}`,
+    `script-src 'self' 'unsafe-inline'${isProd ? "" : " 'unsafe-eval'"}${scripts}`,
     "style-src 'self' 'unsafe-inline'",
-    `img-src 'self' data:${assetOrigin ? ` ${assetOrigin}` : ""}${meta ? ` ${META_EVENTS}` : ""}`,
+    `img-src 'self' data:${assetOrigin ? ` ${assetOrigin}` : ""}${events}`,
     "font-src 'self'",
-    `connect-src 'self'${isProd ? "" : " ws: wss:"}${meta ? ` ${META_EVENTS} ${META_SCRIPT}` : ""}`,
-    "frame-src 'none'",
+    `connect-src 'self'${isProd ? "" : " ws: wss:"}${on ? ` ${META_EVENTS} ${META_SCRIPT} ${GOOGLE_EVENTS} ${TIKTOK_EVENTS}` : ""}`,
+    `frame-src ${on ? GOOGLE_FRAMES : "'none'"}`,
     `frame-ancestors ${frameAncestors}`,
     "form-action 'self'",
     "base-uri 'none'",
