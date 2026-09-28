@@ -84,19 +84,15 @@ const STEADFAST = table({
   ],
   // partial_delivered → delivered is the adapter's established behaviour.
   delivered: ["delivered", "partial_delivered"],
-  failed: ["cancelled_approval_pending"],
-  // UNVERIFIED MAPPING — "cancelled" → rto (releases reserved stock).
-  // Steadfast's own plugin confirms "cancelled" is one of its 11 statuses and
-  // that no "returned" status exists, but its MEANING (physically back with
-  // the merchant, or cancelled while still with the courier) is only in the
-  // API doc behind the merchant login. Kept as the conservative final state
-  // for a cancelled consignment.
-  // TODO(verify): confirm in Steadfast's official API doc / with Steadfast
-  // support before relying on stock timing; if a cancelled parcel is still
-  // with the courier, stock is released before it is physically back.
-  // "returned"/"returned_to_merchant"/"return"/"rto" are harmless aliases —
-  // not Steadfast statuses.
-  rto: ["cancelled", "returned", "returned_to_merchant", "return", "rto"],
+  // "cancelled" (verified, Steadfast Terms & Conditions): the merchant
+  // approved the cancellation and the parcel WILL be sent back — it is not
+  // back yet. So it is a return in progress: the order stays in transit and
+  // its stock stays reserved. Steadfast has no "returned" status; the
+  // merchant marks the order Returned (rto) once the parcel is physically
+  // received, and that releases the stock through the inventory ledger.
+  failed: ["cancelled_approval_pending", "cancelled"],
+  // Harmless aliases — not Steadfast statuses.
+  rto: ["returned", "returned_to_merchant", "return", "rto"],
   unknown: ["unknown", "unknown_approval_pending"],
 });
 

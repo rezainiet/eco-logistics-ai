@@ -55,7 +55,7 @@ const STEADFAST: Array<[string, string]> = [
   ["delivered", "delivered"],
   ["partial_delivered", "delivered"],
   ["cancelled_approval_pending", "failed"], // not final — stock stays reserved
-  ["cancelled", "rto"], // Steadfast's final state; parcel goes back to the merchant
+  ["cancelled", "failed"], // cancellation approved, parcel on its way back — stock stays reserved
   ["Returned", "rto"],
   ["unknown", "unknown"],
   ["unknown_approval_pending", "unknown"],

@@ -3,13 +3,13 @@ import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Types } from "mongoose";
 import { InventoryMovement, MerchantStats, Order, Product } from "@ecom/db";
-import { inTransaction, reserveOrderStock } from "../src/lib/inventory.js";
+import { inTransaction, reconcileOrderInventory, reserveOrderStock } from "../src/lib/inventory.js";
 import { parsePathaoWebhook } from "../src/lib/couriers/pathao.js";
 import { parseRedxWebhook } from "../src/lib/couriers/redx.js";
 import { parseSteadfastWebhook } from "../src/lib/couriers/steadfast.js";
 import { applyTrackingEvents, courierOrderTransition } from "../src/server/tracking.js";
 import { courierWebhookRouter } from "../src/server/webhooks/courier.js";
-import { createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
+import { authUserFor, callerFor, createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
 
 /**
  * Courier status → order status → inventory, end to end on a real Mongo
@@ -255,6 +255,127 @@ describe("courier events → order status → stock (Mongo)", () => {
     expect(r.statusTransition).toEqual({ from: "cancelled", to: "delivered" });
     const s = await state(orderId, productId);
     expect(s).toMatchObject({ status: "delivered", inventoryState: "fulfilled", onHand: 9, reserved: 0 });
+  });
+});
+
+describe("Steadfast 'cancelled' → return journey → merchant marks Returned", () => {
+  // Steadfast T&C: "cancelled" = cancellation approved, the parcel WILL be
+  // sent back — not that it is back. Stock stays reserved until the
+  // merchant physically receives it and marks the order Returned.
+  const steadfastCancelled = (trackingNumber: string) =>
+    parseSteadfastWebhook({ tracking_code: trackingNumber, status: "cancelled" })!;
+  const merchantCaller = (m: Awaited<ReturnType<typeof createMerchant>>) => callerFor(authUserFor(m));
+
+  it("cancelled does not release stock: order stays in transit, reserved, no returnedAt", async () => {
+    const { orderId, productId, trackingNumber } = await setup("in_transit");
+    const parsed = steadfastCancelled(trackingNumber);
+    expect(parsed.normalizedStatus).toBe("failed");
+    const r = await apply(orderId, parsed.normalizedStatus, parsed.providerStatus);
+    expect(r.statusTransition).toBeUndefined();
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "in_transit", inventoryState: "reserved", reserved: 1, onHand: 10, returnedAt: null, events: 1 });
+    expect(s.moves).toEqual(["ORDER_RESERVED"]);
+  });
+
+  it("duplicate cancelled (same event and a re-sent one) moves no stock", async () => {
+    const { orderId, productId, trackingNumber } = await setup("shipped");
+    const parsed = steadfastCancelled(trackingNumber);
+    const event = { at: new Date("2026-09-27T10:00:00Z"), providerStatus: parsed.providerStatus, description: "cancelled" };
+    await applyTrackingEvents(await fresh(orderId), parsed.normalizedStatus, [event], { source: "webhook" });
+    await applyTrackingEvents(await fresh(orderId), parsed.normalizedStatus, [event], { source: "poll" });
+    await apply(orderId, parsed.normalizedStatus, parsed.providerStatus);
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "shipped", inventoryState: "reserved", reserved: 1, onHand: 10, events: 2 });
+    expect(s.moves).toEqual(["ORDER_RESERVED"]);
+  });
+
+  it("merchant marks Returned after receiving the parcel: rto, stock released exactly once", async () => {
+    const { merchant, merchantId, orderId, productId, trackingNumber } = await setup("in_transit");
+    await MerchantStats.updateOne({ merchantId }, { $set: { in_transit: 1, rto: 0 } }, { upsert: true });
+    const parsed = steadfastCancelled(trackingNumber);
+    await apply(orderId, parsed.normalizedStatus, parsed.providerStatus);
+    expect(await state(orderId, productId)).toMatchObject({ status: "in_transit", reserved: 1 });
+
+    const caller = merchantCaller(merchant);
+    const res = await caller.orders.updateOrder({ id: String(orderId), status: "rto" });
+    expect(res.status).toBe("rto");
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "rto", inventoryState: "released", reserved: 0, onHand: 10 });
+    expect(s.moves).toEqual(["ORDER_RESERVED", "RETURNED"]);
+
+    // Duplicate Returned (second click / retry) and extra reconciles: no more stock movement.
+    await caller.orders.updateOrder({ id: String(orderId), status: "rto" });
+    await reconcileOrderInventory(orderId);
+    // A late courier "cancelled" after the return is recorded changes nothing.
+    await apply(orderId, parsed.normalizedStatus, parsed.providerStatus);
+    const again = await state(orderId, productId);
+    expect(again).toMatchObject({ status: "rto", inventoryState: "released", reserved: 0, onHand: 10 });
+    expect(again.moves).toEqual(["ORDER_RESERVED", "RETURNED"]);
+    const stats = await MerchantStats.findOne({ merchantId }).lean();
+    expect((stats as Record<string, unknown>).rto).toBe(1);
+    expect((stats as Record<string, unknown>).in_transit).toBe(0);
+  });
+
+  it("concurrent webhook + poll 'cancelled', then Returned racing a courier return: stock released once", async () => {
+    const { merchant, orderId, productId, trackingNumber } = await setup("in_transit");
+    const parsed = steadfastCancelled(trackingNumber);
+    const snap = await fresh(orderId);
+    const event = { at: new Date("2026-09-27T10:00:00Z"), providerStatus: parsed.providerStatus, description: "cancelled" };
+    await Promise.all([
+      applyTrackingEvents(snap, parsed.normalizedStatus, [event], { source: "webhook" }),
+      applyTrackingEvents(snap, parsed.normalizedStatus, [event], { source: "poll" }),
+    ]);
+    expect(await state(orderId, productId)).toMatchObject({ status: "in_transit", reserved: 1, onHand: 10, moves: ["ORDER_RESERVED"] });
+
+    const caller = merchantCaller(merchant);
+    const returned = await fresh(orderId);
+    await Promise.all([
+      caller.orders.updateOrder({ id: String(orderId), status: "rto" }),
+      applyTrackingEvents(returned, "rto", [{ at: new Date(), providerStatus: "returned" }], { source: "poll" }),
+      reconcileOrderInventory(orderId),
+    ]);
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "rto", inventoryState: "released", reserved: 0, onHand: 10 });
+    expect(s.moves).toEqual(["ORDER_RESERVED", "RETURNED"]);
+  });
+
+  it("tenant isolation: merchant B cannot mark merchant A's order Returned", async () => {
+    const a = await setup("in_transit");
+    const b = await createMerchant();
+    await apply(a.orderId, steadfastCancelled(a.trackingNumber).normalizedStatus, "cancelled");
+    await expect(merchantCaller(b).orders.updateOrder({ id: String(a.orderId), status: "rto" })).rejects.toThrow(/not found/i);
+    const s = await state(a.orderId, a.productId);
+    expect(s).toMatchObject({ status: "in_transit", inventoryState: "reserved", reserved: 1, onHand: 10 });
+    expect(s.moves).toEqual(["ORDER_RESERVED"]);
+  });
+
+  it("manual cancellation before shipping still releases stock once (ORDER_CANCELLED)", async () => {
+    const { merchant, orderId, productId } = await setup("packed");
+    const caller = merchantCaller(merchant);
+    await caller.orders.updateOrder({ id: String(orderId), status: "cancelled" });
+    await caller.orders.updateOrder({ id: String(orderId), status: "cancelled" });
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "cancelled", inventoryState: "released", reserved: 0, onHand: 10 });
+    expect(s.moves).toEqual(["ORDER_RESERVED", "ORDER_CANCELLED"]);
+  });
+
+  it("an in-transit order cannot be manually cancelled (it must be marked Returned)", async () => {
+    const { merchant, orderId, productId } = await setup("in_transit");
+    await expect(merchantCaller(merchant).orders.updateOrder({ id: String(orderId), status: "cancelled" })).rejects.toThrow(
+      /invalid status transition/,
+    );
+    expect(await state(orderId, productId)).toMatchObject({ status: "in_transit", reserved: 1, onHand: 10 });
+  });
+
+  it("Steadfast delivered while the return is in progress is fulfilled once", async () => {
+    const { orderId, productId, trackingNumber } = await setup("in_transit");
+    await apply(orderId, steadfastCancelled(trackingNumber).normalizedStatus, "cancelled");
+    const delivered = parseSteadfastWebhook({ tracking_code: trackingNumber, status: "delivered" })!;
+    await apply(orderId, delivered.normalizedStatus, delivered.providerStatus);
+    await apply(orderId, delivered.normalizedStatus, delivered.providerStatus);
+    const s = await state(orderId, productId);
+    expect(s).toMatchObject({ status: "delivered", inventoryState: "fulfilled", reserved: 0, onHand: 9 });
+    expect(s.moves).toEqual(["ORDER_RESERVED", "ORDER_FULFILLED"]);
   });
 });
 
