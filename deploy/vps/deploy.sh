@@ -22,12 +22,23 @@
 #
 # Restarts only the ConfirmX services that are enabled. Never touches Asterisk,
 # Nginx or the firewall.
+#
+# After a restart it polls each service's health endpoint (wait-ready.sh) until
+# it answers 200 or CONFIRMX_READY_TIMEOUT seconds (default 120) pass, then runs
+# smoke-test.sh. If a service never becomes ready, or the smoke test fails, it
+# prints each service's state and recent journal and exits non-zero. It does not
+# roll back by itself; run `deploy.sh --rollback` after reading the diagnostics.
 
 set -euo pipefail
 ROOT=/opt/confirmx
 REPO="${CONFIRMX_REPO:-https://github.com/rezainiet/eco-logistics-ai.git}"
 SERVICES=(confirmx-api confirmx-web confirmx-sites)
 KEEP=5
+READY_TIMEOUT="${CONFIRMX_READY_TIMEOUT:-120}"
+# The readiness helper next to THIS script (physical path, resolved now): the
+# `app` symlink moves during a deploy/rollback, and an older release may not
+# ship the helper at all.
+WAIT_READY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/wait-ready.sh"
 
 die() { echo "deploy: $*" >&2; exit 1; }
 log() { echo "deploy: $*"; }
@@ -45,6 +56,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+[[ "$READY_TIMEOUT" =~ ^[0-9]+$ ]] || die "CONFIRMX_READY_TIMEOUT must be whole seconds"
+[ -f "$WAIT_READY" ] || die "readiness helper missing: $WAIT_READY"
 [ "$(id -u)" -eq 0 ] || die "run as root (builds run as the confirmx user; confirmx has no sudo)"
 id confirmx >/dev/null 2>&1 || die "user confirmx missing"
 
@@ -62,14 +75,37 @@ enabled_services() {
   for s in "${SERVICES[@]}"; do systemctl is-enabled --quiet "$s" 2>/dev/null && out+=("$s"); done
   echo "${out[@]:-}"
 }
+health_url() { # <service> → the endpoint that answers 200 once it can serve traffic
+  case "$1" in
+    confirmx-api) echo "http://127.0.0.1:4000/ready" ;;   # mongo + redis checked
+    confirmx-web) echo "http://127.0.0.1:3001/api/health" ;;
+    confirmx-sites) echo "http://127.0.0.1:3002/healthz" ;;
+  esac
+}
+diagnose() { # <services...>
+  local s
+  for s in "$@"; do
+    echo "---- $s: $(systemctl is-active "$s" 2>/dev/null) (restarts: $(systemctl show -p NRestarts --value "$s" 2>/dev/null))"
+    journalctl -u "$s" -n 30 --no-pager -o cat 2>/dev/null | cut -c1-300
+  done
+}
 restart() {
   local svc; svc="$(enabled_services)"
   [ -n "$svc" ] || { log "no ConfirmX service enabled — nothing to restart"; return 0; }
   log "restarting: $svc"
   # shellcheck disable=SC2086
   systemctl restart $svc
-  sleep 6
-  bash "$ROOT/app/deploy/vps/smoke-test.sh" || log "WARNING: smoke test reported failures (see above)"
+  # Poll until every restarted service answers, instead of assuming a fixed
+  # boot time (the API needs longer than a few seconds: DB, Redis, queues).
+  local s targets=()
+  for s in $svc; do targets+=("${s#confirmx-}=$(health_url "$s")"); done
+  if ! bash "$WAIT_READY" --timeout "$READY_TIMEOUT" "${targets[@]}"; then
+    # shellcheck disable=SC2086
+    diagnose $svc
+    die "services not ready after ${READY_TIMEOUT}s on $(readlink -f "$ROOT/app") — see above; roll back with: bash $0 --rollback"
+  fi
+  bash "$ROOT/app/deploy/vps/smoke-test.sh" ||
+    die "smoke test failed although services are up — see above; roll back with: bash $0 --rollback"
 }
 
 current="$(readlink -f "$ROOT/app" 2>/dev/null || true)"
@@ -101,6 +137,7 @@ log "ref $REF -> $sha"
 log "current release: ${current:-none}"
 log "new release:     $dest"
 log "services:        $(enabled_services)"
+log "readiness:       wait up to ${READY_TIMEOUT}s ($WAIT_READY)"
 if [ "$DRY" -eq 1 ]; then log "dry run — nothing changed"; exit 0; fi
 
 tmp="$ROOT/releases/.building-$stamp"
