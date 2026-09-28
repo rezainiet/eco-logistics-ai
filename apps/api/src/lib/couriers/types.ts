@@ -126,5 +126,15 @@ export interface CourierAdapter {
    * for couriers whose status endpoint is keyed by it (Steadfast `status_by_cid`).
    */
   getTracking(trackingNumber: string, ref?: { providerOrderId?: string }): Promise<TrackingInfo>;
-  priceQuote(input: { district: string; weight: number; cod?: number }): Promise<PriceQuote>;
+  /**
+   * `weight` in kg. `deliveryAreaId` / `pickupAreaId` are the courier's own
+   * numeric area ids — required by RedX's charge calculator, ignored by the others.
+   */
+  priceQuote(input: {
+    district: string;
+    weight: number;
+    cod?: number;
+    deliveryAreaId?: number;
+    pickupAreaId?: number;
+  }): Promise<PriceQuote>;
 }

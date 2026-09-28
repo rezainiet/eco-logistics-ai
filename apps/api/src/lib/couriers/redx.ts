@@ -30,9 +30,9 @@ import { secretsMatch } from "./webhook-auth.js";
  *   POST  /v1.0.0-beta/parcel                       → create parcel
  *   GET   /v1.0.0-beta/parcel/info/{tracking_id}    → current status (`parcel.status`)
  *   GET   /v1.0.0-beta/parcel/track/{tracking_id}   → timeline (`message_en`, `time`; no status)
- *   POST  /v1.0.0-beta/delivery-charge/calculate    → price quote. UNVERIFIED: the
- *         official docs list `/charge/charge_calculator` with a different
- *         request shape; left as-is pending a sandbox check.
+ *   GET   /v1.0.0-beta/charge/charge_calculator     → price quote (query:
+ *         delivery_area_id, pickup_area_id, cash_collection_amount, weight in
+ *         grams; response { deliveryCharge, codCharge })
  *
  * Auth: `API-ACCESS-TOKEN: Bearer <token>` header. Per-merchant baseUrl
  * overrides REDX_BASE_URL (host only; a trailing /v1.0.0-beta is tolerated).
@@ -66,8 +66,10 @@ interface RedxTrackResp {
 interface RedxInfoResp {
   parcel?: { tracking_id?: string; status?: string };
 }
+/** `/charge/charge_calculator` response (official). */
 interface RedxPriceResp {
-  data: { cash_on_delivery_fee: number; delivery_fee: number; total_fee: number };
+  deliveryCharge?: number;
+  codCharge?: number;
 }
 
 export interface RedxTransport {
@@ -149,18 +151,12 @@ export class MockRedxTransport implements RedxTransport {
         } as unknown as T,
       };
     }
-    if (path.endsWith("/delivery-charge/calculate") && method === "POST") {
-      const body = opts.body as { weight?: number; cash_collection_amount?: number } | undefined;
-      const weight = Math.max(0.5, Number(body?.weight) || 1);
-      const delivery = 60 + Math.round(weight * 15);
-      const cod = body?.cash_collection_amount ? Math.round(body.cash_collection_amount * 0.01) : 0;
-      return {
-        status: 200,
-        ok: true,
-        data: {
-          data: { cash_on_delivery_fee: cod, delivery_fee: delivery, total_fee: delivery + cod },
-        } as unknown as T,
-      };
+    if (path.includes("/charge/charge_calculator") && method === "GET") {
+      const q = new URLSearchParams(path.split("?")[1] ?? "");
+      const grams = Math.max(500, Number(q.get("weight")) || 1000);
+      const delivery = 60 + Math.round((grams / 1000) * 15);
+      const cod = Math.round(Number(q.get("cash_collection_amount") || 0) * 0.01);
+      return { status: 200, ok: true, data: { deliveryCharge: delivery, codCharge: cod } as unknown as T };
     }
     return {
       status: 404,
@@ -327,18 +323,33 @@ export class RedxAdapter implements CourierAdapter {
     });
   }
 
-  async priceQuote(input: { district: string; weight: number; cod?: number }): Promise<PriceQuote> {
+  async priceQuote(input: {
+    district: string;
+    weight: number;
+    cod?: number;
+    deliveryAreaId?: number;
+    pickupAreaId?: number;
+  }): Promise<PriceQuote> {
+    // The official calculator needs RedX's numeric area ids; a district name
+    // cannot be turned into one without guessing, so refuse instead.
+    if (!Number.isInteger(input.deliveryAreaId) || !Number.isInteger(input.pickupAreaId)) {
+      throw new CourierError("invalid_input", "redx priceQuote needs deliveryAreaId and pickupAreaId (RedX area ids)", {
+        retryable: false,
+        provider: PROVIDER,
+      });
+    }
+    const query = new URLSearchParams({
+      delivery_area_id: String(input.deliveryAreaId),
+      pickup_area_id: String(input.pickupAreaId),
+      cash_collection_amount: String(input.cod ?? 0),
+      weight: String(Math.round(Math.max(0.5, input.weight || 0.5) * 1000)), // kg → grams
+    });
     return withCourierBreaker(this.breakerKey(), async (signal) => {
       const res = await withRetry(
         () =>
-          this.transport.request<RedxPriceResp>(`${API_PREFIX}/delivery-charge/calculate`, {
-            method: "POST",
+          this.transport.request<RedxPriceResp>(`${API_PREFIX}/charge/charge_calculator?${query.toString()}`, {
+            method: "GET",
             signal,
-            body: {
-              delivery_area: input.district,
-              weight: Math.max(0.5, input.weight || 0.5),
-              cash_collection_amount: input.cod ?? 0,
-            },
           }),
         { attempts: 2, signal },
       );
@@ -351,13 +362,19 @@ export class RedxAdapter implements CourierAdapter {
           raw: res.data,
         });
       }
+      const delivery = Number(res.data?.deliveryCharge);
+      const cod = Number(res.data?.codCharge ?? 0);
+      if (!Number.isFinite(delivery) || !Number.isFinite(cod)) {
+        throw new CourierError("provider_error", "redx priceQuote response missing deliveryCharge", {
+          provider: PROVIDER,
+          raw: res.data,
+        });
+      }
       return {
-        amount: res.data.data.total_fee,
+        amount: delivery + cod,
         currency: "BDT",
-        breakdown: {
-          delivery: res.data.data.delivery_fee,
-          cod: res.data.data.cash_on_delivery_fee,
-        },
+        breakdown: { delivery, cod },
+        raw: res.data,
       };
     });
   }

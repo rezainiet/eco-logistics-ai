@@ -61,9 +61,49 @@ describe("RedxAdapter (mock transport)", () => {
       district: "Dhaka",
       weight: 1,
       cod: 1000,
+      deliveryAreaId: 12,
+      pickupAreaId: 1,
     });
     expect(quote.currency).toBe("BDT");
     expect(quote.amount).toBeGreaterThan(0);
+  });
+
+  // Official contract (redx.com.bd/developer-api, "Calculate Parcel Charge"):
+  // GET /charge/charge_calculator?delivery_area_id&pickup_area_id&cash_collection_amount&weight(grams)
+  // → { deliveryCharge, codCharge }
+  it("priceQuote calls the official charge calculator and maps its response", async () => {
+    const calls: Array<{ path: string; method?: string; body?: unknown }> = [];
+    const t: RedxTransport = {
+      async request<T>(path: string, opts: { method?: string; body?: unknown }) {
+        calls.push({ path, method: opts.method, body: opts.body });
+        return { status: 200, ok: true, data: { deliveryCharge: 60, codCharge: 13 } as unknown as T };
+      },
+    };
+    const quote = await makeAdapter(t).priceQuote({ district: "Dhaka", weight: 1.5, cod: 1300, deliveryAreaId: 12, pickupAreaId: 1 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.method).toBe("GET");
+    expect(calls[0]!.body).toBeUndefined();
+    const [path, qs] = calls[0]!.path.split("?");
+    expect(path).toBe("/v1.0.0-beta/charge/charge_calculator");
+    expect(Object.fromEntries(new URLSearchParams(qs))).toEqual({
+      delivery_area_id: "12",
+      pickup_area_id: "1",
+      cash_collection_amount: "1300",
+      weight: "1500",
+    });
+    expect(quote).toMatchObject({ amount: 73, currency: "BDT", breakdown: { delivery: 60, cod: 13 } });
+  });
+
+  it("priceQuote refuses without RedX area ids instead of guessing them", async () => {
+    let called = false;
+    const t: RedxTransport = {
+      async request<T>() {
+        called = true;
+        return { status: 200, ok: true, data: {} as unknown as T };
+      },
+    };
+    await expect(makeAdapter(t).priceQuote({ district: "Dhaka", weight: 1 })).rejects.toMatchObject({ code: "invalid_input" });
+    expect(called).toBe(false);
   });
 
   it("retries transient failures", async () => {
