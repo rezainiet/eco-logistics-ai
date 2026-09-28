@@ -28,6 +28,27 @@ export async function connectDb(): Promise<typeof mongoose> {
   return mongoose;
 }
 
+type KeySpec = ReadonlyArray<readonly [string, 1 | -1]>;
+
+/** The legacy order-listing index, in its exact key order. */
+const LEGACY_ORDER_LISTING_KEYS: KeySpec = [
+  ["merchantId", 1],
+  ["createdAt", -1],
+  ["order.status", 1],
+];
+
+/**
+ * True when an index key document is exactly `spec`: same fields, same
+ * directions, same ORDER. Index key order is significant ({a:1,b:1} and
+ * {b:1,a:1} are different indexes), so comparing key names and values
+ * without order would match unrelated indexes.
+ */
+export function hasExactKeySpec(key: Record<string, unknown> | undefined, spec: KeySpec): boolean {
+  if (!key) return false;
+  const entries = Object.entries(key);
+  return entries.length === spec.length && entries.every(([k, v], i) => k === spec[i]![0] && v === spec[i]![1]);
+}
+
 /**
  * One-shot migration: drop the legacy TTL index `expiresAt_1` on
  * `webhookinboxes`. Older builds defined a Mongo TTL on `expiresAt` that
@@ -51,25 +72,17 @@ export async function connectDb(): Promise<typeof mongoose> {
  * run `db:sync-indexes` as part of the deploy. This migration only DROPS
  * the old index — it does not create the new one.
  */
-async function dropLegacyOrderListingIndex(): Promise<void> {
+export async function dropLegacyOrderListingIndex(): Promise<void> {
   const conn = mongoose.connection;
   if (!conn.db) return;
   const col = conn.db.collection("orders");
   try {
     const indexes = await col.indexes();
-    // Match by exact key shape, not name — Mongo auto-named the legacy index
-    // `merchantId_1_createdAt_-1_order.status_1` but we should not rely on
-    // that string in case anyone previously renamed it.
-    const legacy = indexes.find((i) => {
-      if (!i.key) return false;
-      const keys = Object.keys(i.key);
-      return (
-        keys.length === 3 &&
-        i.key.merchantId === 1 &&
-        i.key.createdAt === -1 &&
-        i.key["order.status"] === 1
-      );
-    });
+    // Match by the exact ORDERED key spec, not by name (Mongo auto-named the
+    // legacy index `merchantId_1_createdAt_-1_order.status_1`, but it may
+    // have been renamed). Key order matters: the current ESR index has the
+    // same three keys in a different order and must never match.
+    const legacy = indexes.find((i) => hasExactKeySpec(i.key, LEGACY_ORDER_LISTING_KEYS));
     if (legacy?.name) {
       await col.dropIndex(legacy.name);
       console.log(`[db] dropped legacy index ${legacy.name} on orders`);
@@ -81,14 +94,15 @@ async function dropLegacyOrderListingIndex(): Promise<void> {
   }
 }
 
-async function dropLegacyWebhookInboxTtl(): Promise<void> {
+export async function dropLegacyWebhookInboxTtl(): Promise<void> {
   const conn = mongoose.connection;
   if (!conn.db) return;
   const col = conn.db.collection("webhookinboxes");
   try {
     const indexes = await col.indexes();
+    // Only the TTL variant reaped rows; a plain expiresAt index is harmless.
     const legacy = indexes.find(
-      (i) => i.key && Object.keys(i.key).length === 1 && i.key.expiresAt === 1,
+      (i) => hasExactKeySpec(i.key, [["expiresAt", 1]]) && i.expireAfterSeconds !== undefined,
     );
     if (legacy?.name) {
       await col.dropIndex(legacy.name);
