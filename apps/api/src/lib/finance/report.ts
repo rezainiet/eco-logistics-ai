@@ -5,27 +5,41 @@ import type { Period } from "./period.js";
 /**
  * Merchant profit & loss.
  *
- * Revenue recognition (cash on delivery): an order is realized revenue ONLY
- * once its status is `delivered`, in the period of its delivery time
- * (`logistics.deliveredAt`; orders delivered before that field was stamped
- * fall back to their last update time and are counted in the notes).
- * Every other status — pending, confirmed, packed, shipped, in_transit,
- * cancelled, rto — is never revenue. Sales revenue is read from orders and
- * never stored as a finance entry, so it cannot be counted twice; a
- * delivered order is one document with one terminal status, so repeated or
- * concurrent "delivered" transitions cannot count it twice either.
+ * REVENUE (cash on delivery): an order is realized revenue ONLY while its
+ * status is `delivered`, in the period of its delivery time. Every other
+ * status — pending, confirmed, packed, shipped, in_transit, cancelled, rto —
+ * is never revenue. Sales revenue is read from orders and never stored as a
+ * finance entry, so it cannot be counted twice; an order has one status, so
+ * repeated or concurrent "delivered" transitions cannot count it twice.
+ *   - exact:          dated by logistics.deliveredAt (stamped by the courier
+ *                     path and by a manual "delivered").
+ *   - fallback-dated: historical delivered orders that predate deliveredAt
+ *                     stamping are dated by their last update time. They are
+ *                     reported separately; stored data is never rewritten.
  *
- * Costs:
- *   product cost  = Σ items[].unitCost × quantity of delivered orders
- *                   (+ manual "product_cost" entries). Items without a
- *                   recorded unitCost are reported as missing, never as 0.
- *   courier cost  = logistics.courierFee of delivered orders and of returned
- *                   (rto) orders — the courier is paid either way
- *                   (+ manual "courier" entries). Delivered orders without a
- *                   recorded fee are reported as missing.
- *   everything else comes from active finance entries, by category.
+ * PRODUCT COST = Σ items[].unitCost × quantity of delivered orders
+ *   (+ manual "product_cost" entries). An item without a recorded unitCost
+ *   makes its order "product cost not recorded" — never counted as 0.
  *
- * Net profit = realized revenue + other income − all of the above.
+ * COURIER COST: logistics.courierFee is written once, by the booking that
+ *   gives the order its tracking number (bookSingleShipment's atomic,
+ *   tracking-number-guarded update); nothing else writes it. Each order
+ *   contributes that one fee exactly once, according to its CURRENT final
+ *   state:
+ *     - delivered → dated by deliveredAt (same exact/fallback rule as revenue)
+ *     - rto       → dated by returnedAt (fallback: last update time) — the
+ *                   courier charged for the parcel even though it came back
+ *   An order is in exactly one of these states, so a parcel that moved
+ *   between them (a late courier "delivered" after a return) is counted once,
+ *   in its final state. Orders in any other state (never shipped, cancelled
+ *   before shipment, still in transit) contribute no courier cost. A
+ *   delivered or returned order without a recorded fee is "courier cost not
+ *   recorded" — never 0 (RedX and Steadfast bookings return no fee today).
+ *   Manual "courier" entries are added as they are: they cannot be matched
+ *   to orders automatically, so the report flags a period that has both.
+ *
+ * Everything else comes from active finance entries, by category.
+ * Net profit = realized revenue + other income − all costs above.
  * BDT only: orders in another currency are excluded and counted.
  */
 
@@ -36,39 +50,50 @@ type Key = string; // "all" for a period summary, "YYYY-MM" for a monthly row
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-interface OrderAgg {
-  revenue: number;
-  delivered: number;
+interface DeliveredAgg {
+  exactRevenue: number;
+  exactOrders: number;
+  fallbackRevenue: number;
+  fallbackOrders: number;
   productCost: number;
   missingCost: number;
   fee: number;
   missingFee: number;
-  estimatedDate: number;
   nonBdt: number;
-  rtoFee: number;
 }
-
-const emptyOrderAgg = (): OrderAgg => ({
-  revenue: 0, delivered: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, estimatedDate: 0, nonBdt: 0, rtoFee: 0,
+const emptyDelivered = (): DeliveredAgg => ({
+  exactRevenue: 0, exactOrders: 0, fallbackRevenue: 0, fallbackOrders: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, nonBdt: 0,
 });
+
+interface ReturnedAgg {
+  orders: number;
+  fee: number;
+  missingFee: number;
+  fallbackOrders: number;
+}
+const emptyReturned = (): ReturnedAgg => ({ orders: 0, fee: 0, missingFee: 0, fallbackOrders: 0 });
 
 /** Group key expression: one bucket, or the Dhaka month of `dateExpr`. */
 const keyOf = (monthly: boolean, dateExpr: string) =>
   monthly ? { $dateToString: { format: "%Y-%m", date: dateExpr, timezone: DHAKA_TZ } } : "all";
 
 const isBdt = { $in: [{ $toUpper: { $ifNull: ["$order.currency", "BDT"] } }, ["BDT"]] };
+const hasFee = { $isNumber: "$logistics.courierFee" };
+const feeOrZero = { $cond: [hasFee, "$logistics.courierFee", 0] };
+const count = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
 
 async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: boolean) {
-  const rows = await Order.aggregate<{ _id: { k: Key; bdt: boolean } } & Omit<OrderAgg, "nonBdt" | "rtoFee">>([
+  const rows = await Order.aggregate<{ _id: { k: Key; bdt: boolean } } & Omit<DeliveredAgg, "nonBdt"> & { orders: number }>([
     { $match: { merchantId, "order.status": "delivered" } },
-    { $addFields: { _at: { $ifNull: ["$logistics.deliveredAt", "$updatedAt"] } } },
+    { $addFields: { _exact: { $ne: [{ $ifNull: ["$logistics.deliveredAt", null] }, null] } } },
+    { $addFields: { _at: { $cond: ["$_exact", "$logistics.deliveredAt", "$updatedAt"] } } },
     { $match: { _at: { $gte: p.start, $lt: p.end } } },
     {
       $project: {
         k: keyOf(monthly, "$_at"),
         bdt: isBdt,
+        exact: "$_exact",
         total: { $ifNull: ["$order.total", 0] },
-        estimated: { $eq: [{ $ifNull: ["$logistics.deliveredAt", null] }, null] },
         cost: {
           $sum: {
             $map: {
@@ -79,54 +104,64 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
           },
         },
         costMissing: { $anyElementTrue: [{ $map: { input: "$items", as: "i", in: { $not: [{ $isNumber: "$$i.unitCost" }] } } }] },
-        fee: { $cond: [{ $isNumber: "$logistics.courierFee" }, "$logistics.courierFee", 0] },
-        feeMissing: { $not: [{ $isNumber: "$logistics.courierFee" }] },
+        fee: feeOrZero,
+        feeMissing: { $not: [hasFee] },
       },
     },
     {
       $group: {
         _id: { k: "$k", bdt: "$bdt" },
-        revenue: { $sum: "$total" },
-        delivered: { $sum: 1 },
+        orders: { $sum: 1 },
+        exactRevenue: { $sum: { $cond: ["$exact", "$total", 0] } },
+        exactOrders: count("$exact"),
+        fallbackRevenue: { $sum: { $cond: ["$exact", 0, "$total"] } },
+        fallbackOrders: count({ $not: ["$exact"] }),
         productCost: { $sum: "$cost" },
-        missingCost: { $sum: { $cond: ["$costMissing", 1, 0] } },
+        missingCost: count("$costMissing"),
         fee: { $sum: "$fee" },
-        missingFee: { $sum: { $cond: ["$feeMissing", 1, 0] } },
-        estimatedDate: { $sum: { $cond: ["$estimated", 1, 0] } },
+        missingFee: count("$feeMissing"),
       },
     },
   ]);
-  const out = new Map<Key, OrderAgg>();
+  const out = new Map<Key, DeliveredAgg>();
   for (const r of rows) {
-    const agg = out.get(r._id.k) ?? emptyOrderAgg();
+    const a = out.get(r._id.k) ?? emptyDelivered();
     if (r._id.bdt) {
-      Object.assign(agg, {
-        revenue: agg.revenue + r.revenue,
-        delivered: agg.delivered + r.delivered,
-        productCost: agg.productCost + r.productCost,
-        missingCost: agg.missingCost + r.missingCost,
-        fee: agg.fee + r.fee,
-        missingFee: agg.missingFee + r.missingFee,
-        estimatedDate: agg.estimatedDate + r.estimatedDate,
-      });
+      a.exactRevenue += r.exactRevenue;
+      a.exactOrders += r.exactOrders;
+      a.fallbackRevenue += r.fallbackRevenue;
+      a.fallbackOrders += r.fallbackOrders;
+      a.productCost += r.productCost;
+      a.missingCost += r.missingCost;
+      a.fee += r.fee;
+      a.missingFee += r.missingFee;
     } else {
-      agg.nonBdt += r.delivered;
+      a.nonBdt += r.orders;
     }
-    out.set(r._id.k, agg);
+    out.set(r._id.k, a);
   }
   return out;
 }
 
-/** Courier fees paid on parcels that came back (rto), by return time. */
-async function returnedOrderFees(merchantId: Types.ObjectId, p: Period, monthly: boolean) {
-  const rows = await Order.aggregate<{ _id: Key; fee: number }>([
-    { $match: { merchantId, "order.status": "rto", "logistics.courierFee": { $type: "number" } } },
-    { $addFields: { _at: { $ifNull: ["$logistics.returnedAt", "$updatedAt"] } } },
+/** Returned (rto) parcels: their courier fee, dated by returnedAt. */
+async function returnedOrders(merchantId: Types.ObjectId, p: Period, monthly: boolean) {
+  const rows = await Order.aggregate<{ _id: Key } & ReturnedAgg>([
+    { $match: { merchantId, "order.status": "rto" } },
+    { $addFields: { _exact: { $ne: [{ $ifNull: ["$logistics.returnedAt", null] }, null] } } },
+    { $addFields: { _at: { $cond: ["$_exact", "$logistics.returnedAt", "$updatedAt"] } } },
     { $match: { _at: { $gte: p.start, $lt: p.end } } },
     { $match: { $expr: isBdt } },
-    { $group: { _id: keyOf(monthly, "$_at"), fee: { $sum: "$logistics.courierFee" } } },
+    {
+      $group: {
+        _id: keyOf(monthly, "$_at"),
+        orders: { $sum: 1 },
+        fee: { $sum: feeOrZero },
+        missingFee: count({ $not: [hasFee] }),
+        fallbackOrders: count({ $not: ["$_exact"] }),
+      },
+    },
   ]);
-  return new Map(rows.map((r) => [r._id, r.fee]));
+  return new Map(rows.map((r) => [r._id, { orders: r.orders, fee: r.fee, missingFee: r.missingFee, fallbackOrders: r.fallbackOrders }]));
 }
 
 /** Value of orders PLACED in the period: all of them, and those still open. */
@@ -140,7 +175,7 @@ async function placedOrders(merchantId: Types.ObjectId, p: Period) {
         gross: { $sum: { $ifNull: ["$order.total", 0] } },
         grossOrders: { $sum: 1 },
         pending: { $sum: { $cond: [{ $in: ["$order.status", OPEN_STATUSES] }, { $ifNull: ["$order.total", 0] }, 0] } },
-        pendingOrders: { $sum: { $cond: [{ $in: ["$order.status", OPEN_STATUSES] }, 1, 0] } },
+        pendingOrders: count({ $in: ["$order.status", OPEN_STATUSES] }),
       },
     },
   ]);
@@ -175,76 +210,94 @@ function bucketOf(type: FinanceEntryType, category: string): FinanceBucket {
   return type === "income" ? "other_income" : "other_expense";
 }
 
-interface PnL {
-  revenue: number;
-  deliveredOrders: number;
-  otherIncome: number;
-  productCostOrders: number;
-  productCostManual: number;
-  courierOrders: number;
-  courierManual: number;
-  advertising: number;
-  office: number;
-  salary: number;
-  otherExpenses: number;
-  ordersMissingCost: number;
-  ordersMissingFee: number;
-  estimatedDeliveryDates: number;
-  nonBdtOrdersExcluded: number;
-}
-
-function pnlFor(orders: OrderAgg | undefined, rtoFee: number, entries: EntryRow[]): PnL {
-  const o = orders ?? emptyOrderAgg();
+function pnlFor(d: DeliveredAgg | undefined, r: ReturnedAgg | undefined, entries: EntryRow[]) {
+  const del = d ?? emptyDelivered();
+  const ret = r ?? emptyReturned();
   const sum = (bucket: FinanceBucket) =>
     entries.filter((e) => bucketOf(e.type, e.category) === bucket).reduce((s, e) => s + e.total, 0);
-  return {
-    revenue: o.revenue,
-    deliveredOrders: o.delivered,
+  const p = {
+    del,
+    ret,
+    revenue: del.exactRevenue + del.fallbackRevenue,
     otherIncome: sum("other_income"),
-    productCostOrders: o.productCost,
+    productCostOrders: del.productCost,
     productCostManual: sum("product_cost"),
-    courierOrders: o.fee + rtoFee,
+    courierDelivered: del.fee,
+    courierReturned: ret.fee,
     courierManual: sum("courier"),
     advertising: sum("advertising"),
     office: sum("office"),
     salary: sum("salary"),
     otherExpenses: sum("other_expense"),
-    ordersMissingCost: o.missingCost,
-    ordersMissingFee: o.missingFee,
-    estimatedDeliveryDates: o.estimatedDate,
-    nonBdtOrdersExcluded: o.nonBdt,
   };
+  const productCost = p.productCostOrders + p.productCostManual;
+  const courierCost = p.courierDelivered + p.courierReturned + p.courierManual;
+  const totalExpenses = productCost + courierCost + p.advertising + p.office + p.salary + p.otherExpenses;
+  return { ...p, productCost, courierCost, totalExpenses, netProfit: p.revenue + p.otherIncome - totalExpenses };
 }
 
-function totals(p: PnL) {
-  const productCost = p.productCostOrders + p.productCostManual;
-  const courierCost = p.courierOrders + p.courierManual;
-  const totalExpenses = productCost + courierCost + p.advertising + p.office + p.salary + p.otherExpenses;
-  return { productCost, courierCost, totalExpenses, netProfit: p.revenue + p.otherIncome - totalExpenses };
-}
+export type FinanceWarningCode =
+  | "fallback_dated_revenue"
+  | "missing_product_cost"
+  | "missing_courier_fee"
+  | "fallback_dated_returns"
+  | "manual_courier_with_recorded_fees"
+  | "non_bdt_excluded";
 
 export async function financeSummary(merchantId: Types.ObjectId, period: Period) {
-  const [orders, rto, placed, entries] = await Promise.all([
+  const [delivered, returned, placed, entries] = await Promise.all([
     deliveredOrders(merchantId, period, false),
-    returnedOrderFees(merchantId, period, false),
+    returnedOrders(merchantId, period, false),
     placedOrders(merchantId, period),
     entryTotals(merchantId, period, false),
   ]);
-  const p = pnlFor(orders.get("all"), rto.get("all") ?? 0, entries);
-  const t = totals(p);
+  const p = pnlFor(delivered.get("all"), returned.get("all"), entries);
+  const missingFee = p.del.missingFee + p.ret.missingFee;
+  const recordedFees = p.courierDelivered + p.courierReturned;
 
-  const warnings: string[] = [];
-  if (p.ordersMissingCost > 0) {
-    warnings.push(`Product cost not recorded for ${p.ordersMissingCost} delivered order(s) — net profit does not include their cost.`);
+  const warnings: Array<{ code: FinanceWarningCode; count: number; amount?: number; message: string }> = [];
+  if (p.del.fallbackOrders > 0) {
+    warnings.push({
+      code: "fallback_dated_revenue",
+      count: p.del.fallbackOrders,
+      amount: round2(p.del.fallbackRevenue),
+      message: `${p.del.fallbackOrders} older delivered order(s) (৳${round2(p.del.fallbackRevenue).toLocaleString("en-US")}) have no recorded delivery time; they are dated by their last update.`,
+    });
   }
-  if (p.ordersMissingFee > 0) {
-    warnings.push(`Courier cost not recorded for ${p.ordersMissingFee} delivered order(s) — add it as a Courier expense if you know it.`);
+  if (p.del.missingCost > 0) {
+    warnings.push({
+      code: "missing_product_cost",
+      count: p.del.missingCost,
+      message: `Product cost not recorded for ${p.del.missingCost} delivered order(s) — net profit does not include their cost.`,
+    });
   }
-  if (p.nonBdtOrdersExcluded > 0) {
-    warnings.push(`${p.nonBdtOrdersExcluded} delivered order(s) in another currency are not included (accounting is BDT only).`);
+  if (missingFee > 0) {
+    warnings.push({
+      code: "missing_courier_fee",
+      count: missingFee,
+      message: `Courier cost not recorded for ${missingFee} delivered or returned order(s) — add it as a Courier expense if you know it.`,
+    });
   }
-  if (p.estimatedDeliveryDates > 0) {
-    warnings.push(`${p.estimatedDeliveryDates} delivered order(s) have no recorded delivery time; their last update time is used.`);
+  if (p.ret.fallbackOrders > 0) {
+    warnings.push({
+      code: "fallback_dated_returns",
+      count: p.ret.fallbackOrders,
+      message: `${p.ret.fallbackOrders} older returned order(s) have no recorded return time; they are dated by their last update.`,
+    });
+  }
+  if (p.courierManual > 0 && recordedFees > 0) {
+    warnings.push({
+      code: "manual_courier_with_recorded_fees",
+      count: 1,
+      message: "This period has courier expenses you entered and courier fees recorded on orders. Make sure your entries don't cover the same parcels.",
+    });
+  }
+  if (p.del.nonBdt > 0) {
+    warnings.push({
+      code: "non_bdt_excluded",
+      count: p.del.nonBdt,
+      message: `${p.del.nonBdt} delivered order(s) in another currency are not included (accounting is BDT only).`,
+    });
   }
 
   return {
@@ -252,7 +305,9 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
     currency: "BDT" as const,
     revenue: {
       realized: round2(p.revenue),
-      deliveredOrders: p.deliveredOrders,
+      deliveredOrders: p.del.exactOrders + p.del.fallbackOrders,
+      exact: { amount: round2(p.del.exactRevenue), orders: p.del.exactOrders },
+      fallbackDated: { amount: round2(p.del.fallbackRevenue), orders: p.del.fallbackOrders },
       pendingOrderValue: round2(placed.pending),
       pendingOrders: placed.pendingOrders,
       grossOrderValue: round2(placed.gross),
@@ -262,24 +317,27 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
     productCost: {
       fromOrders: round2(p.productCostOrders),
       manual: round2(p.productCostManual),
-      total: round2(t.productCost),
-      ordersMissingCost: p.ordersMissingCost,
-      complete: p.ordersMissingCost === 0,
+      total: round2(p.productCost),
+      ordersMissingCost: p.del.missingCost,
+      complete: p.del.missingCost === 0,
     },
     courierCost: {
-      fromOrders: round2(p.courierOrders),
+      fromDelivered: round2(p.courierDelivered),
+      fromReturned: round2(p.courierReturned),
+      fromOrders: round2(recordedFees),
       manual: round2(p.courierManual),
-      total: round2(t.courierCost),
-      ordersMissingFee: p.ordersMissingFee,
-      complete: p.ordersMissingFee === 0,
+      total: round2(p.courierCost),
+      returnedOrders: p.ret.orders,
+      ordersMissingFee: missingFee,
+      complete: missingFee === 0,
     },
     advertising: round2(p.advertising),
     office: round2(p.office),
     salary: round2(p.salary),
     otherExpenses: round2(p.otherExpenses),
-    totalExpenses: round2(t.totalExpenses),
-    netProfit: round2(t.netProfit),
-    costComplete: p.ordersMissingCost === 0 && p.ordersMissingFee === 0,
+    totalExpenses: round2(p.totalExpenses),
+    netProfit: round2(p.netProfit),
+    costComplete: p.del.missingCost === 0 && missingFee === 0,
     byCategory: entries
       .map((e) => ({
         type: e.type,
@@ -291,33 +349,40 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
       }))
       .sort((a, b) => b.total - a.total),
     warnings,
-    notes: { nonBdtOrdersExcluded: p.nonBdtOrdersExcluded, estimatedDeliveryDates: p.estimatedDeliveryDates },
+    dataQuality: {
+      exactDeliveryRevenue: { amount: round2(p.del.exactRevenue), orders: p.del.exactOrders },
+      fallbackDatedRevenue: { amount: round2(p.del.fallbackRevenue), orders: p.del.fallbackOrders },
+      ordersMissingProductCost: p.del.missingCost,
+      ordersMissingCourierFee: missingFee,
+      fallbackDatedReturns: p.ret.fallbackOrders,
+      nonBdtOrdersExcluded: p.del.nonBdt,
+    },
   };
 }
 
 export async function financeMonthly(merchantId: Types.ObjectId, year: number, period: Period) {
-  const [orders, rto, entries] = await Promise.all([
+  const [delivered, returned, entries] = await Promise.all([
     deliveredOrders(merchantId, period, true),
-    returnedOrderFees(merchantId, period, true),
+    returnedOrders(merchantId, period, true),
     entryTotals(merchantId, period, true),
   ]);
   const months = Array.from({ length: 12 }, (_, i) => {
     const month = `${year}-${String(i + 1).padStart(2, "0")}`;
-    const p = pnlFor(orders.get(month), rto.get(month) ?? 0, entries.filter((e) => e.k === month));
-    const t = totals(p);
+    const p = pnlFor(delivered.get(month), returned.get(month), entries.filter((e) => e.k === month));
     return {
       month,
       revenue: round2(p.revenue),
       otherIncome: round2(p.otherIncome),
-      productCost: round2(t.productCost),
-      courierCost: round2(t.courierCost),
+      productCost: round2(p.productCost),
+      courierCost: round2(p.courierCost),
       advertising: round2(p.advertising),
       office: round2(p.office),
       salary: round2(p.salary),
       otherExpenses: round2(p.otherExpenses),
-      expenses: round2(t.totalExpenses),
-      netProfit: round2(t.netProfit),
-      costComplete: p.ordersMissingCost === 0 && p.ordersMissingFee === 0,
+      expenses: round2(p.totalExpenses),
+      netProfit: round2(p.netProfit),
+      costComplete: p.del.missingCost === 0 && p.del.missingFee + p.ret.missingFee === 0,
+      fallbackDatedOrders: p.del.fallbackOrders + p.ret.fallbackOrders,
     };
   });
   return { year, currency: "BDT" as const, months };

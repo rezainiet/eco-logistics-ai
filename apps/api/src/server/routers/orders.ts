@@ -2260,6 +2260,12 @@ export const ordersRouter = router({
         order.logistics = order.logistics ?? {};
         order.logistics.deliveredAt = new Date();
       }
+      // Likewise for a return: accounting dates a returned parcel's courier
+      // fee by returnedAt.
+      if (input.status === "rto" && !order.logistics?.returnedAt) {
+        order.logistics = order.logistics ?? {};
+        order.logistics.returnedAt = new Date();
+      }
     }
     if (input.customer) {
       Object.assign(order.customer, input.customer);

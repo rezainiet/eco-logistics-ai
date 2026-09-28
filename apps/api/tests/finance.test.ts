@@ -7,6 +7,7 @@ import { resolvePeriod } from "../src/lib/finance/period.js";
 import { ensureSystemTemplates, __resetTemplateCacheForTests } from "../src/lib/landing/templates.js";
 import { resolveLandingPageByHost } from "../src/lib/landing/resolve.js";
 import { applyTrackingEvents } from "../src/server/tracking.js";
+import { fetchPublicTimeline } from "../src/lib/public-tracking.js";
 import { authUserFor, callerFor, createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
 
 /**
@@ -234,7 +235,8 @@ describe("product cost (unitCost snapshot) and courier fee", () => {
     expect(s.productCost.ordersMissingCost).toBe(2);
     expect(s.productCost.complete).toBe(false);
     expect(s.costComplete).toBe(false);
-    expect(s.warnings.join(" ")).toMatch(/cost not recorded/i);
+    expect(s.warnings.map((w) => w.code)).toContain("missing_product_cost");
+    expect(s.dataQuality.ordersMissingProductCost).toBe(2);
   });
 
   it("stores the courier fee at booking; bookings without a fee stay 'not recorded'", async () => {
@@ -424,5 +426,186 @@ describe("tenant isolation", () => {
     const a = await merchant();
     await expect(a.caller.finance.update({ id: new Types.ObjectId().toHexString(), amount: 1 })).rejects.toThrow(/not found/i);
     await expect(a.caller.finance.void({ id: "not-an-id" })).rejects.toThrow();
+  });
+});
+
+describe("courier cost: one stored fee per shipment, counted once by final state", () => {
+  /** Order booked with a courier; pathao's booking returns a fee (80), steadfast's returns none. */
+  async function booked(caller: ReturnType<typeof callerFor>, courier: "pathao" | "steadfast", total = 1000, phone = "01") {
+    const o = await order(caller, total, phone);
+    await caller.orders.updateOrder({ id: o.id, status: "confirmed" });
+    await caller.orders.bookShipment({ orderId: o.id, courier });
+    return o;
+  }
+  const courierDelivered = async (id: string, n = 1) => {
+    for (let i = 0; i < n; i++) {
+      const snap = await Order.findById(id).select("_id merchantId order logistics").lean();
+      await applyTrackingEvents(snap as never, "delivered", [{ at: new Date("2026-09-27T10:00:00Z"), providerStatus: "Delivered", description: "Delivered" }], { source: "webhook" });
+    }
+  };
+  const courierReturned = async (id: string, n = 1) => {
+    for (let i = 0; i < n; i++) {
+      const snap = await Order.findById(id).select("_id merchantId order logistics").lean();
+      await applyTrackingEvents(snap as never, "rto", [{ at: new Date("2026-09-27T11:00:00Z"), providerStatus: "Returned", description: "Returned" }], { source: "poll" });
+    }
+  };
+
+  it("delivered + courier fee = one courier cost, however many delivered events arrive", async () => {
+    const { caller } = await merchant();
+    const o = await booked(caller, "pathao");
+    expect((await Order.findById(o.id).lean())!.logistics?.courierFee).toBe(80);
+    await courierDelivered(o.id, 3);
+    await caller.orders.updateOrder({ id: o.id, status: "delivered" }); // same-status repeat
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromDelivered: 80, fromReturned: 0, fromOrders: 80, total: 80, ordersMissingFee: 0, complete: true });
+    expect(s.revenue.realized).toBe(1000);
+  });
+
+  it("RTO + courier fee = one courier cost (manual or courier return, repeated), and no revenue", async () => {
+    const { caller } = await merchant();
+    const viaCourier = await booked(caller, "pathao", 1000, "01");
+    await courierReturned(viaCourier.id, 3);
+    const manual = await booked(caller, "pathao", 700, "02");
+    await caller.orders.updateOrder({ id: manual.id, status: "rto" });
+    await caller.orders.updateOrder({ id: manual.id, status: "rto" });
+    for (const id of [viaCourier.id, manual.id]) {
+      expect((await Order.findById(id).lean())!.logistics?.returnedAt).toBeInstanceOf(Date);
+    }
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromDelivered: 0, fromReturned: 160, total: 160, returnedOrders: 2, ordersMissingFee: 0 });
+    expect(s.revenue.realized).toBe(0);
+    expect(s.netProfit).toBe(-160);
+  });
+
+  it("a return later overridden by a courier 'delivered' counts its fee once, as delivered", async () => {
+    const { caller } = await merchant();
+    const o = await booked(caller, "pathao");
+    await courierReturned(o.id);
+    expect((await caller.finance.summary({ period: ALL })).courierCost).toMatchObject({ fromReturned: 80, fromDelivered: 0, total: 80 });
+    await courierDelivered(o.id, 2); // rto -> delivered is the one allowed courier override
+    const s = await caller.finance.summary({ period: ALL });
+    expect((await Order.findById(o.id).lean())!.order.status).toBe("delivered");
+    expect(s.courierCost).toMatchObject({ fromReturned: 0, fromDelivered: 80, total: 80, returnedOrders: 0 });
+    expect(s.revenue.realized).toBe(1000);
+  });
+
+  it("delivered -> RTO is refused (manual and courier), so the fee cannot move or double", async () => {
+    const { caller } = await merchant();
+    const o = await booked(caller, "pathao");
+    await courierDelivered(o.id);
+    await expect(caller.orders.updateOrder({ id: o.id, status: "rto" })).rejects.toThrow(/invalid status transition/);
+    await courierReturned(o.id, 2);
+    const s = await caller.finance.summary({ period: ALL });
+    expect((await Order.findById(o.id).lean())!.order.status).toBe("delivered");
+    expect(s.courierCost).toMatchObject({ fromDelivered: 80, fromReturned: 0, total: 80 });
+  });
+
+  it("no courier fee (Steadfast/RedX bookings) is 'not recorded' for delivered and returned orders, never 0", async () => {
+    const { caller } = await merchant();
+    const d = await booked(caller, "steadfast", 1000, "01");
+    const r = await booked(caller, "steadfast", 500, "02");
+    for (const id of [d.id, r.id]) expect((await Order.findById(id).lean())!.logistics?.courierFee).toBeUndefined();
+    await courierDelivered(d.id);
+    await caller.orders.updateOrder({ id: r.id, status: "rto" });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromOrders: 0, total: 0, ordersMissingFee: 2, complete: false });
+    expect(s.dataQuality.ordersMissingCourierFee).toBe(2);
+    expect(s.warnings.find((w) => w.code === "missing_courier_fee")).toMatchObject({ count: 2 });
+    expect(s.costComplete).toBe(false);
+  });
+
+  it("orders cancelled before shipment, or still in transit, carry no courier cost and no 'missing' flag", async () => {
+    const { caller } = await merchant();
+    const cancelled = await order(caller, 900, "01");
+    await caller.orders.updateOrder({ id: cancelled.id, status: "confirmed" });
+    await caller.orders.updateOrder({ id: cancelled.id, status: "cancelled" });
+    await booked(caller, "pathao", 400, "02"); // shipped, not delivered yet
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromOrders: 0, total: 0, ordersMissingFee: 0, complete: true });
+    expect(s.warnings).toHaveLength(0);
+  });
+
+  it("concurrent bookings and status events store and count one fee", async () => {
+    const { caller } = await merchant();
+    const o = await order(caller, 1000, "01");
+    await caller.orders.updateOrder({ id: o.id, status: "confirmed" });
+    const bookings = await Promise.allSettled([
+      caller.orders.bookShipment({ orderId: o.id, courier: "pathao" }),
+      caller.orders.bookShipment({ orderId: o.id, courier: "pathao" }),
+      caller.orders.bookShipment({ orderId: o.id, courier: "pathao" }),
+    ]);
+    const tracking = new Set(
+      bookings.filter((b) => b.status === "fulfilled").map((b) => (b as PromiseFulfilledResult<{ trackingNumber: string }>).value.trackingNumber),
+    );
+    expect(tracking.size).toBe(1);
+    expect((await Order.findById(o.id).lean())!.logistics?.courierFee).toBe(80);
+    const snap = await Order.findById(o.id).select("_id merchantId order logistics").lean();
+    const ev = { at: new Date("2026-09-27T10:00:00Z"), providerStatus: "Delivered", description: "Delivered" };
+    await Promise.allSettled([
+      applyTrackingEvents(snap as never, "delivered", [ev], { source: "webhook" }),
+      applyTrackingEvents(snap as never, "delivered", [ev], { source: "poll" }),
+      caller.orders.updateOrder({ id: o.id, status: "delivered" }),
+    ]);
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromDelivered: 80, total: 80 });
+    expect(s.revenue).toMatchObject({ realized: 1000, deliveredOrders: 1 });
+  });
+
+  it("the public tracking page never exposes the courier fee or costs", async () => {
+    const { caller } = await merchant();
+    const o = await booked(caller, "pathao");
+    const tn = (await Order.findById(o.id).lean())!.logistics!.trackingNumber!;
+    const pub = await fetchPublicTimeline(tn);
+    expect(pub).not.toBeNull();
+    expect(JSON.stringify(pub)).not.toMatch(/courierFee|unitCost|costPrice/);
+  });
+
+  it("manual courier expenses are added as entered — flagged, never auto-reconciled", async () => {
+    const { caller } = await merchant();
+    const o = await booked(caller, "pathao");
+    await courierDelivered(o.id);
+    const today = resolvePeriod({ preset: "today" }).fromDay;
+    await caller.finance.create({ type: "expense", category: "courier", amount: 150, occurredOn: today, idempotencyKey: idem() });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.courierCost).toMatchObject({ fromOrders: 80, manual: 150, total: 230 });
+    expect(s.warnings.map((w) => w.code)).toContain("manual_courier_with_recorded_fees");
+  });
+});
+
+describe("historical delivered/returned orders without a recorded time", () => {
+  it("fallback-dated revenue is reported separately from exact revenue, and stored data is untouched", async () => {
+    const { caller } = await merchant();
+    const exact = await order(caller, 1000, "01");
+    await walk(caller, exact.id, "delivered");
+    const legacy = await order(caller, 600, "02");
+    await walk(caller, legacy.id, "delivered");
+    await Order.updateOne({ _id: legacy.id }, { $unset: { "logistics.deliveredAt": "" } }); // pre-accounting row
+
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.revenue).toMatchObject({ realized: 1600, deliveredOrders: 2, exact: { amount: 1000, orders: 1 }, fallbackDated: { amount: 600, orders: 1 } });
+    expect(s.dataQuality).toMatchObject({
+      exactDeliveryRevenue: { amount: 1000, orders: 1 },
+      fallbackDatedRevenue: { amount: 600, orders: 1 },
+      ordersMissingProductCost: 2,
+      ordersMissingCourierFee: 2,
+    });
+    const codes = s.warnings.map((w) => w.code);
+    expect(codes).toEqual(expect.arrayContaining(["fallback_dated_revenue", "missing_product_cost", "missing_courier_fee"]));
+    expect(s.warnings.find((w) => w.code === "fallback_dated_revenue")).toMatchObject({ count: 1, amount: 600 });
+    // Reporting never writes: the legacy order still has no deliveredAt.
+    expect((await Order.findById(legacy.id).lean())!.logistics?.deliveredAt).toBeUndefined();
+    const y = await caller.finance.monthly({ year: Number(resolvePeriod({ preset: "today" }).fromDay.slice(0, 4)) });
+    expect(y.months.reduce((n, m) => n + m.fallbackDatedOrders, 0)).toBe(1);
+  });
+
+  it("returned orders without returnedAt are flagged as fallback-dated", async () => {
+    const { caller } = await merchant();
+    const o = await order(caller, 500, "01");
+    await walk(caller, o.id, "rto");
+    await Order.updateOne({ _id: o.id }, { $unset: { "logistics.returnedAt": "" } });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.dataQuality.fallbackDatedReturns).toBe(1);
+    expect(s.warnings.map((w) => w.code)).toContain("fallback_dated_returns");
+    expect((await Order.findById(o.id).lean())!.logistics?.returnedAt).toBeUndefined();
   });
 });

@@ -87,7 +87,15 @@ function Overview({ period }: { period: PeriodValue }) {
   const income = s.revenue.realized + s.otherIncome;
 
   const lines: Array<{ label: string; value: number; note?: string; sign: "+" | "−" }> = [
-    { label: "Revenue (delivered orders)", value: s.revenue.realized, sign: "+", note: `${s.revenue.deliveredOrders} delivered order${s.revenue.deliveredOrders === 1 ? "" : "s"}` },
+    {
+      label: "Revenue (delivered orders)",
+      value: s.revenue.realized,
+      sign: "+",
+      note:
+        s.revenue.fallbackDated.orders > 0
+          ? `${s.revenue.exact.orders} with delivery time · ${s.revenue.fallbackDated.orders} older, dated by last update (${formatBDT(s.revenue.fallbackDated.amount)})`
+          : `${s.revenue.deliveredOrders} delivered order${s.revenue.deliveredOrders === 1 ? "" : "s"}`,
+    },
     ...(s.otherIncome > 0 ? [{ label: "Other income", value: s.otherIncome, sign: "+" as const }] : []),
     {
       label: "Product cost",
@@ -99,7 +107,12 @@ function Overview({ period }: { period: PeriodValue }) {
       label: "Courier cost",
       value: s.courierCost.total,
       sign: "−",
-      note: s.courierCost.ordersMissingFee > 0 ? `Not recorded for ${s.courierCost.ordersMissingFee} order(s)` : undefined,
+      note: [
+        s.courierCost.fromReturned > 0 ? `incl. ${formatBDT(s.courierCost.fromReturned)} on returned parcels` : null,
+        s.courierCost.ordersMissingFee > 0 ? `Not recorded for ${s.courierCost.ordersMissingFee} order(s)` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || undefined,
     },
     { label: "Advertising", value: s.advertising, sign: "−" },
     { label: "Office rent", value: s.office, sign: "−" },
@@ -125,8 +138,8 @@ function Overview({ period }: { period: PeriodValue }) {
       {s.warnings.length > 0 ? (
         <div className="space-y-1 rounded-lg border border-warning/30 bg-warning-subtle px-4 py-3 text-sm text-warning">
           {s.warnings.map((w) => (
-            <p key={w} className="flex gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w}
+            <p key={w.code} className="flex gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {w.message}
             </p>
           ))}
         </div>
@@ -247,8 +260,13 @@ function Reports() {
                     <td className="px-4 py-2.5 tabular-nums">
                       {m.month}
                       {!m.costComplete ? (
-                        <span className="ml-2 text-xs text-warning" title="Some delivered orders have no recorded product or courier cost">
+                        <span className="ml-2 text-xs text-warning" title="Some delivered or returned orders have no recorded product or courier cost">
                           costs incomplete
+                        </span>
+                      ) : null}
+                      {m.fallbackDatedOrders > 0 ? (
+                        <span className="ml-2 text-xs text-fg-subtle" title="Older orders without a recorded delivery/return time, dated by their last update">
+                          {m.fallbackDatedOrders} dated by last update
                         </span>
                       ) : null}
                     </td>
