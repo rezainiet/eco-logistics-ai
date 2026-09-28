@@ -59,6 +59,16 @@ function Icon({ d, className = "h-5 w-5" }: { d: string; className?: string }) {
 const BAG = "M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0";
 const CLOSE = "M18 6L6 18M6 6l12 12";
 
+/** Delivery zones from a checkout response (untrusted shape). */
+function parseZones(raw: unknown): DeliveryOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 12).flatMap((z) => {
+    const o = (z ?? {}) as Record<string, unknown>;
+    if (typeof o.id !== "string" || typeof o.label !== "string" || typeof o.charge !== "number" || !Number.isFinite(o.charge) || o.charge < 0) return [];
+    return [{ id: o.id.slice(0, 80), label: o.label.slice(0, 50), time: typeof o.time === "string" ? o.time.slice(0, 40) : null, charge: o.charge }];
+  });
+}
+
 export function LandingCommerce({
   commerce,
   locale,
@@ -114,8 +124,13 @@ export function LandingCommerce({
     if (loaded.current) saveCart(slug, lines);
   }, [slug, lines]);
 
+  // Delivery areas with their charge — the published page's, refreshed if the
+  // server reports they changed while the customer was checking out.
+  const [zones, setZones] = useState<DeliveryOption[]>(commerce.delivery);
+  useEffect(() => setZones(commerce.delivery), [commerce.delivery]);
+
   const totals = cartTotals(lines, catalog);
-  const delivery: DeliveryOption | null = commerce.delivery.find((d) => d.id === details.delivery) ?? (commerce.delivery.length === 1 ? commerce.delivery[0]! : null);
+  const delivery: DeliveryOption | null = zones.find((d) => d.id === details.delivery) ?? (zones.length === 1 ? zones[0]! : null);
   const deliveryCharge = delivery?.charge ?? 0;
   const total = totals.subtotal + deliveryCharge;
 
@@ -222,7 +237,7 @@ export function LandingCommerce({
     if (details.address.trim().length < 5) bad.add("address");
     if (details.district.trim().length < 2) bad.add("district");
     if (details.email.trim() && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(details.email.trim())) bad.add("email");
-    if (commerce.delivery.length > 1 && !commerce.delivery.some((d) => d.id === details.delivery)) bad.add("delivery");
+    if (zones.length > 1 && !zones.some((d) => d.id === details.delivery)) bad.add("delivery");
     setFieldErrors(bad);
     return bad.size === 0;
   };
@@ -266,6 +281,8 @@ export function LandingCommerce({
             notes: details.notes || null,
           },
           deliveryOptionId: delivery?.id ?? null,
+          // What the customer was shown; the server charges its own value and refuses a stale one.
+          deliveryCharge: delivery ? delivery.charge : null,
           attribution: storedAttribution(),
         }),
       });
@@ -312,6 +329,16 @@ export function LandingCommerce({
         const fields = new Set((Array.isArray(body.fields) ? body.fields : []) as Array<keyof Details>);
         setFieldErrors(fields);
         setStep("details");
+      } else if (code === "delivery_changed") {
+        const fresh = parseZones(body.delivery);
+        setZones(fresh);
+        keyRef.current = null;
+        if (!fresh.some((d) => d.id === delivery?.id)) {
+          setDetails((d) => ({ ...d, delivery: "" }));
+          setFieldErrors(new Set(["delivery"]));
+          setStep("details");
+        }
+        setError(t.errors.priceChanged);
       } else if (code === "invalid_delivery") {
         setFieldErrors(new Set(["delivery"]));
         setStep("details");
@@ -372,7 +399,7 @@ export function LandingCommerce({
           {t.delivery}
           {delivery ? <span className="text-neutral-500"> · {delivery.label}</span> : null}
         </dt>
-        <dd className="tabular-nums">{commerce.delivery.length === 0 ? t.deliveryTbd : delivery ? money(deliveryCharge) : "—"}</dd>
+        <dd className="tabular-nums">{zones.length === 0 ? t.deliveryTbd : delivery ? money(deliveryCharge) : "—"}</dd>
       </div>
       <div className="flex justify-between gap-3 border-t border-neutral-200 pt-2 text-base font-bold">
         <dt>{t.total}</dt>
@@ -519,10 +546,10 @@ export function LandingCommerce({
                   {field("phone", t.phone, { type: "tel", inputMode: "tel", hint: t.phoneHint, autoComplete: "tel" })}
                   {field("address", t.address, { textarea: true, autoComplete: "street-address" })}
                   {field("district", t.district, { autoComplete: "address-level2" })}
-                  {commerce.delivery.length > 0 ? (
+                  {zones.length > 0 ? (
                     <fieldset className="space-y-1.5">
                       <legend className="text-sm font-medium text-neutral-800">{t.deliveryArea}</legend>
-                      {commerce.delivery.map((d) => (
+                      {zones.map((d) => (
                         <label
                           key={d.id}
                           className={`flex min-h-12 cursor-pointer items-center justify-between gap-3 rounded-[var(--lp-radius)] border px-3 py-2 ${(delivery?.id ?? "") === d.id ? "border-[var(--lp-primary)] ring-1 ring-[var(--lp-primary)]" : "border-neutral-300"}`}

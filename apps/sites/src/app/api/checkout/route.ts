@@ -73,6 +73,8 @@ export async function POST(req: Request): Promise<Response> {
     items: body.items,
     customer: body.customer,
     deliveryOptionId: body.deliveryOptionId ?? null,
+    // The charge the customer saw — a staleness check only; the API decides the charge.
+    deliveryCharge: typeof body.deliveryCharge === "number" ? body.deliveryCharge : null,
     // Marketing attribution: analytics metadata only (the API re-validates it).
     attribution: sanitizeAttribution(body.attribution),
   };

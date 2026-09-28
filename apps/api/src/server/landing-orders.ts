@@ -53,6 +53,7 @@ landingOrdersRouter.post("/", orderLimiter, async (req, res) => {
         items: Array.isArray(body.items) ? body.items.slice(0, 50) : [],
         customer: (body.customer ?? {}) as PlaceOrderInput["customer"],
         deliveryOptionId: typeof body.deliveryOptionId === "string" ? body.deliveryOptionId.slice(0, 80) : null,
+        deliveryCharge: typeof body.deliveryCharge === "number" ? body.deliveryCharge : null,
         attribution: body.attribution,
       },
       { ip: customerIp(req), userAgent: req.header("user-agent") ?? null },
@@ -66,7 +67,7 @@ landingOrdersRouter.post("/", orderLimiter, async (req, res) => {
         ? 404
         : result.code === "rate_limited"
           ? 429
-          : result.code === "insufficient_stock" || result.code === "unavailable" || result.code === "price_changed"
+          : result.code === "insufficient_stock" || result.code === "unavailable" || result.code === "price_changed" || result.code === "delivery_changed"
             ? 409
             : result.code === "not_accepting_orders"
               ? 503

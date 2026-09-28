@@ -91,10 +91,15 @@ function Overview({ period }: { period: PeriodValue }) {
       label: "Revenue (delivered orders)",
       value: s.revenue.realized,
       sign: "+",
-      note:
+      note: [
         s.revenue.fallbackDated.orders > 0
           ? `${s.revenue.exact.orders} with delivery time · ${s.revenue.fallbackDated.orders} older, dated by last update (${formatBDT(s.revenue.fallbackDated.amount)})`
           : `${s.revenue.deliveredOrders} delivered order${s.revenue.deliveredOrders === 1 ? "" : "s"}`,
+        // Delivery charges are inside the order totals — shown as a split, not extra income.
+        s.revenue.deliveryCharges > 0 ? `${formatBDT(s.revenue.productSales)} products + ${formatBDT(s.revenue.deliveryCharges)} delivery charges` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
     },
     ...(s.otherIncome > 0 ? [{ label: "Other income", value: s.otherIncome, sign: "+" as const }] : []),
     {

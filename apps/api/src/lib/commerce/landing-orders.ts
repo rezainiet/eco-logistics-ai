@@ -39,6 +39,13 @@ export interface PlaceOrderInput {
   customer: { name: string; phone: string; address: string; district: string; email?: string | null; notes?: string | null };
   deliveryOptionId?: string | null;
   /**
+   * The delivery charge the customer was shown. Never used as the charge (the
+   * page's published zone decides it); a different value means the page
+   * changed under the customer, so the order is refused with the current
+   * zones instead of silently charging something else.
+   */
+  deliveryCharge?: number | null;
+  /**
    * Marketing attribution captured by the page (first/last touch). Untrusted
    * analytics metadata: sanitized, never required, never used for tenant,
    * price or stock decisions.
@@ -56,6 +63,7 @@ export type PlaceOrderError =
   | { code: "page_unavailable" }
   | { code: "invalid_customer"; fields: string[] }
   | { code: "invalid_delivery" }
+  | { code: "delivery_changed"; delivery: Array<{ id: string; label: string; time: string | null; charge: number }> }
   | { code: "not_on_page"; productIds: string[] }
   | { code: "unavailable"; productIds: string[]; variantIds?: string[] }
   | { code: "insufficient_stock"; productId: string; variantId?: string; available: number }
@@ -246,6 +254,10 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
   if (page.delivery.length) {
     const zone = page.delivery.find((d) => d.id === input.deliveryOptionId);
     if (!zone) return fail({ code: "invalid_delivery" });
+    const shown = input.deliveryCharge;
+    if (typeof shown === "number" && Number.isFinite(shown) && Math.abs(shown - zone.charge) > 0.005) {
+      return fail({ code: "delivery_changed", delivery: page.delivery.map((d) => ({ id: d.id, label: d.label, time: d.time, charge: d.charge })) });
+    }
     deliveryCharge = zone.charge;
     deliveryLabel = zone.label;
   }

@@ -55,6 +55,8 @@ interface DeliveredAgg {
   exactOrders: number;
   fallbackRevenue: number;
   fallbackOrders: number;
+  /** Part of the revenue above that is delivery charges collected from customers (already inside the order total). */
+  deliveryCharges: number;
   productCost: number;
   missingCost: number;
   fee: number;
@@ -62,7 +64,7 @@ interface DeliveredAgg {
   nonBdt: number;
 }
 const emptyDelivered = (): DeliveredAgg => ({
-  exactRevenue: 0, exactOrders: 0, fallbackRevenue: 0, fallbackOrders: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, nonBdt: 0,
+  exactRevenue: 0, exactOrders: 0, fallbackRevenue: 0, fallbackOrders: 0, deliveryCharges: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, nonBdt: 0,
 });
 
 interface ReturnedAgg {
@@ -108,6 +110,11 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
         bdt: isBdt,
         exact: "$_exact",
         total: { $ifNull: ["$order.total", 0] },
+        // The delivery charge is part of the order total — reported as a split of
+        // revenue, never added on top. Clamped to [0, total] for legacy rows.
+        deliveryCharge: {
+          $max: [0, { $min: [{ $cond: [{ $isNumber: "$order.deliveryCharge" }, "$order.deliveryCharge", 0] }, { $ifNull: ["$order.total", 0] }] }],
+        },
         cost: {
           $sum: {
             $map: {
@@ -130,6 +137,7 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
         exactOrders: count("$exact"),
         fallbackRevenue: { $sum: { $cond: ["$exact", 0, "$total"] } },
         fallbackOrders: count({ $not: ["$exact"] }),
+        deliveryCharges: { $sum: "$deliveryCharge" },
         productCost: { $sum: "$cost" },
         missingCost: count("$costMissing"),
         fee: { $sum: "$fee" },
@@ -145,6 +153,7 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
       a.exactOrders += r.exactOrders;
       a.fallbackRevenue += r.fallbackRevenue;
       a.fallbackOrders += r.fallbackOrders;
+      a.deliveryCharges += r.deliveryCharges;
       a.productCost += r.productCost;
       a.missingCost += r.missingCost;
       a.fee += r.fee;
@@ -319,6 +328,9 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
     currency: "BDT" as const,
     revenue: {
       realized: round2(p.revenue),
+      // realized = productSales + deliveryCharges (a split, not extra income).
+      productSales: round2(p.revenue - p.del.deliveryCharges),
+      deliveryCharges: round2(p.del.deliveryCharges),
       deliveredOrders: p.del.exactOrders + p.del.fallbackOrders,
       exact: { amount: round2(p.del.exactRevenue), orders: p.del.exactOrders },
       fallbackDated: { amount: round2(p.del.fallbackRevenue), orders: p.del.fallbackOrders },
@@ -386,6 +398,7 @@ export async function financeMonthly(merchantId: Types.ObjectId, year: number, p
     return {
       month,
       revenue: round2(p.revenue),
+      deliveryCharges: round2(p.del.deliveryCharges),
       otherIncome: round2(p.otherIncome),
       productCost: round2(p.productCost),
       courierCost: round2(p.courierCost),
