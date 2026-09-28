@@ -34,6 +34,8 @@ const productFields = {
   sku: sku.nullish(),
   price: money,
   compareAtPrice: money.nullish(),
+  /** What one unit costs the merchant; optional, private (never public). */
+  costPrice: money.nullish(),
   currency: z.enum(PRODUCT_CURRENCIES).optional(),
   status: editableStatus.optional(),
   lowStockThreshold: threshold.optional(),
@@ -139,6 +141,7 @@ export const productsRouter = router({
               ...(input.sku ? { sku: input.sku } : {}),
               price: input.price,
               ...(input.compareAtPrice ? { compareAtPrice: input.compareAtPrice } : {}),
+              ...(input.costPrice != null ? { costPrice: input.costPrice } : {}),
               currency: input.currency ?? "BDT",
               status: input.status ?? "active",
               ...(input.lowStockThreshold !== undefined ? { lowStockThreshold: input.lowStockThreshold } : {}),
@@ -181,6 +184,7 @@ export const productsRouter = router({
         sku: sku.nullish(),
         price: money.optional(),
         compareAtPrice: money.nullish(),
+        costPrice: money.nullish(),
         currency: z.enum(PRODUCT_CURRENCIES).optional(),
         status: editableStatus.optional(),
         lowStockThreshold: threshold.optional(),
@@ -213,6 +217,11 @@ export const productsRouter = router({
         if (input.compareAtPrice) $set.compareAtPrice = input.compareAtPrice;
         else $unset.compareAtPrice = "";
       }
+      // Cost changes apply to new orders only: placed orders keep their unitCost snapshot.
+      if (input.costPrice !== undefined) {
+        if (input.costPrice != null) $set.costPrice = input.costPrice;
+        else $unset.costPrice = "";
+      }
       if (input.currency !== undefined) $set.currency = input.currency;
       if (input.status !== undefined) $set.status = input.status;
       if (input.lowStockThreshold !== undefined) $set.lowStockThreshold = input.lowStockThreshold;
@@ -228,6 +237,9 @@ export const productsRouter = router({
       audit(ctx, "product.updated", _id, {
         changed: [...Object.keys($set), ...Object.keys($unset)],
         ...(input.price !== undefined && input.price !== current.price ? { price: { before: current.price, after: input.price } } : {}),
+        ...(input.costPrice !== undefined && (input.costPrice ?? null) !== (current.costPrice ?? null)
+          ? { costPrice: { before: current.costPrice ?? null, after: input.costPrice ?? null } }
+          : {}),
       });
       return productView(updated);
     }),

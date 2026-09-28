@@ -23,6 +23,7 @@ export interface ProductLike {
   sku: string | null;
   price: number;
   compareAtPrice: number | null;
+  costPrice: number | null;
   currency: string;
   status: string;
   lowStockThreshold: number;
@@ -62,6 +63,7 @@ export function ProductFormDialog({
   const [sku, setSku] = useState("");
   const [price, setPrice] = useState("");
   const [compareAt, setCompareAt] = useState("");
+  const [cost, setCost] = useState("");
   const [currency, setCurrency] = useState("BDT");
   const [status, setStatus] = useState("active");
   const [threshold, setThreshold] = useState("5");
@@ -77,6 +79,7 @@ export function ProductFormDialog({
     setSku(product?.sku ?? "");
     setPrice(product ? String(product.price) : "");
     setCompareAt(product?.compareAtPrice != null ? String(product.compareAtPrice) : "");
+    setCost(product?.costPrice != null ? String(product.costPrice) : "");
     setCurrency(product?.currency ?? "BDT");
     setStatus(product?.status && product.status !== "archived" ? product.status : "active");
     setThreshold(String(product?.lowStockThreshold ?? 5));
@@ -108,6 +111,8 @@ export function ProductFormDialog({
     if (p === null || !Number.isFinite(p) || p < 0) return setError("Enter a valid price.");
     const cmp = num(compareAt);
     if (cmp !== null && (!Number.isFinite(cmp) || cmp <= p)) return setError("Compare-at price must be higher than the price.");
+    const cst = num(cost);
+    if (cst !== null && (!Number.isFinite(cst) || cst < 0)) return setError("Enter a valid cost price.");
     const th = Number(threshold);
     if (!Number.isInteger(th) || th < 0) return setError("Low-stock alert must be a whole number.");
     const stock = Number(initialStock);
@@ -119,6 +124,7 @@ export function ProductFormDialog({
       sku: sku.trim() || null,
       price: p,
       compareAtPrice: cmp,
+      costPrice: cst,
       currency: currency as "BDT" | "USD",
       status: status as "draft" | "active" | "inactive",
       lowStockThreshold: th,
@@ -186,6 +192,13 @@ export function ProductFormDialog({
             <div className="space-y-1.5">
               <Label htmlFor="p-cmp">Compare-at price</Label>
               <Input id="p-cmp" inputMode="decimal" value={compareAt} onChange={(e) => setCompareAt(e.target.value)} placeholder="Optional" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="p-cost">Cost price</Label>
+              <Input id="p-cost" inputMode="decimal" value={cost} onChange={(e) => setCost(e.target.value)} placeholder="Optional" aria-describedby="p-cost-hint" />
+              <p id="p-cost-hint" className="text-2xs text-fg-subtle">
+                What one unit costs you. Private — used for profit in Accounting. Applies to new orders.
+              </p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="p-cur">Currency</Label>

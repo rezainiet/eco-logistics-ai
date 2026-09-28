@@ -194,6 +194,7 @@ async function main() {
         LandingAsset,
         Product,
         InventoryMovement,
+        FinanceEntry,
       } = await import("@ecom/db");
       const models: ReadonlyArray<readonly [string, { syncIndexes: () => Promise<unknown> }]> = [
         ["CallEvent", CallEvent as unknown as { syncIndexes: () => Promise<unknown> }],
@@ -231,6 +232,9 @@ async function main() {
         // that makes order-driven stock movements idempotent.
         ["Product", Product as unknown as { syncIndexes: () => Promise<unknown> }],
         ["InventoryMovement", InventoryMovement as unknown as { syncIndexes: () => Promise<unknown> }],
+        // Accounting — the unique (merchantId, idempotencyKey) index is what
+        // makes a double-submitted expense create one entry.
+        ["FinanceEntry", FinanceEntry as unknown as { syncIndexes: () => Promise<unknown> }],
       ];
       for (const [name, model] of models) {
         try {

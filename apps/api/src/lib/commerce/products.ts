@@ -15,7 +15,7 @@ export function assetUrlOf(assetId: unknown): string | null {
 
 type ProductDoc = Pick<
   Product,
-  "_id" | "name" | "description" | "imageAssetId" | "sku" | "price" | "compareAtPrice" | "currency" | "status" | "lowStockThreshold" | "inventory"
+  "_id" | "name" | "description" | "imageAssetId" | "sku" | "price" | "compareAtPrice" | "costPrice" | "currency" | "status" | "lowStockThreshold" | "inventory"
 > & { createdAt?: Date; updatedAt?: Date };
 
 /** Merchant-facing product shape (dashboard). */
@@ -29,6 +29,8 @@ export function productView(p: ProductDoc) {
     sku: p.sku ?? null,
     price: p.price,
     compareAtPrice: p.compareAtPrice ?? null,
+    /** Private to the merchant — productView is only used on authenticated routes. */
+    costPrice: p.costPrice ?? null,
     currency: p.currency ?? "BDT",
     status: p.status,
     lowStockThreshold: p.lowStockThreshold ?? 5,

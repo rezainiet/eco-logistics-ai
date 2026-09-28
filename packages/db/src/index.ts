@@ -38,3 +38,4 @@ export * from "./models/landingPage.js";
 export * from "./models/landingPageHost.js";
 export * from "./models/landingAsset.js";
 export * from "./models/product.js";
+export * from "./models/financeEntry.js";

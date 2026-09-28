@@ -17,6 +17,7 @@ import {
   Plug,
   Settings,
   ShieldAlert,
+  Wallet,
 } from "lucide-react";
 import { defaultInitials, getBrandingSync } from "@ecom/branding";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -62,6 +63,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
       { label: "Behavior", href: "/dashboard/analytics/behavior", icon: Activity },
+      { label: "Accounting", href: "/dashboard/accounting", icon: Wallet },
     ],
   },
   {

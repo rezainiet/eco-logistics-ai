@@ -10,7 +10,19 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatMoney } from "@/lib/formatters";
 
 type Commerce = {
-  lineItems: Array<{ name: string; sku: string | null; quantity: number; price: number; lineTotal: number; productId: string | null; imageUrl: string | null }>;
+  lineItems: Array<{
+    name: string;
+    sku: string | null;
+    quantity: number;
+    price: number;
+    lineTotal: number;
+    productId: string | null;
+    imageUrl: string | null;
+    /** Cost per unit recorded at order time; null = not recorded. */
+    unitCost?: number | null;
+  }>;
+  /** Courier fee recorded at booking; null = not recorded. */
+  courierFee?: number | null;
   currency: string;
   subtotal: number | null;
   deliveryCharge: number | null;
@@ -123,6 +135,8 @@ export function OrderCommercePanel({
               <div className="text-xs text-fg-subtle">
                 {i.quantity} × {money(i.price)}
                 {i.sku ? ` · ${i.sku}` : ""}
+                {" · "}
+                {typeof i.unitCost === "number" ? `cost ${money(i.unitCost)}` : <span className="text-fg-faint">Cost not recorded</span>}
               </div>
             </div>
             <div className="shrink-0 font-medium tabular-nums">{money(i.lineTotal)}</div>
@@ -145,6 +159,13 @@ export function OrderCommercePanel({
             <dd className="tabular-nums">{money((c.subtotal ?? 0) + (c.deliveryCharge ?? 0))}</dd>
           </div>
         </dl>
+      ) : null}
+
+      {c.courierFee !== undefined ? (
+        <div className="flex justify-between text-xs">
+          <span className="text-fg-subtle">Courier fee (your cost)</span>
+          {typeof c.courierFee === "number" ? <span className="tabular-nums">{money(c.courierFee)}</span> : <span className="text-fg-faint">Not recorded</span>}
+        </div>
       ) : null}
 
       <div className="space-y-0.5 border-t border-stroke/8 pt-2 text-xs">

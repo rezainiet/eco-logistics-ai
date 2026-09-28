@@ -45,6 +45,12 @@ const productSchema = new Schema(
     sku: { type: String, trim: true, maxlength: 64 },
     price: { type: Number, required: true, min: 0 },
     compareAtPrice: { type: Number, min: 0 },
+    /**
+     * What one unit costs the merchant (optional). Snapshotted onto order
+     * items as `unitCost` when an order is placed. Private: never part of a
+     * public (landing/checkout) payload.
+     */
+    costPrice: { type: Number, min: 0 },
     currency: { type: String, enum: PRODUCT_CURRENCIES, default: DEFAULT_CURRENCY, required: true },
     status: { type: String, enum: PRODUCT_STATUSES, default: "active", required: true },
     lowStockThreshold: { type: Number, min: 0, default: DEFAULT_LOW_STOCK_THRESHOLD },

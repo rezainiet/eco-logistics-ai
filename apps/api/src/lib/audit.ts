@@ -69,6 +69,9 @@ type AuditAction =
   | "product.archived"
   | "inventory.adjusted"
   | "order.landing_placed"
+  | "finance.entry_created"
+  | "finance.entry_updated"
+  | "finance.entry_voided"
   | "shopify.gdpr_webhook"
   | "shopify.gdpr_dispatch"
   | "merchant.gdpr_redact_customer"
@@ -133,7 +136,8 @@ type SubjectType =
   | "system"
   | "landing_template"
   | "landing_page"
-  | "product";
+  | "product"
+  | "finance_entry";
 
 export interface AuditEntry {
   /** Optional for system-level events that don't tie to one merchant. */

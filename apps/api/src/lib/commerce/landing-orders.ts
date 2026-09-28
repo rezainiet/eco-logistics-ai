@@ -216,6 +216,8 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
       price: p.price,
       productId: p._id,
       ...(p.imageAssetId ? { imageAssetId: p.imageAssetId } : {}),
+      // Cost snapshot for accounting; absent when the product has no cost price.
+      ...(typeof p.costPrice === "number" ? { unitCost: p.costPrice } : {}),
     };
   });
   const round2 = (n: number) => Math.round(n * 100) / 100;

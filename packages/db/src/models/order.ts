@@ -49,6 +49,13 @@ const itemSchema = new Schema(
     /** Catalog product this line was bought from (landing-page orders). */
     productId: { type: Schema.Types.ObjectId, ref: "Product" },
     imageAssetId: { type: Schema.Types.ObjectId },
+    /**
+     * Product cost per unit at order time — a snapshot of Product.costPrice,
+     * so later cost edits never change it. Absent = cost not recorded
+     * (older orders, products without a cost, free-text items); accounting
+     * reports those as missing, never as zero.
+     */
+    unitCost: { type: Number, min: 0 },
   },
   { _id: false }
 );
@@ -148,6 +155,12 @@ const logisticsSchema = new Schema(
      * booked before this field existed.
      */
     providerOrderId: { type: String, trim: true, maxlength: 100 },
+    /**
+     * Delivery fee the courier quoted when the parcel was booked
+     * (AWBResponse.fee), in the order's currency. Absent = not recorded
+     * (older bookings, couriers whose booking response has no fee).
+     */
+    courierFee: { type: Number, min: 0 },
     estimatedDelivery: { type: Date },
     actualDelivery: { type: Date },
     /** Stamped when bookSingleShipment succeeds — used to compute delivery hours. */

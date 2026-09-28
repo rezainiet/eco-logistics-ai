@@ -541,6 +541,11 @@ export async function bookSingleShipment(args: {
         ...(awb.estimatedDeliveryAt
           ? { "logistics.estimatedDelivery": awb.estimatedDeliveryAt }
           : {}),
+        // The courier's quoted fee, for accounting. Only a real number is
+        // stored — couriers that don't return a fee leave it "not recorded".
+        ...(typeof awb.fee === "number" && Number.isFinite(awb.fee) && awb.fee >= 0
+          ? { "logistics.courierFee": awb.fee }
+          : {}),
       },
       $inc: { version: 1 },
     },
@@ -1556,7 +1561,11 @@ export const ordersRouter = router({
             lineTotal: Math.round(i.price * i.quantity * 100) / 100,
             productId: i.productId ? String(i.productId) : null,
             imageUrl: assetUrlOf(i.imageAssetId),
+            /** Cost per unit recorded when the order was placed; null = not recorded. */
+            unitCost: typeof i.unitCost === "number" ? i.unitCost : null,
           })),
+          /** Courier fee recorded at booking; null = not recorded. */
+          courierFee: typeof order.logistics?.courierFee === "number" ? order.logistics.courierFee : null,
           currency: order.order.currency ?? "BDT",
           subtotal: order.order.subtotal ?? null,
           deliveryCharge: order.order.deliveryCharge ?? null,
@@ -2245,6 +2254,12 @@ export const ordersRouter = router({
         });
       }
       order.order.status = input.status;
+      // Revenue is recognized on delivery: stamp when it happened (the
+      // courier path stamps it too). Saved under the same status CAS below.
+      if (input.status === "delivered" && !order.logistics?.deliveredAt) {
+        order.logistics = order.logistics ?? {};
+        order.logistics.deliveredAt = new Date();
+      }
     }
     if (input.customer) {
       Object.assign(order.customer, input.customer);

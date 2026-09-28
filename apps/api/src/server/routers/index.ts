@@ -19,6 +19,7 @@ import { recoveryRouter } from "./recovery.js";
 import { feedbackRouter } from "./feedback.js";
 import { landingPagesRouter, publicLandingRouter } from "./landingPages.js";
 import { productsRouter } from "./products.js";
+import { financeRouter } from "./finance.js";
 import { adminLandingTemplatesRouter } from "./adminLandingTemplates.js";
 import {
   adminBrandingRouter,
@@ -54,6 +55,7 @@ export const appRouter = router({
   // management, and the unauthenticated host resolver used by apps/sites.
   landingPages: landingPagesRouter,
   products: productsRouter,
+  finance: financeRouter,
   adminLandingTemplates: adminLandingTemplatesRouter,
   publicLanding: publicLandingRouter,
 });
