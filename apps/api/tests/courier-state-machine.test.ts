@@ -329,11 +329,16 @@ describe("Steadfast 'cancelled' → return journey → merchant marks Returned",
 
     const caller = merchantCaller(merchant);
     const returned = await fresh(orderId);
-    await Promise.all([
+    const [manual, courier, reconcile] = await Promise.allSettled([
       caller.orders.updateOrder({ id: String(orderId), status: "rto" }),
       applyTrackingEvents(returned, "rto", [{ at: new Date(), providerStatus: "returned" }], { source: "poll" }),
       reconcileOrderInventory(orderId),
     ]);
+    expect(courier.status).toBe("fulfilled");
+    expect(reconcile.status).toBe("fulfilled");
+    // Whichever writer lands rto first wins; a manual write that lost the
+    // compare-and-set is refused as stale rather than rewriting the status.
+    if (manual.status === "rejected") expect(manual.reason).toMatchObject({ code: "CONFLICT" });
     const s = await state(orderId, productId);
     expect(s).toMatchObject({ status: "rto", inventoryState: "released", reserved: 0, onHand: 10 });
     expect(s.moves).toEqual(["ORDER_RESERVED", "RETURNED"]);

@@ -2256,7 +2256,24 @@ export const ordersRouter = router({
       if (input.rtoReason !== undefined) order.logistics.rtoReason = input.rtoReason;
     }
 
-    await order.save();
+    if (nextStatus !== prevStatus) {
+      // Compare-and-set: the write only lands while the order is still in
+      // the status the transition was checked against. A courier event or
+      // another request that moved it in between wins; this one is stale
+      // and runs none of the side effects below (stats, stock, rescore).
+      order.$where = { merchantId, "order.status": prevStatus };
+    }
+    try {
+      await order.save();
+    } catch (err) {
+      if ((err as Error)?.name === "DocumentNotFoundError") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "order status changed since it was loaded — refresh and try again",
+        });
+      }
+      throw err;
+    }
 
     if (nextStatus !== prevStatus) {
       // Stock follows the status (release on cancel/RTO, fulfil on delivery).
