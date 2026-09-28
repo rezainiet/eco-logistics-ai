@@ -1563,6 +1563,9 @@ export const ordersRouter = router({
             imageUrl: assetUrlOf(i.imageAssetId),
             /** Cost per unit recorded when the order was placed; null = not recorded. */
             unitCost: typeof i.unitCost === "number" ? i.unitCost : null,
+            /** Variant bought (products with variants), as snapshotted at order time. */
+            variantId: i.variantId ? String(i.variantId) : null,
+            variantLabel: i.variantLabel ?? null,
           })),
           /** Courier fee recorded at booking; null = not recorded. */
           courierFee: typeof order.logistics?.courierFee === "number" ? order.logistics.courierFee : null,

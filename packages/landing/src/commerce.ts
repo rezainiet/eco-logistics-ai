@@ -21,6 +21,27 @@ export const MAX_PAGE_PRODUCTS = 24;
 
 export type CatalogStockStatus = "in_stock" | "low_stock" | "out_of_stock";
 
+/** One buyable combination of a product with variants. Public data only (never cost). */
+export interface CatalogVariant {
+  id: string;
+  /** One value per product option, in the product's option order. */
+  optionValues: string[];
+  /** "Red / M" */
+  label: string;
+  price: number;
+  compareAtPrice: number | null;
+  /** Variant image; null = show the product's image. */
+  imageAssetId: string | null;
+  available: boolean;
+  stockStatus: CatalogStockStatus;
+  maxQuantity: number;
+}
+
+export interface CatalogOption {
+  name: string;
+  values: string[];
+}
+
 /** A product as a published page (and its preview) shows it. Public data only. */
 export interface CatalogProduct {
   id: string;
@@ -38,7 +59,18 @@ export interface CatalogProduct {
   badge: string | null;
   ctaText: string | null;
   featured: boolean;
+  /**
+   * Variant dimensions and combinations; empty/absent for a simple product.
+   * With variants, `price` is the lowest variant price (`priceFrom` when
+   * variants differ) and a customer must pick a variant to buy.
+   */
+  options?: CatalogOption[];
+  variants?: CatalogVariant[];
+  priceFrom?: boolean;
 }
+
+/** Most variants a public catalog entry carries. */
+export const MAX_CATALOG_VARIANTS = 100;
 
 /** A page's product link: the reference plus display-only overrides. */
 export interface PageProductRef {
@@ -99,9 +131,53 @@ export function parseCatalog(data: unknown): CatalogProduct[] {
       badge: str(p.badge, 24) || null,
       ctaText: str(p.ctaText, 40) || null,
       featured: p.featured === true,
+      ...parseVariants(p),
     });
   }
   return out;
+}
+
+/** Re-validates the variant part of an untrusted catalog entry. */
+function parseVariants(p: Record<string, unknown>): Pick<CatalogProduct, "options" | "variants" | "priceFrom"> {
+  const options: CatalogOption[] = Array.isArray(p.options)
+    ? p.options.slice(0, 3).flatMap((o) => {
+        const r = (o ?? {}) as Record<string, unknown>;
+        const name = str(r.name, 30);
+        const values = Array.isArray(r.values) ? r.values.slice(0, 20).map((v) => str(v, 30)).filter(Boolean) : [];
+        return name && values.length ? [{ name, values }] : [];
+      })
+    : [];
+  if (!options.length || !Array.isArray(p.variants)) return {};
+  const variants: CatalogVariant[] = [];
+  for (const raw of p.variants.slice(0, MAX_CATALOG_VARIANTS)) {
+    const v = (raw ?? {}) as Record<string, unknown>;
+    const id = str(v.id, 24);
+    const price = numOrNull(v.price);
+    const values = Array.isArray(v.optionValues) ? v.optionValues.map((x) => str(x, 30)) : [];
+    if (!OBJECT_ID_RE.test(id) || price === null || values.length !== options.length) continue;
+    if (values.some((x, i) => !options[i]!.values.includes(x))) continue;
+    const stock = v.stockStatus === "low_stock" || v.stockStatus === "out_of_stock" ? v.stockStatus : "in_stock";
+    const available = v.available === true && stock !== "out_of_stock";
+    const max = typeof v.maxQuantity === "number" && Number.isInteger(v.maxQuantity) ? v.maxQuantity : 0;
+    const image = str(v.imageAssetId, 24);
+    variants.push({
+      id,
+      optionValues: values,
+      label: values.join(" / "),
+      price,
+      compareAtPrice: numOrNull(v.compareAtPrice),
+      imageAssetId: OBJECT_ID_RE.test(image) ? image : null,
+      available,
+      stockStatus: stock,
+      maxQuantity: available ? Math.max(0, Math.min(MAX_LINE_QUANTITY, max)) : 0,
+    });
+  }
+  return variants.length ? { options, variants, priceFrom: p.priceFrom === true } : {};
+}
+
+/** The variant a customer picked, by option values (exact match). */
+export function findVariant(product: Pick<CatalogProduct, "variants">, values: ReadonlyArray<string>): CatalogVariant | undefined {
+  return (product.variants ?? []).find((v) => v.optionValues.length === values.length && v.optionValues.every((x, i) => x === values[i]));
 }
 
 /** Delivery zones with a charge, from the page's delivery section(s). */
@@ -144,6 +220,12 @@ export function normalizeBdMobile(raw: unknown): string | null {
 /** Customer-facing commerce words (cart, checkout, stock). */
 export interface CommerceStrings {
   addToCart: string;
+  /** Product with variants: the card button and the picker title. */
+  chooseOptions: string;
+  /** Prompt under an option that has no value picked yet. */
+  chooseValue: (option: string) => string;
+  /** "From ৳450" when variant prices differ. */
+  fromPrice: string;
   orderNow: string;
   inStock: string;
   lowStock: string;
@@ -203,6 +285,9 @@ export interface CommerceStrings {
 
 const en: CommerceStrings = {
   addToCart: "Add to cart",
+  chooseOptions: "Choose options",
+  chooseValue: (option) => `Select ${option}`,
+  fromPrice: "From",
   orderNow: "Order now",
   inStock: "In stock",
   lowStock: "Low stock",
@@ -262,6 +347,9 @@ const en: CommerceStrings = {
 
 const bn: CommerceStrings = {
   addToCart: "কার্টে যোগ করুন",
+  chooseOptions: "অপশন বেছে নিন",
+  chooseValue: (option) => `${option} বেছে নিন`,
+  fromPrice: "শুরু",
   orderNow: "অর্ডার করুন",
   inStock: "স্টকে আছে",
   lowStock: "স্টক কম",

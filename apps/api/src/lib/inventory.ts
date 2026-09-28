@@ -16,8 +16,13 @@ import { InventoryMovement, type InventoryMovementType, Order, Product } from "@
  *   onHand ≥ 0,  reserved ≥ 0,  onHand − reserved (available) ≥ 0
  *
  * Order-driven movements carry a key "<orderId>:<cycle>:<type>:<productId>"
- * that is unique per merchant, so replays (webhook retries, double
- * clicks, a second status write) can never apply the same movement twice.
+ * (plus ":<variantId>" for a variant line) that is unique per merchant, so
+ * replays (webhook retries, double clicks, a second status write) can never
+ * apply the same movement twice.
+ *
+ * Products with variants keep stock per variant: the same guards and ledger
+ * apply to the one variant (`variantId`), updated in place inside the
+ * product document.
  */
 
 export type InventoryErrorCode = "insufficient_stock" | "product_not_found" | "below_reserved" | "invalid_quantity";
@@ -35,6 +40,8 @@ export class InventoryError extends Error {
 interface Delta {
   merchantId: Types.ObjectId;
   productId: Types.ObjectId;
+  /** Set for a product with variants: the variant whose stock moves. */
+  variantId?: Types.ObjectId;
   onHandDelta: number;
   reservedDelta: number;
   type: InventoryMovementType;
@@ -48,6 +55,7 @@ interface Delta {
 }
 
 async function applyDelta(d: Delta, session: ClientSession) {
+  if (d.variantId) return applyVariantDelta(d as Delta & { variantId: Types.ObjectId }, session);
   const onHand = { $add: ["$inventory.onHand", d.onHandDelta] };
   const reserved = { $add: ["$inventory.reserved", d.reservedDelta] };
   const updated = await Product.findOneAndUpdate(
@@ -67,6 +75,47 @@ async function applyDelta(d: Delta, session: ClientSession) {
     if (!exists) throw new InventoryError("product_not_found", String(d.productId));
     throw new InventoryError(d.reservedDelta > 0 ? "insufficient_stock" : "below_reserved", String(d.productId));
   }
+  await recordMovement(d, updated.inventory, session);
+  return updated.inventory;
+}
+
+/**
+ * Same guarantees for one variant: the filter re-checks the invariants on
+ * THAT variant (and that it exists, belongs to this merchant's product and —
+ * for reservations — that product and variant are active); the update
+ * increments only that variant's numbers.
+ */
+async function applyVariantDelta(d: Delta & { variantId: Types.ObjectId }, session: ClientSession) {
+  const v = { $arrayElemAt: [{ $filter: { input: { $ifNull: ["$variants", []] }, as: "x", cond: { $eq: ["$$x._id", d.variantId] } } }, 0] };
+  const onHand = { $add: ["$$v.inventory.onHand", d.onHandDelta] };
+  const reserved = { $add: ["$$v.inventory.reserved", d.reservedDelta] };
+  const updated = await Product.findOneAndUpdate(
+    {
+      _id: d.productId,
+      merchantId: d.merchantId,
+      variants: { $elemMatch: { _id: d.variantId, ...(d.requireActive ? { status: "active" } : {}) } },
+      ...(d.requireActive ? { status: "active" } : {}),
+      $expr: {
+        $let: {
+          vars: { v },
+          in: { $and: [{ $gte: [onHand, 0] }, { $gte: [reserved, 0] }, { $gte: [{ $subtract: [onHand, reserved] }, 0] }] },
+        },
+      },
+    },
+    { $inc: { "variants.$[v].inventory.onHand": d.onHandDelta, "variants.$[v].inventory.reserved": d.reservedDelta } },
+    { new: true, session, projection: { variants: 1 }, arrayFilters: [{ "v._id": d.variantId }] },
+  ).lean();
+  const after = updated?.variants?.find((x) => String(x._id) === String(d.variantId))?.inventory;
+  if (!updated || !after) {
+    const exists = await Product.exists({ _id: d.productId, merchantId: d.merchantId, "variants._id": d.variantId }).session(session);
+    if (!exists) throw new InventoryError("product_not_found", String(d.productId));
+    throw new InventoryError(d.reservedDelta > 0 ? "insufficient_stock" : "below_reserved", String(d.productId));
+  }
+  await recordMovement(d, after, session);
+  return after;
+}
+
+async function recordMovement(d: Delta, after: { onHand: number; reserved: number }, session: ClientSession) {
   await InventoryMovement.create(
     [
       {
@@ -75,8 +124,9 @@ async function applyDelta(d: Delta, session: ClientSession) {
         type: d.type,
         onHandDelta: d.onHandDelta,
         reservedDelta: d.reservedDelta,
-        onHandAfter: updated.inventory.onHand,
-        reservedAfter: updated.inventory.reserved,
+        onHandAfter: after.onHand,
+        reservedAfter: after.reserved,
+        ...(d.variantId ? { variantId: d.variantId } : {}),
         ...(d.orderId ? { orderId: d.orderId } : {}),
         ...(d.key ? { key: d.key } : {}),
         ...(d.reason ? { reason: d.reason } : {}),
@@ -86,7 +136,6 @@ async function applyDelta(d: Delta, session: ClientSession) {
     ],
     { session },
   );
-  return updated.inventory;
 }
 
 /** Runs `fn` in a transaction (retried by the driver on transient conflicts). */
@@ -112,6 +161,8 @@ export type StockAdjustmentType = "INITIAL_STOCK" | "RESTOCK" | "MANUAL_ADJUSTME
 export async function adjustStock(input: {
   merchantId: Types.ObjectId;
   productId: Types.ObjectId;
+  /** Required for a product with variants: the variant to adjust. */
+  variantId?: Types.ObjectId;
   type: StockAdjustmentType;
   delta: number;
   reason?: string;
@@ -126,6 +177,7 @@ export async function adjustStock(input: {
       {
         merchantId: input.merchantId,
         productId: input.productId,
+        ...(input.variantId ? { variantId: input.variantId } : {}),
         onHandDelta: input.delta,
         reservedDelta: 0,
         type: input.type,
@@ -138,21 +190,34 @@ export async function adjustStock(input: {
   );
 }
 
-type OrderLine = { productId?: unknown; quantity: number };
+type OrderLine = { productId?: unknown; variantId?: unknown; quantity: number };
+export type StockLine = { productId: Types.ObjectId; variantId?: Types.ObjectId; quantity: number };
 
-/** Sums quantities per catalog product; lines without a productId hold no stock. */
-export function stockLines(items: ReadonlyArray<OrderLine>): Array<{ productId: Types.ObjectId; quantity: number }> {
-  const byId = new Map<string, number>();
+/**
+ * Sums quantities per stock-keeping unit — a catalog product, or one
+ * variant of it; lines without a productId hold no stock.
+ */
+export function stockLines(items: ReadonlyArray<OrderLine>): StockLine[] {
+  const byKey = new Map<string, { productId: string; variantId?: string; quantity: number }>();
   for (const it of items) {
     if (!it.productId) continue;
-    const id = String(it.productId);
-    byId.set(id, (byId.get(id) ?? 0) + it.quantity);
+    const productId = String(it.productId);
+    const variantId = it.variantId ? String(it.variantId) : undefined;
+    const key = variantId ? `${productId}:${variantId}` : productId;
+    const cur = byKey.get(key) ?? { productId, variantId, quantity: 0 };
+    cur.quantity += it.quantity;
+    byKey.set(key, cur);
   }
-  return [...byId].map(([id, quantity]) => ({ productId: new Types.ObjectId(id), quantity }));
+  return [...byKey.values()].map((l) => ({
+    productId: new Types.ObjectId(l.productId),
+    ...(l.variantId ? { variantId: new Types.ObjectId(l.variantId) } : {}),
+    quantity: l.quantity,
+  }));
 }
 
-const movementKey = (orderId: Types.ObjectId, cycle: number, type: InventoryMovementType, productId: Types.ObjectId) =>
-  `${orderId}:${cycle}:${type}:${productId}`;
+/** Simple-product keys are unchanged from before variants existed; variant lines add ":<variantId>". */
+const movementKey = (orderId: Types.ObjectId, cycle: number, type: InventoryMovementType, line: StockLine) =>
+  `${orderId}:${cycle}:${type}:${line.productId}${line.variantId ? `:${line.variantId}` : ""}`;
 
 /**
  * Reserve stock for a new order, inside the caller's transaction (the same
@@ -170,11 +235,12 @@ export async function reserveOrderStock(
       {
         merchantId: args.merchantId,
         productId: line.productId,
+        ...(line.variantId ? { variantId: line.variantId } : {}),
         onHandDelta: 0,
         reservedDelta: line.quantity,
         type: "ORDER_RESERVED",
         orderId: args.orderId,
-        key: movementKey(args.orderId, cycle, "ORDER_RESERVED", line.productId),
+        key: movementKey(args.orderId, cycle, "ORDER_RESERVED", line),
         requireActive: true,
         actorType: "customer",
       },
@@ -240,11 +306,11 @@ export async function reconcileOrderInventory(
       );
       if (cas.modifiedCount !== 1) throw new Superseded();
       for (const line of lines) {
-        const base = { merchantId, productId: line.productId, orderId: id };
+        const base = { merchantId, productId: line.productId, ...(line.variantId ? { variantId: line.variantId } : {}), orderId: id };
         if (to === "released") {
           const type: InventoryMovementType = order.order.status === "rto" ? "RETURNED" : "ORDER_CANCELLED";
           await applyDelta(
-            { ...base, onHandDelta: 0, reservedDelta: -line.quantity, type, key: movementKey(id, cycle, "ORDER_CANCELLED", line.productId) },
+            { ...base, onHandDelta: 0, reservedDelta: -line.quantity, type, key: movementKey(id, cycle, "ORDER_CANCELLED", line) },
             session,
           );
         } else if (to === "fulfilled") {
@@ -256,7 +322,7 @@ export async function reconcileOrderInventory(
               onHandDelta: -line.quantity,
               reservedDelta: from === "reserved" ? -line.quantity : 0,
               type: "ORDER_FULFILLED",
-              key: movementKey(id, cycle, "ORDER_FULFILLED", line.productId),
+              key: movementKey(id, cycle, "ORDER_FULFILLED", line),
             },
             session,
           );
@@ -267,7 +333,7 @@ export async function reconcileOrderInventory(
               onHandDelta: 0,
               reservedDelta: line.quantity,
               type: "ORDER_RESERVED",
-              key: movementKey(id, nextCycle, "ORDER_RESERVED", line.productId),
+              key: movementKey(id, nextCycle, "ORDER_RESERVED", line),
             },
             session,
           );

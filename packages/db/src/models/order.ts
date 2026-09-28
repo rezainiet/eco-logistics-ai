@@ -56,6 +56,18 @@ const itemSchema = new Schema(
      * reports those as missing, never as zero.
      */
     unitCost: { type: Number, min: 0 },
+    /**
+     * Variant bought (products with variants): its id, a readable label
+     * ("Red / M") and each option's value, snapshotted at order time so later
+     * product edits never change the order. `name` then already includes the
+     * label, so every existing view stays readable.
+     */
+    variantId: { type: Schema.Types.ObjectId },
+    variantLabel: { type: String, trim: true, maxlength: 120 },
+    variantOptions: {
+      type: [new Schema({ name: { type: String, trim: true, maxlength: 30 }, value: { type: String, trim: true, maxlength: 30 } }, { _id: false })],
+      default: undefined,
+    },
   },
   { _id: false }
 );

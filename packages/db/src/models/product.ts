@@ -27,6 +27,12 @@ export const DEFAULT_CURRENCY: ProductCurrency = "BDT";
 
 export const DEFAULT_LOW_STOCK_THRESHOLD = 5;
 
+/** Variant limits: dimensions per product, values per dimension, combinations. */
+export const MAX_VARIANT_OPTIONS = 3;
+export const MAX_OPTION_VALUES = 20;
+export const MAX_VARIANTS = 100;
+export const VARIANT_STATUSES = ["active", "inactive"] as const;
+
 const inventorySchema = new Schema(
   {
     onHand: { type: Number, required: true, default: 0, min: 0 },
@@ -34,6 +40,34 @@ const inventorySchema = new Schema(
   },
   { _id: false },
 );
+
+/** One variant dimension, e.g. { name: "Size", values: ["S", "M", "L"] }. */
+const optionSchema = new Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 30 },
+    values: { type: [{ type: String, trim: true, maxlength: 30 }], default: [] },
+  },
+  { _id: false },
+);
+
+/**
+ * One sellable combination, e.g. Color=Red / Size=M. `optionValues` lines up
+ * with the product's `options` (same order, one value each). Price, cost and
+ * SKU are optional and fall back to the product's; stock is the variant's
+ * own and — like product stock — only ever changed by the inventory library.
+ */
+const variantSchema = new Schema({
+  optionValues: { type: [{ type: String, trim: true, maxlength: 30 }], required: true },
+  sku: { type: String, trim: true, maxlength: 64 },
+  price: { type: Number, min: 0 },
+  compareAtPrice: { type: Number, min: 0 },
+  /** Private, like Product.costPrice. */
+  costPrice: { type: Number, min: 0 },
+  /** A LandingAsset of the same merchant. */
+  imageAssetId: { type: Schema.Types.ObjectId, ref: "LandingAsset" },
+  status: { type: String, enum: VARIANT_STATUSES, default: "active", required: true },
+  inventory: { type: inventorySchema, required: true, default: () => ({ onHand: 0, reserved: 0 }) },
+});
 
 const productSchema = new Schema(
   {
@@ -54,7 +88,15 @@ const productSchema = new Schema(
     currency: { type: String, enum: PRODUCT_CURRENCIES, default: DEFAULT_CURRENCY, required: true },
     status: { type: String, enum: PRODUCT_STATUSES, default: "active", required: true },
     lowStockThreshold: { type: Number, min: 0, default: DEFAULT_LOW_STOCK_THRESHOLD },
+    /**
+     * Stock of a product WITHOUT variants. A product with variants keeps its
+     * stock on each variant; this stays 0/0 for it.
+     */
     inventory: { type: inventorySchema, required: true, default: () => ({ onHand: 0, reserved: 0 }) },
+    /** Variant dimensions; absent = a simple product (no variants). */
+    options: { type: [optionSchema], default: undefined },
+    /** Variant combinations; absent/empty = a simple product. */
+    variants: { type: [variantSchema], default: undefined },
     archivedAt: { type: Date },
   },
   { timestamps: true, collection: "products" },
@@ -77,11 +119,25 @@ export function availableStock(inv: { onHand?: number | null; reserved?: number 
   return Math.max(0, (inv?.onHand ?? 0) - (inv?.reserved ?? 0));
 }
 
-export function stockStatusOf(p: {
+type StockShape = {
   inventory?: { onHand?: number | null; reserved?: number | null } | null;
   lowStockThreshold?: number | null;
-}): StockStatus {
-  const available = availableStock(p.inventory);
+  variants?: ReadonlyArray<{ status?: string | null; inventory?: { onHand?: number | null; reserved?: number | null } | null }> | null;
+};
+
+/** True when the product sells variants (stock and price live per variant). */
+export function hasVariants(p: { variants?: ReadonlyArray<unknown> | null }): boolean {
+  return Array.isArray(p.variants) && p.variants.length > 0;
+}
+
+/** Units that can still be sold: the product's own, or the sum over its active variants. */
+export function productAvailableStock(p: StockShape): number {
+  if (!hasVariants(p)) return availableStock(p.inventory);
+  return (p.variants ?? []).filter((v) => (v.status ?? "active") === "active").reduce((s, v) => s + availableStock(v.inventory), 0);
+}
+
+export function stockStatusOf(p: StockShape): StockStatus {
+  const available = productAvailableStock(p);
   if (available <= 0) return "out_of_stock";
   if (available <= (p.lowStockThreshold ?? DEFAULT_LOW_STOCK_THRESHOLD)) return "low_stock";
   return "in_stock";
@@ -110,6 +166,8 @@ const inventoryMovementSchema = new Schema(
   {
     merchantId: { type: Schema.Types.ObjectId, ref: "Merchant", required: true },
     productId: { type: Schema.Types.ObjectId, ref: "Product", required: true },
+    /** The variant whose stock moved (products with variants only). */
+    variantId: { type: Schema.Types.ObjectId },
     type: { type: String, enum: INVENTORY_MOVEMENT_TYPES, required: true },
     /** Change to on-hand units (signed). */
     onHandDelta: { type: Number, required: true, default: 0 },

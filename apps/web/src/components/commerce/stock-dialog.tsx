@@ -27,13 +27,21 @@ export function StockDialog({
   product,
   onOpenChange,
 }: {
-  product: { id: string; name: string; onHand: number; reserved: number; available: number } | null;
+  product: {
+    id: string;
+    name: string;
+    onHand: number;
+    reserved: number;
+    available: number;
+    variants?: Array<{ id: string; label: string; onHand: number; reserved: number; available: number; status: string }>;
+  } | null;
   onOpenChange: (open: boolean) => void;
 }) {
   const utils = trpc.useUtils();
   const [type, setType] = useState<"RESTOCK" | "MANUAL_ADJUSTMENT" | "RETURNED">("RESTOCK");
   const [qty, setQty] = useState("");
   const [reason, setReason] = useState("");
+  const [variantId, setVariantId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const open = !!product;
   const movements = trpc.products.movements.useQuery({ id: product?.id ?? "", limit: 50 }, { enabled: open });
@@ -45,6 +53,7 @@ export function StockDialog({
       setQty("");
       setReason("");
       setError(null);
+      setVariantId(product?.variants?.[0]?.id ?? "");
     }
   }, [open, product?.id]);
 
@@ -55,7 +64,7 @@ export function StockDialog({
     if (!Number.isInteger(n) || n === 0) return setError(type === "MANUAL_ADJUSTMENT" ? "Enter a whole number, e.g. 5 or -2." : "Enter a whole number of units.");
     if (type !== "MANUAL_ADJUSTMENT" && n < 0) return setError("Use Manual adjustment to remove units.");
     try {
-      const p = await adjust.mutateAsync({ id: product!.id, type, delta: n, reason: reason.trim() || undefined });
+      const p = await adjust.mutateAsync({ id: product!.id, type, delta: n, reason: reason.trim() || undefined, ...(variantId ? { variantId } : {}) });
       toast.success("Stock updated", `${p.name}: ${p.available} available`);
       setQty("");
       setReason("");
@@ -65,7 +74,11 @@ export function StockDialog({
     }
   };
 
-  const current = product ? (utils.products.list.getData()?.items.find((p) => p.id === product.id) ?? product) : null;
+  const listed = product ? (utils.products.list.getData()?.items.find((p) => p.id === product.id) ?? product) : null;
+  // A product with variants: the numbers (and the change) are the chosen variant's.
+  const variants = listed?.variants ?? [];
+  const current = variants.length ? (variants.find((v) => v.id === variantId) ?? variants[0]!) : listed;
+  const labelOf = (id: string | null | undefined) => variants.find((v) => v.id === id)?.label;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -89,6 +102,18 @@ export function StockDialog({
           </div>
         ) : null}
         <form onSubmit={submit} className="space-y-3" noValidate>
+          {variants.length ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="s-variant">Variant</Label>
+              <select id="s-variant" className={selectCls} value={variantId} onChange={(e) => setVariantId(e.target.value)}>
+                {variants.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label} — {v.available} available{v.status !== "active" ? " (inactive)" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_120px]">
             <div className="space-y-1.5">
               <Label htmlFor="s-type">Change</Label>
@@ -132,7 +157,10 @@ export function StockDialog({
               {movements.data!.map((m) => (
                 <li key={m.id} className="flex items-start justify-between gap-3 px-3 py-2">
                   <div className="min-w-0">
-                    <div className="font-medium">{MOVEMENT_LABEL[m.type] ?? m.type}</div>
+                    <div className="font-medium">
+                      {MOVEMENT_LABEL[m.type] ?? m.type}
+                      {labelOf(m.variantId) ? <span className="font-normal text-fg-subtle"> · {labelOf(m.variantId)}</span> : null}
+                    </div>
                     <div className="truncate text-xs text-fg-subtle">
                       {m.createdAt ? new Date(m.createdAt).toLocaleString() : ""}
                       {m.reason ? ` · ${m.reason}` : ""}

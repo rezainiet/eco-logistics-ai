@@ -1,7 +1,7 @@
 import mongoose, { Types } from "mongoose";
 import { orderAttribution } from "../marketing/attribution.js";
 import { MAX_CART_LINES, MAX_LINE_QUANTITY, normalizeBdMobile } from "@ecom/landing";
-import { Order, Product, availableStock } from "@ecom/db";
+import { Order, Product, availableStock, hasVariants } from "@ecom/db";
 import { writeAudit } from "../audit.js";
 import { InventoryError, reserveOrderStock } from "../inventory.js";
 import { afterOrderCreated, fraudDocFromRisk, generateOrderNumber, loadMerchantScoring, scoreOrderForCreate } from "../order-create.js";
@@ -34,7 +34,8 @@ export interface PlaceOrderInput {
   host: string;
   locale: string | null;
   idempotencyKey: string;
-  items: Array<{ productId: string; quantity: number; unitPrice?: number }>;
+  /** One line per product — or per variant of a product with variants. */
+  items: Array<{ productId: string; variantId?: string | null; quantity: number; unitPrice?: number }>;
   customer: { name: string; phone: string; address: string; district: string; email?: string | null; notes?: string | null };
   deliveryOptionId?: string | null;
   /**
@@ -56,9 +57,9 @@ export type PlaceOrderError =
   | { code: "invalid_customer"; fields: string[] }
   | { code: "invalid_delivery" }
   | { code: "not_on_page"; productIds: string[] }
-  | { code: "unavailable"; productIds: string[] }
-  | { code: "insufficient_stock"; productId: string; available: number }
-  | { code: "price_changed"; prices: Array<{ productId: string; price: number }> }
+  | { code: "unavailable"; productIds: string[]; variantIds?: string[] }
+  | { code: "insufficient_stock"; productId: string; variantId?: string; available: number }
+  | { code: "price_changed"; prices: Array<{ productId: string; variantId?: string; price: number }> }
   | { code: "mixed_currency" }
   | { code: "rate_limited" }
   | { code: "not_accepting_orders" };
@@ -71,7 +72,7 @@ export interface PlacedOrder {
   subtotal: number;
   deliveryCharge: number;
   total: number;
-  items: Array<{ productId: string; name: string; quantity: number; price: number }>;
+  items: Array<{ productId: string; variantId?: string; variantLabel?: string; name: string; quantity: number; price: number }>;
 }
 
 export type PlaceOrderResult = ({ ok: true } & PlacedOrder) | ({ ok: false } & PlaceOrderError);
@@ -130,6 +131,7 @@ function placedFrom(order: any, duplicate: boolean): PlacedOrder {
     total: order.order?.total ?? 0,
     items: (order.items ?? []).map((i: any) => ({
       productId: i.productId ? String(i.productId) : "",
+      ...(i.variantId ? { variantId: String(i.variantId), variantLabel: i.variantLabel ?? "" } : {}),
       name: i.name,
       quantity: i.quantity,
       price: i.price,
@@ -142,16 +144,25 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
   const key = typeof input?.idempotencyKey === "string" ? input.idempotencyKey : "";
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) return fail({ code: "invalid_request" });
   if (!Array.isArray(input.items) || input.items.length === 0 || input.items.length > MAX_CART_LINES) return fail({ code: "invalid_request" });
-  const qty = new Map<string, number>();
+  // Lines are keyed by product, or product + variant: the same variant merges,
+  // different variants of one product stay separate lines.
+  type Line = { productId: string; variantId?: string; quantity: number };
+  const lines = new Map<string, Line>();
   const clientPrice = new Map<string, number>();
   for (const line of input.items) {
     const id = typeof line?.productId === "string" ? line.productId : "";
+    const vid = line?.variantId == null ? undefined : typeof line.variantId === "string" ? line.variantId : "!";
     const q = line?.quantity;
-    if (!/^[a-f0-9]{24}$/.test(id) || !Number.isInteger(q) || q < 1 || q > MAX_LINE_QUANTITY) return fail({ code: "invalid_request" });
-    qty.set(id, (qty.get(id) ?? 0) + q);
-    if ((qty.get(id) ?? 0) > MAX_LINE_QUANTITY) return fail({ code: "invalid_request" });
-    if (typeof line.unitPrice === "number" && Number.isFinite(line.unitPrice)) clientPrice.set(id, line.unitPrice);
+    if (!/^[a-f0-9]{24}$/.test(id) || (vid !== undefined && !/^[a-f0-9]{24}$/.test(vid))) return fail({ code: "invalid_request" });
+    if (!Number.isInteger(q) || q < 1 || q > MAX_LINE_QUANTITY) return fail({ code: "invalid_request" });
+    const k = vid ? `${id}:${vid}` : id;
+    const cur = lines.get(k) ?? { productId: id, ...(vid ? { variantId: vid } : {}), quantity: 0 };
+    cur.quantity += q;
+    if (cur.quantity > MAX_LINE_QUANTITY) return fail({ code: "invalid_request" });
+    lines.set(k, cur);
+    if (typeof line.unitPrice === "number" && Number.isFinite(line.unitPrice)) clientPrice.set(k, line.unitPrice);
   }
+  const productIds = [...new Set([...lines.values()].map((l) => l.productId))];
 
   // ---- (8, 9) The page: published, merchant online; merchant comes from it --
   const page = await resolvePublishedForOrder(input.host, input.locale ?? null);
@@ -170,27 +181,63 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
 
   // ---- (10) Every product must be linked on the PUBLISHED page -------------
   const onPage = new Set(page.refs.map((r) => r.productId));
-  const notOnPage = [...qty.keys()].filter((id) => !onPage.has(id));
+  const notOnPage = productIds.filter((id) => !onPage.has(id));
   if (notOnPage.length) return fail({ code: "not_on_page", productIds: notOnPage });
 
   // ---- (1–4, 6, 7) Live products of THIS merchant ---------------------------
-  const products = await Product.find({ _id: { $in: [...qty.keys()].map((id) => new Types.ObjectId(id)) }, merchantId }).lean();
+  const products = await Product.find({ _id: { $in: productIds.map((id) => new Types.ObjectId(id)) }, merchantId }).lean();
   const byId = new Map(products.map((p) => [String(p._id), p]));
-  const unavailable = [...qty.keys()].filter((id) => {
-    const p = byId.get(id);
-    return !p || p.status !== "active" || availableStock(p.inventory) <= 0;
-  });
-  if (unavailable.length) return fail({ code: "unavailable", productIds: unavailable });
+  // Each line resolved against the SERVER's product / variant (never the browser's).
+  type ProductDoc = (typeof products)[number];
+  type VariantDoc = NonNullable<ProductDoc["variants"]>[number];
+  type Resolved = Line & { product: ProductDoc; variant?: VariantDoc };
+  const resolved = new Map<string, Resolved>();
+  const unavailableP = new Set<string>();
+  const unavailableV = new Set<string>();
+  for (const [k, l] of lines) {
+    const p = byId.get(l.productId);
+    if (!p || p.status !== "active") {
+      unavailableP.add(l.productId);
+      continue;
+    }
+    if (hasVariants(p)) {
+      // A product with variants is bought as one of its variants — never as itself.
+      if (!l.variantId) return fail({ code: "invalid_request" });
+      const v = p.variants!.find((x) => String(x._id) === l.variantId);
+      if (!v || v.status !== "active" || availableStock(v.inventory) <= 0) {
+        unavailableP.add(l.productId);
+        unavailableV.add(l.variantId);
+        continue;
+      }
+      resolved.set(k, { ...l, product: p, variant: v });
+    } else {
+      if (l.variantId) return fail({ code: "invalid_request" });
+      if (availableStock(p.inventory) <= 0) {
+        unavailableP.add(l.productId);
+        continue;
+      }
+      resolved.set(k, { ...l, product: p });
+    }
+  }
+  if (unavailableP.size) {
+    return fail({ code: "unavailable", productIds: [...unavailableP], ...(unavailableV.size ? { variantIds: [...unavailableV] } : {}) });
+  }
   const currencies = new Set(products.map((p) => p.currency ?? "BDT"));
   if (currencies.size !== 1) return fail({ code: "mixed_currency" });
-  const changed = [...clientPrice].filter(([id, price]) => byId.get(id)!.price !== price);
+  const priceOf = (r: Resolved) => r.variant?.price ?? r.product.price;
+  const changed = [...clientPrice].filter(([k, price]) => priceOf(resolved.get(k)!) !== price);
   if (changed.length) {
-    return fail({ code: "price_changed", prices: [...qty.keys()].map((id) => ({ productId: id, price: byId.get(id)!.price })) });
+    return fail({
+      code: "price_changed",
+      prices: [...resolved.values()].map((r) => ({ productId: r.productId, ...(r.variantId ? { variantId: r.variantId } : {}), price: priceOf(r) })),
+    });
   }
   // (5) Early, friendly stock check — the reservation below is the real guard.
-  for (const [id, q] of qty) {
-    const available = availableStock(byId.get(id)!.inventory);
-    if (q > available) return fail({ code: "insufficient_stock", productId: id, available });
+  for (const r of resolved.values()) {
+    const available = availableStock(r.variant ? r.variant.inventory : r.product.inventory);
+    if (r.quantity > available) {
+      return fail({ code: "insufficient_stock", productId: r.productId, ...(r.variantId ? { variantId: r.variantId } : {}), available });
+    }
   }
 
   // ---- Delivery charge from the published page's own zones ------------------
@@ -217,17 +264,30 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
 
   // ---- Price snapshot + totals (server values only) --------------------------
   const currency = [...currencies][0]!;
-  const items = [...qty].map(([id, quantity]) => {
-    const p = byId.get(id)!;
+  const items = [...resolved.values()].map((r) => {
+    const p = r.product;
+    const v = r.variant;
+    const label = v ? v.optionValues.join(" / ") : "";
+    const sku = v?.sku ?? p.sku;
+    const image = v?.imageAssetId ?? p.imageAssetId;
+    const cost = v?.costPrice ?? p.costPrice;
     return {
-      name: p.name,
-      ...(p.sku ? { sku: p.sku } : {}),
-      quantity,
-      price: p.price,
+      // With a variant the name carries its label, so every existing view stays readable.
+      name: v ? `${p.name} (${label})` : p.name,
+      ...(sku ? { sku } : {}),
+      quantity: r.quantity,
+      price: priceOf(r),
       productId: p._id,
-      ...(p.imageAssetId ? { imageAssetId: p.imageAssetId } : {}),
-      // Cost snapshot for accounting; absent when the product has no cost price.
-      ...(typeof p.costPrice === "number" ? { unitCost: p.costPrice } : {}),
+      ...(image ? { imageAssetId: image } : {}),
+      // Cost snapshot for accounting: the variant's, else the product's; absent when neither has one.
+      ...(typeof cost === "number" ? { unitCost: cost } : {}),
+      ...(v
+        ? {
+            variantId: v._id,
+            variantLabel: label,
+            variantOptions: (p.options ?? []).map((o, i) => ({ name: o.name, value: v.optionValues[i] ?? "" })),
+          }
+        : {}),
     };
   });
   const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -295,8 +355,15 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
     });
   } catch (err) {
     if (err instanceof InventoryError && err.code === "insufficient_stock") {
-      const p = await Product.findOne({ _id: err.productId, merchantId }).select("inventory").lean();
-      return fail({ code: "insufficient_stock", productId: err.productId ?? "", available: availableStock(p?.inventory) });
+      const p = await Product.findOne({ _id: err.productId, merchantId }).select("inventory variants").lean();
+      const line = [...resolved.values()].find((r) => r.productId === err.productId && r.variantId);
+      const v = line ? p?.variants?.find((x) => String(x._id) === line.variantId) : undefined;
+      return fail({
+        code: "insufficient_stock",
+        productId: err.productId ?? "",
+        ...(line?.variantId ? { variantId: line.variantId } : {}),
+        available: availableStock(v ? v.inventory : p?.inventory),
+      });
     }
     if (err instanceof InventoryError) return fail({ code: "unavailable", productIds: err.productId ? [err.productId] : [] });
     const code = (err as { code?: number })?.code;

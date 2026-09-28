@@ -73,16 +73,20 @@ export { isEditPath, resolveEditTarget } from "./edit-target.js";
 
 export {
   MAX_CART_LINES,
+  MAX_CATALOG_VARIANTS,
   MAX_LINE_QUANTITY,
   MAX_PAGE_PRODUCTS,
   commerceStrings,
   deliveryOptions,
+  findVariant,
   formatMoney,
   normalizeBdMobile,
   parseCatalog,
 } from "./commerce.js";
 export type {
+  CatalogOption,
   CatalogProduct,
+  CatalogVariant,
   CatalogStockStatus,
   CommerceStrings,
   DeliveryOption,

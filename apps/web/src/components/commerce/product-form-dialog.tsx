@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ImagePlus, Loader2, X } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
+import { type OptionRow, type VariantRow, VariantsEditor, splitValues } from "./variants-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,6 +28,19 @@ export interface ProductLike {
   currency: string;
   status: string;
   lowStockThreshold: number;
+  hasVariants?: boolean;
+  options?: Array<{ name: string; values: string[] }>;
+  variants?: Array<{
+    id: string;
+    optionValues: string[];
+    price: number | null;
+    sku: string | null;
+    imageAssetId: string | null;
+    imageUrl: string | null;
+    status: string;
+    onHand: number;
+    reserved: number;
+  }>;
 }
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -69,6 +83,9 @@ export function ProductFormDialog({
   const [threshold, setThreshold] = useState("5");
   const [initialStock, setInitialStock] = useState("0");
   const [image, setImage] = useState<{ id: string; url: string | null } | null>(null);
+  const [variantsOn, setVariantsOn] = useState(false);
+  const [options, setOptions] = useState<OptionRow[]>([{ name: "", values: "" }]);
+  const [rows, setRows] = useState<VariantRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -85,6 +102,22 @@ export function ProductFormDialog({
     setThreshold(String(product?.lowStockThreshold ?? 5));
     setInitialStock("0");
     setImage(product?.imageAssetId ? { id: product.imageAssetId, url: product.imageUrl } : null);
+    setVariantsOn(!!product?.hasVariants);
+    setOptions(product?.options?.length ? product.options.map((o) => ({ name: o.name, values: o.values.join(", ") })) : [{ name: "", values: "" }]);
+    setRows(
+      (product?.variants ?? []).map((v) => ({
+        id: v.id,
+        optionValues: v.optionValues,
+        price: v.price != null ? String(v.price) : "",
+        sku: v.sku ?? "",
+        initialStock: "0",
+        onHand: v.onHand,
+        reserved: v.reserved,
+        imageAssetId: v.imageAssetId,
+        imageUrl: v.imageUrl,
+        active: v.status === "active",
+      })),
+    );
     setError(null);
   }, [open, product]);
 
@@ -116,7 +149,31 @@ export function ProductFormDialog({
     const th = Number(threshold);
     if (!Number.isInteger(th) || th < 0) return setError("Low-stock alert must be a whole number.");
     const stock = Number(initialStock);
-    if (!editing && (!Number.isInteger(stock) || stock < 0)) return setError("Stock must be a whole number.");
+    if (!editing && !variantsOn && (!Number.isInteger(stock) || stock < 0)) return setError("Stock must be a whole number.");
+    let variants: { options: Array<{ name: string; values: string[] }>; variants: Array<Record<string, unknown>> } | undefined;
+    if (variantsOn) {
+      const opts = options.map((o) => ({ name: o.name.trim(), values: splitValues(o.values) }));
+      if (opts.some((o) => !o.name || !o.values.length)) return setError("Give every option a name and at least one value.");
+      if (!rows.length) return setError("Build the variant combinations first.");
+      const out: Array<Record<string, unknown>> = [];
+      for (const r of rows) {
+        const vp = num(r.price);
+        if (vp !== null && (!Number.isFinite(vp) || vp < 0)) return setError(`Enter a valid price for ${r.optionValues.join(" / ")}.`);
+        const st = Number(r.initialStock || "0");
+        if (!r.id && (!Number.isInteger(st) || st < 0)) return setError(`Stock of ${r.optionValues.join(" / ")} must be a whole number.`);
+        out.push({
+          ...(r.id ? { id: r.id } : { initialStock: st }),
+          optionValues: r.optionValues,
+          price: vp,
+          sku: r.sku.trim() || null,
+          imageAssetId: r.imageAssetId,
+          status: r.active ? "active" : "inactive",
+        });
+      }
+      variants = { options: opts, variants: out };
+    } else if (product?.hasVariants) {
+      variants = { options: [], variants: [] }; // back to a simple product (the server refuses if variants hold stock)
+    }
     const fields = {
       name: name.trim(),
       description: description.trim(),
@@ -128,9 +185,10 @@ export function ProductFormDialog({
       currency: currency as "BDT" | "USD",
       status: status as "draft" | "active" | "inactive",
       lowStockThreshold: th,
+      ...(variants ? { variants: variants as never } : {}),
     };
     try {
-      const saved = editing ? await update.mutateAsync({ id: product!.id, ...fields }) : await create.mutateAsync({ ...fields, initialStock: stock });
+      const saved = editing ? await update.mutateAsync({ id: product!.id, ...fields }) : await create.mutateAsync({ ...fields, initialStock: variantsOn ? 0 : stock });
       toast.success(editing ? "Product updated" : "Product created", saved.name);
       await utils.products.list.invalidate();
       onOpenChange(false);
@@ -142,7 +200,7 @@ export function ProductFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-xl overflow-y-auto">
+      <DialogContent className={`max-h-[92vh] overflow-y-auto ${variantsOn ? "max-w-3xl" : "max-w-xl"}`}>
         <DialogHeader>
           <DialogTitle>{editing ? "Edit product" : "Create product"}</DialogTitle>
           <DialogDescription>
@@ -219,13 +277,26 @@ export function ProductFormDialog({
               <Label htmlFor="p-th">Low-stock alert at</Label>
               <Input id="p-th" inputMode="numeric" value={threshold} onChange={(e) => setThreshold(e.target.value)} />
             </div>
-            {!editing ? (
+            {!editing && !variantsOn ? (
               <div className="space-y-1.5">
                 <Label htmlFor="p-stock">Stock on hand</Label>
                 <Input id="p-stock" inputMode="numeric" value={initialStock} onChange={(e) => setInitialStock(e.target.value)} />
               </div>
             ) : null}
           </div>
+          <VariantsEditor
+            enabled={variantsOn}
+            onEnabledChange={(on) => {
+              setVariantsOn(on);
+              if (on && !rows.length) setOptions((o) => (o.length ? o : [{ name: "", values: "" }]));
+            }}
+            options={options}
+            onOptionsChange={setOptions}
+            rows={rows}
+            onRowsChange={setRows}
+            basePrice={price}
+            editing={editing}
+          />
           {editing ? <p className="text-xs text-fg-subtle">Stock is changed with “Adjust stock”, so every change is recorded.</p> : null}
           {error ? (
             <p role="alert" className="rounded-md bg-danger-subtle px-3 py-2 text-sm text-danger">

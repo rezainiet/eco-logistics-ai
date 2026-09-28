@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
-import { LandingAsset, type Product, availableStock, stockStatusOf } from "@ecom/db";
+import { LandingAsset, type Product, availableStock, hasVariants, stockStatusOf } from "@ecom/db";
+import { variantView } from "./variants.js";
 import { landingAssetBaseUrl } from "../landing/resolve.js";
 
 /**
@@ -15,11 +16,13 @@ export function assetUrlOf(assetId: unknown): string | null {
 
 type ProductDoc = Pick<
   Product,
-  "_id" | "name" | "description" | "imageAssetId" | "sku" | "price" | "compareAtPrice" | "costPrice" | "currency" | "status" | "lowStockThreshold" | "inventory"
+  "_id" | "name" | "description" | "imageAssetId" | "sku" | "price" | "compareAtPrice" | "costPrice" | "currency" | "status" | "lowStockThreshold" | "inventory" | "options" | "variants"
 > & { createdAt?: Date; updatedAt?: Date };
 
 /** Merchant-facing product shape (dashboard). */
 export function productView(p: ProductDoc) {
+  const variants = hasVariants(p) ? (p.variants ?? []).map((v) => variantView(p, v)) : [];
+  const active = variants.filter((v) => v.status === "active");
   return {
     id: String(p._id),
     name: p.name,
@@ -34,10 +37,14 @@ export function productView(p: ProductDoc) {
     currency: p.currency ?? "BDT",
     status: p.status,
     lowStockThreshold: p.lowStockThreshold ?? 5,
-    onHand: p.inventory?.onHand ?? 0,
-    reserved: p.inventory?.reserved ?? 0,
-    available: availableStock(p.inventory),
+    // A product with variants: totals over its (active) variants.
+    onHand: variants.length ? active.reduce((s, v) => s + v.onHand, 0) : (p.inventory?.onHand ?? 0),
+    reserved: variants.length ? active.reduce((s, v) => s + v.reserved, 0) : (p.inventory?.reserved ?? 0),
+    available: variants.length ? active.reduce((s, v) => s + v.available, 0) : availableStock(p.inventory),
     stockStatus: stockStatusOf(p),
+    hasVariants: variants.length > 0,
+    options: (p.options ?? []).map((o) => ({ name: o.name, values: [...(o.values ?? [])] })),
+    variants,
     createdAt: p.createdAt ? new Date(p.createdAt).toISOString() : null,
     updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
   };

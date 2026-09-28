@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type CatalogProduct,
+  type CatalogVariant,
   type DeliveryOption,
   type LandingCommerce as Commerce,
   type Locale,
@@ -14,9 +15,11 @@ import {
 } from "@ecom/landing";
 import { captureAttribution, storedAttribution } from "@/lib/analytics/attribution-store";
 import { emitCommerceEvent } from "@/lib/analytics/commerce-events";
+import { VariantPicker } from "./variant-picker";
 import {
   type CartLine,
   addToCart,
+  lineKey,
   cartTotals,
   loadCart,
   newIdempotencyKey,
@@ -74,7 +77,10 @@ export function LandingCommerce({
   const byId = useMemo(() => new Map(catalog.map((p) => [p.id, p])), [catalog]);
   const money = useCallback((v: number) => formatMoney(v, commerce.currency, { locale, numerals }), [commerce.currency, locale, numerals]);
   const num = useCallback((v: number) => formatNumber(v, { locale, numerals, maxFractionDigits: 0 }), [locale, numerals]);
-  const imageUrl = (p: CatalogProduct) => (p.imageAssetId ? `${assetBaseUrl.replace(/\/+$/, "")}/${p.imageAssetId}` : null);
+  const assetUrl = (id: string | null) => (id ? `${assetBaseUrl.replace(/\/+$/, "")}/${id}` : null);
+  const imageUrl = (p: CatalogProduct) => assetUrl(p.imageAssetId);
+  // Product with variants whose picker is open (null = closed).
+  const [picking, setPicking] = useState<CatalogProduct | null>(null);
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [open, setOpen] = useState(false);
@@ -138,6 +144,11 @@ export function LandingCommerce({
       e.preventDefault();
       const product = byId.get(btn.dataset.lpCartAdd ?? "");
       if (!product || !product.available) return;
+      // A product with variants: the customer picks one first.
+      if (product.variants?.length) {
+        setPicking(product);
+        return;
+      }
       const prev = linesRef.current;
       const next = addToCart(prev, product, 1);
       const before = prev.find((l) => l.productId === product.id)?.quantity ?? 0;
@@ -173,6 +184,31 @@ export function LandingCommerce({
     };
   }, [open, placing, closeDrawer]);
 
+  // Picker "Add to cart": one line per variant (the same variant raises its quantity).
+  const addVariant = (product: CatalogProduct, variant: CatalogVariant, quantity: number) => {
+    const k = lineKey({ productId: product.id, variantId: variant.id });
+    const prev = linesRef.current;
+    const next = addToCart(prev, product, quantity, variant);
+    const before = prev.find((l) => lineKey(l) === k)?.quantity ?? 0;
+    const after = next.find((l) => lineKey(l) === k)?.quantity ?? 0;
+    setPicking(null);
+    if (after > before) {
+      linesRef.current = next;
+      setLines(next);
+      setNotice(null);
+      keyRef.current = null;
+      emitCommerceEvent({
+        type: "add_to_cart",
+        line: { id: product.id, quantity: after - before, price: variant.price },
+        name: `${product.name} (${variant.label})`,
+        currency: product.currency,
+      });
+    } else {
+      setNotice(t.maxReached);
+    }
+    openDrawer("cart");
+  };
+
   const changeLines = (next: CartLine[]) => {
     setLines(next);
     keyRef.current = null; // a different cart is a different order attempt
@@ -196,7 +232,7 @@ export function LandingCommerce({
     setStep("details");
     emitCommerceEvent({
       type: "initiate_checkout",
-      lines: totals.lines.map((l) => ({ id: l.product.id, quantity: l.quantity, price: l.product.price })),
+      lines: totals.lines.map((l) => ({ id: l.product.id, quantity: l.quantity, price: l.price })),
       value: totals.subtotal,
       currency: commerce.currency,
     });
@@ -215,7 +251,12 @@ export function LandingCommerce({
         body: JSON.stringify({
           locale,
           idempotencyKey: keyRef.current,
-          items: totals.lines.map((l) => ({ productId: l.product.id, quantity: l.quantity, unitPrice: l.product.price })),
+          items: totals.lines.map((l) => ({
+            productId: l.product.id,
+            ...(l.variant ? { variantId: l.variant.id } : {}),
+            quantity: l.quantity,
+            unitPrice: l.price,
+          })),
           customer: {
             name: details.name,
             phone: details.phone,
@@ -250,15 +291,17 @@ export function LandingCommerce({
       }
       const code = String(body.code ?? "");
       if (code === "insufficient_stock") {
-        const id = String(body.productId ?? "");
+        const k = lineKey({ productId: String(body.productId ?? ""), variantId: typeof body.variantId === "string" ? body.variantId : undefined });
         const available = Number(body.available ?? 0);
-        setLines((prev) => (available > 0 ? prev.map((l) => (l.productId === id ? { ...l, quantity: Math.min(l.quantity, available) } : l)) : removeFromCart(prev, id)));
+        setLines((prev) => (available > 0 ? prev.map((l) => (lineKey(l) === k ? { ...l, quantity: Math.min(l.quantity, available) } : l)) : removeFromCart(prev, k)));
         keyRef.current = null;
         setStep("cart");
         setError(t.errors.stock);
       } else if (code === "unavailable" || code === "not_on_page") {
         const ids = new Set(Array.isArray(body.productIds) ? (body.productIds as string[]) : []);
-        setLines((prev) => prev.filter((l) => !ids.has(l.productId)));
+        const vids = new Set(Array.isArray(body.variantIds) ? (body.variantIds as string[]) : []);
+        // A variant reported unavailable removes only that variant's line.
+        setLines((prev) => prev.filter((l) => !(l.variantId && vids.size ? vids.has(l.variantId) : ids.has(l.productId))));
         keyRef.current = null;
         setStep("cart");
         setError(t.errors.unavailable);
@@ -402,32 +445,35 @@ export function LandingCommerce({
                   </div>
                 ) : (
                   <ul className="divide-y divide-neutral-200">
-                    {totals.lines.map(({ product: p, quantity, lineTotal }) => {
-                      const src = imageUrl(p);
-                      const atMax = quantity >= p.maxQuantity;
+                    {totals.lines.map(({ key, product: p, variant, price, imageAssetId, quantity, lineTotal }) => {
+                      const src = assetUrl(imageAssetId);
+                      const atMax = quantity >= (variant ? variant.maxQuantity : p.maxQuantity);
                       return (
-                        <li key={p.id} className="flex gap-3 py-3" data-lp-cart-line={p.id}>
+                        <li key={key} className="flex gap-3 py-3" data-lp-cart-line={key}>
                           <div className="h-20 w-20 shrink-0 overflow-hidden rounded-lg bg-neutral-100">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             {src ? <img src={src} alt="" className="h-full w-full object-cover" /> : null}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex items-start justify-between gap-2">
-                              <p className="line-clamp-2 font-medium leading-snug">{p.name}</p>
+                              <div className="min-w-0">
+                                <p className="line-clamp-2 font-medium leading-snug">{p.name}</p>
+                                {variant ? <p className="text-sm text-neutral-600">{variant.label}</p> : null}
+                              </div>
                               <button
                                 type="button"
-                                onClick={() => changeLines(removeFromCart(lines, p.id))}
+                                onClick={() => changeLines(removeFromCart(lines, key))}
                                 className="shrink-0 rounded px-1.5 py-1 text-sm text-neutral-500 underline-offset-2 hover:text-red-600 hover:underline"
                               >
                                 {t.remove}
                               </button>
                             </div>
-                            <p className="text-sm text-neutral-600 tabular-nums">{money(p.price)}</p>
+                            <p className="text-sm text-neutral-600 tabular-nums">{money(price)}</p>
                             <div className="mt-2 flex items-center justify-between gap-2">
                               <div className="inline-flex items-center rounded-full border border-neutral-300" role="group" aria-label={t.quantity}>
                                 <button
                                   type="button"
-                                  onClick={() => changeLines(setQuantity(lines, p, quantity - 1))}
+                                  onClick={() => changeLines(setQuantity(lines, p, quantity - 1, variant))}
                                   disabled={quantity <= 1}
                                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-lg disabled:opacity-40"
                                   aria-label={t.decrease}
@@ -439,7 +485,7 @@ export function LandingCommerce({
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={() => changeLines(setQuantity(lines, p, quantity + 1))}
+                                  onClick={() => changeLines(setQuantity(lines, p, quantity + 1, variant))}
                                   disabled={atMax}
                                   className="inline-flex h-10 w-10 items-center justify-center rounded-full text-lg disabled:opacity-40"
                                   aria-label={t.increase}
@@ -511,10 +557,11 @@ export function LandingCommerce({
               {step === "review" ? (
                 <div className="space-y-4">
                   <ul className="space-y-2 text-sm">
-                    {totals.lines.map(({ product: p, quantity, lineTotal }) => (
-                      <li key={p.id} className="flex justify-between gap-3">
+                    {totals.lines.map(({ key, product: p, variant, quantity, lineTotal }) => (
+                      <li key={key} className="flex justify-between gap-3">
                         <span className="min-w-0">
-                          {p.name} <span className="text-neutral-500">× {num(quantity)}</span>
+                          {p.name}
+                          {variant ? <span className="text-neutral-600"> ({variant.label})</span> : null} <span className="text-neutral-500">× {num(quantity)}</span>
                         </span>
                         <span className="shrink-0 tabular-nums">{money(lineTotal)}</span>
                       </li>
@@ -588,6 +635,18 @@ export function LandingCommerce({
             ) : null}
           </div>
         </div>
+      ) : null}
+
+      {picking ? (
+        <VariantPicker
+          product={picking}
+          t={t}
+          money={money}
+          num={num}
+          imageUrl={assetUrl}
+          onAdd={(variant, quantity) => addVariant(picking, variant, quantity)}
+          onClose={() => setPicking(null)}
+        />
       ) : null}
     </>
   );

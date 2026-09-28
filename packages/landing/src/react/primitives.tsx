@@ -507,7 +507,10 @@ export function CatalogProductCard({ product, ctx, variant = "cards" }: { produc
       <div className={cx("flex flex-1 flex-col gap-2", minimal ? "pt-4" : "p-3 sm:p-4")}>
         <h3 className={cx("line-clamp-2 min-h-[2lh] font-semibold leading-[var(--lp-lh-snug)]", minimal ? "text-lg" : "text-base")}>{product.name}</h3>
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="whitespace-nowrap text-lg font-bold text-[color:var(--lp-primary)]">{money(product.price)}</span>
+          <span className="whitespace-nowrap text-lg font-bold text-[color:var(--lp-primary)]">
+            {product.priceFrom ? `${t.fromPrice} ` : ""}
+            {money(product.price)}
+          </span>
           {old !== null ? <span className="whitespace-nowrap text-sm text-[color:var(--lp-muted)] line-through">{money(old)}</span> : null}
         </div>
         {product.available && product.stockStatus === "low_stock" ? (
@@ -520,13 +523,14 @@ export function CatalogProductCard({ product, ctx, variant = "cards" }: { produc
             <button
               type="button"
               data-lp-cart-add={product.id}
+              {...(product.variants?.length ? { "data-lp-has-variants": "" } : {})}
               className={cx(
                 "inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-[var(--lp-radius)] px-4 py-2 text-center text-sm font-semibold leading-snug transition-opacity hover:opacity-90",
                 minimal ? "border border-current bg-transparent text-[color:var(--lp-primary)]" : "bg-[var(--lp-primary)] text-[color:var(--lp-on-primary)] shadow-sm",
               )}
             >
               <Icon name="bag" className="h-4 w-4" />
-              {product.ctaText || t.addToCart}
+              {product.ctaText || (product.variants?.length ? t.chooseOptions : t.addToCart)}
             </button>
           ) : (
             <>

@@ -1,7 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
-import { type CatalogProduct, MAX_LINE_QUANTITY, MAX_PAGE_PRODUCTS, type PageProductRef } from "@ecom/landing";
-import { LandingPage, Product, availableStock, stockStatusOf } from "@ecom/db";
+import { type CatalogProduct, type CatalogVariant, MAX_LINE_QUANTITY, MAX_PAGE_PRODUCTS, type PageProductRef } from "@ecom/landing";
+import { LandingPage, Product, availableStock, hasVariants, stockStatusOf } from "@ecom/db";
 import { writeAudit } from "../audit.js";
 import { productView } from "../commerce/products.js";
 import { type Actor, getOwnedPage, pageSummary } from "./pages.js";
@@ -54,20 +54,50 @@ export async function catalogFor(merchantId: Types.ObjectId | string, refs: Read
     if (!p) continue;
     const stock = stockStatusOf(p);
     const available = p.status === "active" && stock !== "out_of_stock";
+    // Variants: public fields only (never cost). Inactive variants are not offered.
+    const variants: CatalogVariant[] = hasVariants(p)
+      ? (p.variants ?? [])
+          .filter((v) => v.status === "active")
+          .map((v) => {
+            const vs = stockStatusOf({ inventory: v.inventory, lowStockThreshold: p.lowStockThreshold });
+            const vAvailable = available && vs !== "out_of_stock";
+            return {
+              id: String(v._id),
+              optionValues: [...v.optionValues],
+              label: v.optionValues.join(" / "),
+              price: v.price ?? p.price,
+              compareAtPrice: v.compareAtPrice ?? null,
+              imageAssetId: v.imageAssetId ? String(v.imageAssetId) : null,
+              available: vAvailable,
+              stockStatus: vAvailable ? vs : "out_of_stock",
+              maxQuantity: vAvailable ? Math.min(MAX_LINE_QUANTITY, availableStock(v.inventory)) : 0,
+            };
+          })
+      : [];
+    const prices = variants.map((v) => v.price);
     out.push({
       id: String(p._id),
       name: p.name,
       description: p.description ?? "",
       imageAssetId: p.imageAssetId ? String(p.imageAssetId) : null,
-      price: p.price,
-      compareAtPrice: p.compareAtPrice ?? null,
+      price: variants.length ? Math.min(...prices) : p.price,
+      compareAtPrice: variants.length ? null : (p.compareAtPrice ?? null),
       currency: p.currency ?? "BDT",
       available,
       stockStatus: available ? stock : "out_of_stock",
-      maxQuantity: available ? Math.min(MAX_LINE_QUANTITY, availableStock(p.inventory)) : 0,
+      maxQuantity: available
+        ? Math.min(MAX_LINE_QUANTITY, variants.length ? Math.max(0, ...variants.map((v) => v.maxQuantity)) : availableStock(p.inventory))
+        : 0,
       badge: ref.badge ?? null,
       ctaText: ref.ctaText ?? null,
       featured: ref.featured === true,
+      ...(variants.length
+        ? {
+            options: (p.options ?? []).map((o) => ({ name: o.name, values: [...(o.values ?? [])] })),
+            variants,
+            priceFrom: new Set(prices).size > 1,
+          }
+        : {}),
     });
   }
   // Featured products first; otherwise the merchant's order.

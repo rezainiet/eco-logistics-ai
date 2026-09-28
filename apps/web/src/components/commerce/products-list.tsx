@@ -151,7 +151,9 @@ export function ProductsList() {
                       </div>
                       <div className="min-w-0">
                         <div className="truncate font-medium">{p.name}</div>
-                        <div className="truncate text-xs text-fg-subtle">{p.sku ?? "No SKU"}</div>
+                        <div className="truncate text-xs text-fg-subtle">
+                          {p.hasVariants ? `${p.variants.length} variant${p.variants.length === 1 ? "" : "s"} · ${p.options.map((o) => o.name).join(" × ")}` : (p.sku ?? "No SKU")}
+                        </div>
                       </div>
                     </div>
                   </td>
