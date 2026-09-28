@@ -1,4 +1,4 @@
-import type { Types } from "mongoose";
+import type { PipelineStage, Types } from "mongoose";
 import { FinanceEntry, Order, financeCategory, type FinanceBucket, type FinanceEntryType } from "@ecom/db";
 import type { Period } from "./period.js";
 
@@ -77,17 +77,31 @@ const emptyReturned = (): ReturnedAgg => ({ orders: 0, fee: 0, missingFee: 0, fa
 const keyOf = (monthly: boolean, dateExpr: string) =>
   monthly ? { $dateToString: { format: "%Y-%m", date: dateExpr, timezone: DHAKA_TZ } } : "all";
 
-const isBdt = { $in: [{ $toUpper: { $ifNull: ["$order.currency", "BDT"] } }, ["BDT"]] };
+/** BDT-only filter (accounting is BDT only), as an aggregation expression. */
+export const IS_BDT_ORDER = { $in: [{ $toUpper: { $ifNull: ["$order.currency", "BDT"] } }, ["BDT"]] };
+const isBdt = IS_BDT_ORDER;
 const hasFee = { $isNumber: "$logistics.courierFee" };
 const feeOrZero = { $cond: [hasFee, "$logistics.courierFee", 0] };
 const count = (cond: unknown) => ({ $sum: { $cond: [cond, 1, 0] } });
 
-async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: boolean) {
-  const rows = await Order.aggregate<{ _id: { k: Key; bdt: boolean } } & Omit<DeliveredAgg, "nonBdt"> & { orders: number }>([
+/**
+ * THE revenue-recognition stages, shared with marketing reports so both
+ * always agree: delivered orders of one merchant whose delivery date
+ * (deliveredAt, or the flagged updatedAt fallback) falls in the period.
+ * Adds `_exact` (had deliveredAt) and `_at` (the date used).
+ */
+export function deliveredInPeriodStages(merchantId: Types.ObjectId, p: Period): PipelineStage[] {
+  return [
     { $match: { merchantId, "order.status": "delivered" } },
     { $addFields: { _exact: { $ne: [{ $ifNull: ["$logistics.deliveredAt", null] }, null] } } },
     { $addFields: { _at: { $cond: ["$_exact", "$logistics.deliveredAt", "$updatedAt"] } } },
     { $match: { _at: { $gte: p.start, $lt: p.end } } },
+  ];
+}
+
+async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: boolean) {
+  const rows = await Order.aggregate<{ _id: { k: Key; bdt: boolean } } & Omit<DeliveredAgg, "nonBdt"> & { orders: number }>([
+    ...deliveredInPeriodStages(merchantId, p),
     {
       $project: {
         k: keyOf(monthly, "$_at"),

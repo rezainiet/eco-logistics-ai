@@ -55,6 +55,10 @@ const ROUTE_MAP: Array<{ pattern: RegExp; crumbs: (m: RegExpMatchArray) => Crumb
     crumbs: () => [{ label: "Dashboard", href: "/dashboard" }, { label: "Call customer" }],
   },
   {
+    pattern: /^\/dashboard\/marketing\/?$/,
+    crumbs: () => [{ label: "Dashboard", href: "/dashboard" }, { label: "Marketing" }],
+  },
+  {
     pattern: /^\/dashboard\/accounting\/?$/,
     crumbs: () => [{ label: "Dashboard", href: "/dashboard" }, { label: "Accounting" }],
   },

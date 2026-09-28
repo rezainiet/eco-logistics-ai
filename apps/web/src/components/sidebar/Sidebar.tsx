@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LayoutTemplate,
   LifeBuoy,
+  Megaphone,
   Menu,
   Package,
   Phone,
@@ -63,6 +64,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
       { label: "Behavior", href: "/dashboard/analytics/behavior", icon: Activity },
+      { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone },
       { label: "Accounting", href: "/dashboard/accounting", icon: Wallet },
     ],
   },

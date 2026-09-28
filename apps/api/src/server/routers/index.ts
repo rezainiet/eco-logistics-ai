@@ -20,6 +20,7 @@ import { feedbackRouter } from "./feedback.js";
 import { landingPagesRouter, publicLandingRouter } from "./landingPages.js";
 import { productsRouter } from "./products.js";
 import { financeRouter } from "./finance.js";
+import { marketingRouter } from "./marketing.js";
 import { adminLandingTemplatesRouter } from "./adminLandingTemplates.js";
 import {
   adminBrandingRouter,
@@ -56,6 +57,7 @@ export const appRouter = router({
   landingPages: landingPagesRouter,
   products: productsRouter,
   finance: financeRouter,
+  marketing: marketingRouter,
   adminLandingTemplates: adminLandingTemplatesRouter,
   publicLanding: publicLandingRouter,
 });
