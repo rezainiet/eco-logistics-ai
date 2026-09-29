@@ -361,3 +361,127 @@ describe("tenant isolation", () => {
     expect(await stockOf(a.product.id, a.v("Red / M").id)).toMatchObject({ onHand: 5, reserved: 0 });
   });
 });
+
+describe("variant editor payload", () => {
+  it("per-variant compare-at price is saved and shown publicly; a variant's own cost is kept when sent back and never public", async () => {
+    const { caller, product, host } = await shop();
+    const cur = (await caller.products.get({ id: product.id })).variants;
+    // Exactly what the dashboard form sends: id, values, price, compare-at, the unchanged cost, SKU, image, status.
+    const saved = await caller.products.update({
+      id: product.id,
+      variants: {
+        options: TEE.options,
+        variants: cur.map((x) => ({
+          id: x.id,
+          optionValues: x.optionValues,
+          price: x.price,
+          compareAtPrice: x.label === "Red / M" ? 650 : x.compareAtPrice,
+          ...(x.costPrice != null ? { costPrice: x.costPrice } : {}),
+          sku: x.sku,
+          imageAssetId: x.imageAssetId,
+          status: "active" as const,
+        })),
+      },
+    });
+    expect(saved.variants.find((x) => x.label === "Red / M")).toMatchObject({ compareAtPrice: 650, costPrice: 200, onHand: 5 });
+    expect(saved.variants.find((x) => x.label === "Blue / L")).toMatchObject({ compareAtPrice: 600, costPrice: null });
+    // Compare-at must stay above the variant's effective price.
+    await expect(
+      caller.products.update({
+        id: product.id,
+        variants: { options: TEE.options, variants: cur.map((x) => ({ id: x.id, optionValues: x.optionValues, price: x.price, compareAtPrice: x.label === "Red / M" ? 500 : null })) },
+      }),
+    ).rejects.toThrow(/Compare-at/);
+    const pub = await resolveLandingPageByHost(host, { rootDomain: "localhost", useCache: false });
+    if (pub.kind !== "ok") throw new Error("not ok");
+    expect(pub.commerce!.products.find((x) => x.id === product.id)!.variants!.find((x) => x.label === "Red / M")!.compareAtPrice).toBe(650);
+    expect(JSON.stringify(pub)).not.toMatch(/"(costPrice|unitCost|cost|onHand|reserved|inventory)":/);
+  });
+});
+
+describe("variant product → simple product", () => {
+  it("is refused while any variant has stock or open orders; then allowed without touching stock history or old orders", async () => {
+    const { caller, product, v, place, mug } = await shop();
+    const r = await place([{ productId: product.id, variantId: v("Red / L").id, quantity: 1 }]);
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    const toSimple = () => caller.products.update({ id: product.id, variants: { options: [], variants: [] } });
+    const before = (await Product.findById(product.id).lean())!;
+    const movesBefore = await InventoryMovement.countDocuments({ productId: product.id });
+
+    await expect(toSimple()).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringMatching(/can't be removed/) });
+    const unchanged = (await Product.findById(product.id).lean())!;
+    expect(unchanged.variants).toEqual(before.variants);
+    expect(unchanged.options).toEqual(before.options);
+    expect(await InventoryMovement.countDocuments({ productId: product.id })).toBe(movesBefore);
+
+    // Empty every variant: stock to 0 (ledgered) — the open order still reserves Red / L.
+    for (const x of (await caller.products.get({ id: product.id })).variants) {
+      if (x.onHand > x.reserved) await caller.products.adjustStock({ id: product.id, type: "MANUAL_ADJUSTMENT", delta: -(x.onHand - x.reserved), variantId: x.id });
+    }
+    await expect(toSimple()).rejects.toThrow(/open orders/);
+
+    // Cancel the order (reservation released), clear the last unit → conversion allowed.
+    const o = (await Order.findOne({ orderNumber: r.orderNumber }).lean())!;
+    await caller.orders.updateOrder({ id: String(o._id), status: "cancelled" });
+    await caller.products.adjustStock({ id: product.id, type: "MANUAL_ADJUSTMENT", delta: -1, variantId: v("Red / L").id });
+    const movesAtConversion = await InventoryMovement.countDocuments({ productId: product.id });
+    const simple = await toSimple();
+    expect(simple).toMatchObject({ hasVariants: false, onHand: 0, reserved: 0 });
+    const doc = (await Product.findById(product.id).lean())!;
+    expect(doc.variants).toBeUndefined();
+    expect(doc.options).toBeUndefined();
+    expect(doc.inventory).toMatchObject({ onHand: 0, reserved: 0 });
+    // The ledger is history: nothing deleted or added by the conversion.
+    expect(await InventoryMovement.countDocuments({ productId: product.id })).toBe(movesAtConversion);
+    // The old order keeps its variant snapshot.
+    const old = (await Order.findById(o._id).lean())!;
+    expect(old.items[0]).toMatchObject({ variantId: new Types.ObjectId(v("Red / L").id), variantLabel: "Red / L", sku: "TEE-R-L", price: 550 });
+    const view = await caller.orders.getOrder({ id: String(o._id) });
+    expect(JSON.stringify(view)).toContain("Red / L");
+    // It now behaves as a simple product again; other products untouched.
+    const restocked = await caller.products.adjustStock({ id: product.id, type: "RESTOCK", delta: 3 });
+    expect(restocked.onHand).toBe(3);
+    expect(await stockOf(mug.id)).toMatchObject({ onHand: 4, reserved: 0 });
+  });
+});
+
+describe("returns (RTO) per variant", () => {
+  it("an RTO releases each variant's reservation exactly once, with a RETURNED movement per line; simple lines keep their old key", async () => {
+    const a = await shop();
+    const r = await a.place([
+      { productId: a.product.id, variantId: a.v("Red / M").id, quantity: 2 },
+      { productId: a.product.id, variantId: a.v("Blue / L").id, quantity: 1 },
+      { productId: a.mug.id, quantity: 1 },
+    ]);
+    if (!r.ok) throw new Error(JSON.stringify(r));
+    const o = (await Order.findOne({ orderNumber: r.orderNumber }).lean())!;
+    const id = String(o._id);
+    expect(await stockOf(a.product.id, a.v("Red / M").id)).toMatchObject({ onHand: 5, reserved: 2 });
+
+    // Another merchant can't move it.
+    const b = await merchant();
+    await expect(b.caller.orders.updateOrder({ id, status: "confirmed" })).rejects.toThrow();
+
+    for (const s of ["confirmed", "packed", "shipped", "rto"]) await a.caller.orders.updateOrder({ id, status: s as never });
+    expect(await stockOf(a.product.id, a.v("Red / M").id)).toMatchObject({ onHand: 5, reserved: 0 });
+    expect(await stockOf(a.product.id, a.v("Blue / L").id)).toMatchObject({ onHand: 3, reserved: 0 });
+    expect(await stockOf(a.mug.id)).toMatchObject({ onHand: 4, reserved: 0 });
+
+    const returned = await InventoryMovement.find({ orderId: o._id, type: "RETURNED" }).lean();
+    expect(returned.map((m) => [m.key, m.reservedDelta, m.onHandDelta, m.variantId ? String(m.variantId) : null]).sort()).toEqual(
+      [
+        [`${id}:1:ORDER_CANCELLED:${a.product.id}:${a.v("Red / M").id}`, -2, 0, a.v("Red / M").id],
+        [`${id}:1:ORDER_CANCELLED:${a.product.id}:${a.v("Blue / L").id}`, -1, 0, a.v("Blue / L").id],
+        [`${id}:1:ORDER_CANCELLED:${a.mug.id}`, -1, 0, null], // simple product: unchanged key shape
+      ].sort(),
+    );
+
+    // Idempotent: re-running the reconcile (webhook retry, repeat status write) changes nothing.
+    expect(await reconcileOrderInventory(o._id)).toMatchObject({ changed: false });
+    await a.caller.orders.updateOrder({ id, status: "rto" }).catch(() => undefined);
+    expect(await InventoryMovement.countDocuments({ orderId: o._id })).toBe(6); // 3 reserved + 3 returned
+    expect(await stockOf(a.product.id, a.v("Red / M").id)).toMatchObject({ onHand: 5, reserved: 0 });
+    // Accounting: an RTO is not revenue.
+    expect((await a.caller.finance.summary({ period: ALL })).revenue.realized).toBe(0);
+  });
+});

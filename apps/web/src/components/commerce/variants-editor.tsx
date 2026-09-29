@@ -28,8 +28,15 @@ export interface VariantRow {
   id?: string;
   optionValues: string[];
   price: string;
+  /** Optional "was" price shown struck through; must be above the variant's price. */
+  compareAt: string;
   sku: string;
   initialStock: string;
+  /**
+   * A variant's own cost, if one was set (e.g. by import/API). Not edited here —
+   * variants use the product's cost price — but kept unchanged on save.
+   */
+  costPrice?: number | null;
   onHand?: number;
   reserved?: number;
   imageAssetId: string | null;
@@ -54,7 +61,7 @@ export function buildCombinations(options: OptionRow[], existing: VariantRow[]):
   for (const list of lists) combos = combos.flatMap((c) => list.map((v) => [...c, v]));
   const byKey = new Map(existing.map((r) => [comboKey(r.optionValues), r]));
   return combos.slice(0, 100).map(
-    (values) => byKey.get(comboKey(values)) ?? { optionValues: values, price: "", sku: "", initialStock: "0", imageAssetId: null, imageUrl: null, active: true },
+    (values) => byKey.get(comboKey(values)) ?? { optionValues: values, price: "", compareAt: "", sku: "", initialStock: "0", imageAssetId: null, imageUrl: null, active: true },
   );
 }
 
@@ -165,6 +172,7 @@ export function VariantsEditor({
                     <th className="px-2 py-2 font-medium">Variant</th>
                     <th className="px-2 py-2 font-medium">Photo</th>
                     <th className="px-2 py-2 font-medium">Price</th>
+                    <th className="px-2 py-2 font-medium">Compare-at</th>
                     <th className="px-2 py-2 font-medium">SKU</th>
                     <th className="px-2 py-2 font-medium">Stock</th>
                     <th className="px-2 py-2 font-medium">Active</th>
@@ -204,6 +212,9 @@ export function VariantsEditor({
                         <Input className="h-9 w-24" inputMode="decimal" value={r.price} placeholder={basePrice || "Price"} onChange={(e) => setRow(i, { price: e.target.value })} aria-label="Variant price" />
                       </td>
                       <td className="px-2 py-1.5">
+                        <Input className="h-9 w-24" inputMode="decimal" value={r.compareAt} placeholder="Optional" onChange={(e) => setRow(i, { compareAt: e.target.value })} aria-label="Variant compare-at price" />
+                      </td>
+                      <td className="px-2 py-1.5">
                         <Input className="h-9 w-28" value={r.sku} maxLength={64} placeholder="Optional" onChange={(e) => setRow(i, { sku: e.target.value })} aria-label="Variant SKU" />
                       </td>
                       <td className="px-2 py-1.5">
@@ -233,7 +244,8 @@ export function VariantsEditor({
             <p className="text-xs text-fg-subtle">Add options and their values, then “Build combinations”.</p>
           )}
           <p className="text-2xs text-fg-faint">
-            Empty price = the product price. {editing ? "Existing variants' stock changes with “Adjust stock”; a variant with stock can be made inactive instead of removed." : "Starting stock is recorded in each variant's stock history."}
+            Empty price = the product price. Compare-at (optional) is the higher “was” price shown struck through. Profit reports use the
+            product&apos;s cost price for every variant. {editing ? "Existing variants' stock changes with “Adjust stock”; a variant with stock can be made inactive instead of removed." : "Starting stock is recorded in each variant's stock history."}
           </p>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" onChange={(e) => void onFile(e.target.files?.[0])} />
         </>

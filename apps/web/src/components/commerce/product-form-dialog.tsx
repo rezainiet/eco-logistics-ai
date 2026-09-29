@@ -34,6 +34,8 @@ export interface ProductLike {
     id: string;
     optionValues: string[];
     price: number | null;
+    compareAtPrice?: number | null;
+    costPrice?: number | null;
     sku: string | null;
     imageAssetId: string | null;
     imageUrl: string | null;
@@ -109,6 +111,8 @@ export function ProductFormDialog({
         id: v.id,
         optionValues: v.optionValues,
         price: v.price != null ? String(v.price) : "",
+        compareAt: v.compareAtPrice != null ? String(v.compareAtPrice) : "",
+        costPrice: v.costPrice ?? null,
         sku: v.sku ?? "",
         initialStock: "0",
         onHand: v.onHand,
@@ -159,12 +163,19 @@ export function ProductFormDialog({
       for (const r of rows) {
         const vp = num(r.price);
         if (vp !== null && (!Number.isFinite(vp) || vp < 0)) return setError(`Enter a valid price for ${r.optionValues.join(" / ")}.`);
+        const vc = num(r.compareAt);
+        if (vc !== null && (!Number.isFinite(vc) || vc <= (vp ?? p))) {
+          return setError(`Compare-at price of ${r.optionValues.join(" / ")} must be higher than its price.`);
+        }
         const st = Number(r.initialStock || "0");
         if (!r.id && (!Number.isInteger(st) || st < 0)) return setError(`Stock of ${r.optionValues.join(" / ")} must be a whole number.`);
         out.push({
           ...(r.id ? { id: r.id } : { initialStock: st }),
           optionValues: r.optionValues,
           price: vp,
+          compareAtPrice: vc,
+          // Not edited in this form; sent back unchanged so saving never drops it.
+          ...(r.costPrice != null ? { costPrice: r.costPrice } : {}),
           sku: r.sku.trim() || null,
           imageAssetId: r.imageAssetId,
           status: r.active ? "active" : "inactive",
