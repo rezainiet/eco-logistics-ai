@@ -1,0 +1,12 @@
+# /etc/systemd/system/confirmx-domains-helper.timer
+[Unit]
+Description=Run the ConfirmX custom-domain helper every 2 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+RandomizedDelaySec=15s
+Persistent=false
+
+[Install]
+WantedBy=timers.target
