@@ -21,7 +21,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { defaultInitials, getBrandingSync } from "@ecom/branding";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -281,6 +281,8 @@ export function Sidebar() {
           </Button>
         </SheetTrigger>
         <SheetContent side="left" className="w-64 border-stroke/10 bg-surface-overlay p-0">
+          {/* Radix Dialog requires a title for screen readers. */}
+          <SheetTitle className="sr-only">Navigation</SheetTitle>
           <NavList
             fraudCount={fraudCount}
             logoDataUrl={logoDataUrl}

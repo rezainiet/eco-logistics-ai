@@ -170,8 +170,9 @@ export function formatRelativeTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   const diff = Date.now() - date.getTime();
+  // Under a full minute is "just now" (rounding would turn 30s into "1m ago").
+  if (diff < 60_000) return "just now";
   const min = Math.round(diff / 60000);
-  if (min < 1) return "just now";
   if (min < 60) return `${min}m ago`;
   const hr = Math.round(min / 60);
   if (hr < 24) return `${hr}h ago`;

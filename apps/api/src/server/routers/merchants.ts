@@ -15,6 +15,7 @@ import { adapterFor, hasCourierAdapter } from "../../lib/couriers/index.js";
 import { registerCourierWebhook } from "../../lib/couriers/webhook-registration.js";
 import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
+import { emailDeliveryStatus } from "../../lib/email.js";
 import { sendSms, sendOrderConfirmationSms } from "../../lib/sms/index.js";
 import { consumeMerchantTokens } from "../../lib/merchantRateLimit.js";
 import {
@@ -92,6 +93,12 @@ export const merchantsRouter = router({
       role: m.role,
       createdAt: m.createdAt,
       emailVerified: m.emailVerified ?? false,
+      /**
+       * "unavailable" when this deployment has no email provider configured:
+       * verification / receipt emails cannot be sent, so the UI must not
+       * claim they were. Deployment-wide, not account-specific.
+       */
+      emailDelivery: emailDeliveryStatus(),
       billing: billingView(m.subscription),
       // Surface only the in-app branding fields the dashboard layout needs.
       // The customer-facing tracking page reads its own `logoUrl` separately.

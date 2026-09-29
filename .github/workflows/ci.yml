@@ -4,7 +4,7 @@ name: ci
 # e2e.yml (the slower Playwright golden-path, kept advisory) so a merge
 # is blocked only by cheap, deterministic checks:
 #   - API strict typecheck/build
-#   - Web typecheck
+#   - Web typecheck + web unit tests
 #   - API unit tests
 #
 # Each job is an independent clean checkout (npm ci). The monorepo
@@ -61,6 +61,8 @@ jobs:
           npm --workspace @ecom/landing run build
       - name: Web typecheck
         run: npm --workspace @ecom/web run typecheck
+      - name: Web unit tests
+        run: npm --workspace @ecom/web test
       - name: Sites typecheck
         run: npm --workspace @ecom/sites run typecheck
       - name: Sites tests

@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import {
   AlertCircle,
-  AlertTriangle,
   CheckCircle2,
   Clock,
   Inbox,
@@ -24,27 +23,17 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { trpc } from "@/lib/trpc";
 import { formatRelative } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
+import { type AlertKind, buildAccountAlerts } from "@/lib/notifications/account-alerts";
 
-// Map raw camelCase metric identifiers (`fraudReviewsUsed`, `smsSent`...) to
-// human copy. Mirrors the same dictionary in <SubscriptionBanner> so both
-// surfaces speak the same language when nagging the merchant about quota.
-const METRIC_LABELS: Record<string, string> = {
-  fraudReviewsUsed: "fraud reviews this month",
-  fraudReviews: "fraud reviews this month",
-  smsSent: "SMS messages this month",
-  smsUsed: "SMS messages this month",
-  ordersIngested: "orders this month",
-  ordersUsed: "orders this month",
-  ordersCreated: "orders this month",
-  shipmentsBooked: "shipments this month",
-  callsInitiated: "calls this month",
-  callMinutesUsed: "call minutes this month",
-  webhookEvents: "webhook events this month",
+const ALERT_ICON: Record<AlertKind, LucideIcon> = {
+  billing_past_due: AlertCircle,
+  trial_expired: AlertCircle,
+  trial_ending: Clock,
+  quota_blocked: AlertCircle,
+  quota_warning: TrendingUp,
+  review_pending: ShieldAlert,
+  review_no_answer: PhoneOff,
 };
-function humanMetric(metric: string): string {
-  if (METRIC_LABELS[metric]) return METRIC_LABELS[metric]!;
-  return metric.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/_/g, " ").toLowerCase();
-}
 
 type NotificationTone = "danger" | "warning" | "info" | "success";
 
@@ -88,96 +77,16 @@ export function NotificationsDrawer({
   const items = React.useMemo<NotificationItem[]>(() => {
     const out: NotificationItem[] = [];
 
-    // Subscription / billing first.
-    const sub = plan.data?.subscription;
-    if (sub?.status === "past_due") {
-      out.push({
-        id: "billing:past-due",
-        tone: "danger",
-        icon: AlertCircle,
-        title: "Subscription past due",
-        body: "Submit a payment to restore access to your dashboard.",
-        href: "/dashboard/billing",
-      });
-    }
-    if (sub?.trialExpired) {
-      out.push({
-        id: "billing:trial-expired",
-        tone: "danger",
-        icon: AlertCircle,
-        title: "Trial has ended",
-        body: "Choose a plan to keep using ConfirmX.",
-        href: "/dashboard/billing",
-      });
-    }
-    if (
-      sub?.status === "trial" &&
-      typeof sub.trialDaysLeft === "number" &&
-      sub.trialDaysLeft <= 3
-    ) {
-      out.push({
-        id: "billing:trial-soon",
-        tone: "warning",
-        icon: Clock,
-        title: `Trial ends in ${sub.trialDaysLeft} day${sub.trialDaysLeft === 1 ? "" : "s"}`,
-        body: "Upgrade now to avoid interruption.",
-        href: "/dashboard/billing",
-      });
-    }
-    // Same defensive guard as <SubscriptionBanner>: suppress phantom
-    // "blocked at zero usage" so a fresh trial doesn't surface an alarming
-    // notification before the merchant has done anything. And prettify the
-    // raw camelCase metric identifier into something a human can read.
-    const blocked = usage.data?.meters.find(
-      (m) => m.blocked && (m.used ?? 0) > 0,
-    );
-    if (blocked) {
-      out.push({
-        id: `usage:blocked:${blocked.metric}`,
-        tone: "danger",
-        icon: AlertCircle,
-        title: `Quota exceeded: ${humanMetric(blocked.metric)}`,
-        body: "Upgrade your plan to keep operating.",
-        href: "/dashboard/billing",
-      });
-    }
-    const warning = usage.data?.meters.find(
-      (m) => m.warning && !m.blocked && (m.used ?? 0) > 0,
-    );
-    if (warning) {
-      out.push({
-        id: `usage:warn:${warning.metric}`,
-        tone: "warning",
-        icon: TrendingUp,
-        title: `${Math.round(warning.ratio * 100)}% of ${humanMetric(warning.metric)} quota used`,
-        body: "Consider upgrading before you hit the limit.",
-        href: "/dashboard/billing",
-      });
+    // Alerts — exactly the set the bell counts (see useNotificationCount).
+    for (const a of buildAccountAlerts({
+      subscription: plan.data?.subscription,
+      meters: usage.data?.meters,
+      reviewQueue: fraudStats.data?.queue,
+    })) {
+      out.push({ id: a.id, tone: a.tone, icon: ALERT_ICON[a.kind], title: a.title, body: a.body, href: a.href });
     }
 
-    // Fraud queue.
-    const queue = fraudStats.data?.queue;
-    if (queue && queue.pending > 0) {
-      out.push({
-        id: "fraud:pending",
-        tone: "warning",
-        icon: ShieldAlert,
-        title: `${queue.pending} order${queue.pending === 1 ? "" : "s"} pending call review`,
-        body: "These orders cannot be booked until reviewed.",
-        href: "/dashboard/fraud-review",
-      });
-    }
-    if (queue && queue.noAnswer > 0) {
-      out.push({
-        id: "fraud:noanswer",
-        tone: "danger",
-        icon: PhoneOff,
-        title: `${queue.noAnswer} order${queue.noAnswer === 1 ? "" : "s"} marked no answer`,
-        body: "Try calling again or reject if unreachable.",
-        href: "/dashboard/fraud-review",
-      });
-    }
-
+    // Informational rows below are not alerts and are never counted by the bell.
     // Recent calls — surface the latest unanswered ones.
     const calls = recentCalls.data?.calls ?? [];
     for (const call of calls) {
@@ -291,25 +200,17 @@ export function NotificationsDrawer({
   );
 }
 
+/**
+ * Unread count for the bell: the number of account alerts — the same list
+ * the drawer renders as its alert rows, built by the same function.
+ */
 export function useNotificationCount(): number {
   const fraudStats = trpc.fraud.getReviewStats.useQuery({ days: 7 });
   const plan = trpc.billing.getPlan.useQuery(undefined, { staleTime: 60_000 });
   const usage = trpc.billing.getUsage.useQuery(undefined, { staleTime: 60_000 });
-  const sub = plan.data?.subscription;
-  const queue = fraudStats.data?.queue;
-  let count = 0;
-  if (sub?.status === "past_due") count++;
-  if (sub?.trialExpired) count++;
-  if (
-    sub?.status === "trial" &&
-    typeof sub.trialDaysLeft === "number" &&
-    sub.trialDaysLeft <= 3
-  ) {
-    count++;
-  }
-  count += usage.data?.meters.filter((m) => m.blocked).length ?? 0;
-  count += usage.data?.meters.filter((m) => m.warning && !m.blocked).length ?? 0;
-  if (queue && queue.pending > 0) count++;
-  if (queue && queue.noAnswer > 0) count++;
-  return count;
+  return buildAccountAlerts({
+    subscription: plan.data?.subscription,
+    meters: usage.data?.meters,
+    reviewQueue: fraudStats.data?.queue,
+  }).length;
 }

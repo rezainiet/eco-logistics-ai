@@ -12,6 +12,7 @@ import {
   MailCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { EMAIL_UNAVAILABLE_COPY, emailDeliveryFromBody } from "@/lib/email-delivery";
 
 /**
  * Resend-cooldown window in seconds. Mirrors the rate-limit window the API
@@ -67,6 +68,12 @@ function VerifyEmailSentInner() {
         } else {
           setResendError("We couldn't send the email. Try again in a moment.");
         }
+        setResendState("error");
+        return;
+      }
+      // No email provider on this deployment: nothing was sent, so don't say it was.
+      if (emailDeliveryFromBody(await res.json().catch(() => null)) === "unavailable") {
+        setResendError(EMAIL_UNAVAILABLE_COPY.resendFailed);
         setResendState("error");
         return;
       }

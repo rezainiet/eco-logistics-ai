@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertCircle, Clock, TrendingUp } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { classifyMeter } from "@/lib/billing/meters";
 
 /**
  * Cross-dashboard banner. Silent when everything's fine; loud when the merchant
@@ -111,11 +112,9 @@ export function SubscriptionBanner() {
   }
 
   // Suppress phantom "blocked at zero usage" — a fresh meter cannot have hit
-  // its cap. This guards against stale/init meter data leaking an alarming
-  // banner into a brand-new merchant's first dashboard view.
-  const atQuotaLimit = usage.data?.meters.find(
-    (m) => m.blocked && (m.used ?? 0) > 0,
-  );
+  // its cap, and a zero-limit meter is a feature outside the plan. Same rule
+  // as the notification bell (lib/billing/meters).
+  const atQuotaLimit = usage.data?.meters.find((m) => classifyMeter(m) === "blocked");
   if (atQuotaLimit) {
     return (
       <Banner tone="error" icon={<AlertCircle className="h-4 w-4" />}>
@@ -129,9 +128,7 @@ export function SubscriptionBanner() {
     );
   }
 
-  const nearLimit = usage.data?.meters.find(
-    (m) => m.warning && !m.blocked && (m.used ?? 0) > 0,
-  );
+  const nearLimit = usage.data?.meters.find((m) => classifyMeter(m) === "warning");
   if (nearLimit) {
     return (
       <Banner tone="warning" icon={<TrendingUp className="h-4 w-4" />}>

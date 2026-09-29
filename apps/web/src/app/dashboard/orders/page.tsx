@@ -772,6 +772,7 @@ export default function OrdersPage() {
         isLoading={list.isLoading}
         selected={selected}
         onToggleRow={toggleRow}
+        onOpenOrder={setTimelineId}
         onResetFilters={() => {
           setStatus("all");
           setCourier("");

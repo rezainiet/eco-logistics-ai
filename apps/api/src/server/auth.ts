@@ -19,6 +19,7 @@ import {
 import {
   buildPasswordResetEmail,
   buildVerifyEmail,
+  emailDeliveryStatus,
   webUrl,
 } from "../lib/email.js";
 import { enqueueEmail } from "../workers/email.worker.js";
@@ -518,8 +519,11 @@ authRouter.post("/request-reset", passwordResetLimiter, async (req, res) => {
     });
   }
 
-  // Identical response shape for known/unknown emails.
-  res.json({ ok: true });
+  // Identical response shape for known/unknown emails. `delivery` is
+  // deployment-wide (is an email provider configured at all?) and the same
+  // for every email, so it leaks nothing about accounts. It lets the UI avoid
+  // "check your inbox" when nothing can be sent.
+  res.json({ ok: true, delivery: emailDeliveryStatus() });
 });
 
 authRouter.post("/reset-password", passwordResetLimiter, async (req, res) => {
@@ -1029,5 +1033,6 @@ authRouter.post("/resend-verification", passwordResetLimiter, async (req, res) =
       console.error("[auth] resend verify failed", (err as Error).message),
     );
   }
-  res.json({ ok: true });
+  // Same deployment-wide signal as /request-reset (not account-specific).
+  res.json({ ok: true, delivery: emailDeliveryStatus() });
 });

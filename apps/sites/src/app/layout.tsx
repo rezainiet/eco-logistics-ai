@@ -25,6 +25,10 @@ const bnSerif = Noto_Serif_Bengali({
   weight: ["400", "600", "700"],
   variable: "--lp-font-bn-serif",
   display: "swap",
+  // Only editorial/premium templates use the serif. Preloading it on every
+  // page made browsers warn "preloaded but not used"; it still loads on
+  // demand (display: swap) wherever a template asks for it.
+  preload: false,
 });
 
 async function documentLang(): Promise<string> {

@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Archive, Boxes, Loader2, Package, Pencil, Plus, Search } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
@@ -14,20 +13,12 @@ import { formatMoney } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import { ProductFormDialog } from "./product-form-dialog";
 import { StockDialog } from "./stock-dialog";
+import { ProductStatusBadge, StockBadge } from "./product-badges";
+import { ProductsMobileList, productSubtitle } from "./products-mobile-list";
 
 type StockFilter = "all" | "low" | "out";
 
-export function StockBadge({ status, available }: { status: string; available: number }) {
-  if (status === "out_of_stock") return <Badge variant="destructive" className="whitespace-nowrap">Out of stock</Badge>;
-  if (status === "low_stock") return <Badge variant="warning" className="whitespace-nowrap">Low stock · {available}</Badge>;
-  return <Badge variant="success" className="whitespace-nowrap">In stock · {available}</Badge>;
-}
-
-export function ProductStatusBadge({ status }: { status: string }) {
-  if (status === "active") return <Badge variant="info">Active</Badge>;
-  if (status === "draft") return <Badge variant="outline">Draft</Badge>;
-  return <Badge variant="secondary">Inactive</Badge>;
-}
+export { ProductStatusBadge, StockBadge };
 
 export function ProductsList() {
   const utils = trpc.useUtils();
@@ -122,7 +113,19 @@ export function ProductsList() {
       ) : items.length === 0 ? (
         <p className="py-8 text-center text-sm text-fg-subtle">No products match.</p>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-stroke/10 bg-surface">
+        <>
+        <ProductsMobileList
+          items={items}
+          onStock={setStockId}
+          onEdit={(id) => {
+            setEditId(id);
+            setFormOpen(true);
+          }}
+          onArchive={setArchiveId}
+        />
+        {/* xl and up: table. overflow-x-auto (not hidden) so a narrow window
+            scrolls instead of silently clipping price / stock / actions. */}
+        <div className="hidden overflow-x-auto rounded-xl border border-stroke/10 bg-surface xl:block">
           <table className="w-full text-sm">
             <thead className="border-b border-stroke/8 text-left text-2xs uppercase tracking-wide text-fg-faint">
               <tr>
@@ -139,8 +142,10 @@ export function ProductsList() {
             <tbody className="divide-y divide-stroke/8">
               {items.map((p) => (
                 <tr key={p.id} className="align-middle">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
+                  {/* w-full + max-w-0: the name column takes the leftover width and
+                      truncates, instead of pushing the other columns out of view. */}
+                  <td className="w-full max-w-0 px-4 py-3">
+                    <div className="flex items-center gap-3" title={p.name}>
                       <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md bg-surface-raised">
                         {p.imageUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
@@ -151,9 +156,7 @@ export function ProductsList() {
                       </div>
                       <div className="min-w-0">
                         <div className="truncate font-medium">{p.name}</div>
-                        <div className="truncate text-xs text-fg-subtle">
-                          {p.hasVariants ? `${p.variants.length} variant${p.variants.length === 1 ? "" : "s"} · ${p.options.map((o) => o.name).join(" × ")}` : (p.sku ?? "No SKU")}
-                        </div>
+                        <div className="truncate text-xs text-fg-subtle">{productSubtitle(p)}</div>
                       </div>
                     </div>
                   </td>
@@ -197,6 +200,7 @@ export function ProductsList() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       <ProductFormDialog open={formOpen} onOpenChange={setFormOpen} product={editId ? editing : null} />

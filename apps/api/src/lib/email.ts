@@ -34,6 +34,24 @@ const RESEND_ENDPOINT = "https://api.resend.com/emails";
 /** `EmailDeliveryResult.error` when production has no RESEND_API_KEY. Not retryable. */
 export const EMAIL_NOT_CONFIGURED = "email_provider_not_configured";
 
+/**
+ * Whether transactional email can actually go out — the exact inverse of
+ * `sendEmail`'s EMAIL_NOT_CONFIGURED branch (production without a provider
+ * key). Development without a key "delivers" to stdout, so it counts as
+ * available. A global, non-secret deployment fact: it says nothing about any
+ * account, so exposing it can't be used to enumerate emails. The UI uses it
+ * to stop telling merchants "check your inbox" when nothing was sent.
+ */
+export function isEmailDeliveryConfigured(): boolean {
+  return !!env.RESEND_API_KEY || env.NODE_ENV !== "production";
+}
+
+export type EmailDeliveryStatus = "available" | "unavailable";
+
+export function emailDeliveryStatus(): EmailDeliveryStatus {
+  return isEmailDeliveryConfigured() ? "available" : "unavailable";
+}
+
 export interface EmailMessage {
   to: string;
   subject: string;

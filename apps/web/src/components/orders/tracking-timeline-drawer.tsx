@@ -29,6 +29,7 @@ import {
   IntentPanel,
 } from "@/components/orders/intelligence-panels";
 import { OrderCommercePanel } from "./order-commerce-panel";
+import { deliveryProgress, type ProgressStepKey } from "./delivery-progress";
 import { OperationalHintPanel } from "@/components/orders/operational-hint-panel";
 import { DeliveryReliabilityPanel } from "@/components/orders/delivery-reliability-panel";
 import { ExternalDeliveryHistoryCard } from "@/components/orders/external-delivery-history-card";
@@ -284,6 +285,8 @@ export function TrackingTimelineDrawer({
               <ProgressStepper
                 orderStatus={order.status}
                 normalizedStatus={order.normalizedStatus}
+                trackingNumber={order.trackingNumber}
+                eventStatuses={order.trackingEvents.map((e) => e.normalizedStatus)}
                 deliveredAt={order.deliveredAt}
                 returnedAt={order.returnedAt}
               />
@@ -331,134 +334,86 @@ export function TrackingTimelineDrawer({
   );
 }
 
-type StepKey = "created" | "booked" | "in_transit" | "out_for_delivery" | "delivered";
-type Step = { key: StepKey; label: string; icon: typeof Package };
-
-const SUCCESS_STEPS: Step[] = [
-  { key: "created", label: "Created", icon: ClipboardList },
-  { key: "booked", label: "Booked", icon: Package },
-  { key: "in_transit", label: "In transit", icon: Truck },
-  { key: "out_for_delivery", label: "Out for delivery", icon: Home },
-  { key: "delivered", label: "Delivered", icon: CheckCircle2 },
-];
-
-/**
- * Map order.status + latest normalizedStatus to the index of the step the
- * order has reached (0-based). The order's persisted `status` is the source
- * of truth for early stages (created/booked); the courier's normalizedStatus
- * advances us through the in-transit / out-for-delivery / delivered stages.
- */
-function reachedStepIndex(
-  orderStatus: string,
-  normalizedStatus: string | null | undefined,
-): number {
-  if (normalizedStatus === "delivered" || orderStatus === "delivered") return 4;
-  if (normalizedStatus === "out_for_delivery") return 3;
-  if (
-    normalizedStatus === "in_transit" ||
-    normalizedStatus === "picked_up" ||
-    orderStatus === "in_transit"
-  ) {
-    return 2;
-  }
-  if (orderStatus === "shipped") return 1;
-  return 0;
-}
+const STEP_ICON: Record<ProgressStepKey, typeof Package> = {
+  created: ClipboardList,
+  booked: Package,
+  in_transit: Truck,
+  out_for_delivery: Home,
+  delivered: CheckCircle2,
+  terminal: AlertCircle,
+};
 
 function ProgressStepper({
   orderStatus,
   normalizedStatus,
+  trackingNumber,
+  eventStatuses,
   deliveredAt,
   returnedAt,
 }: {
   orderStatus: string;
   normalizedStatus: string | null | undefined;
+  trackingNumber: string | null | undefined;
+  eventStatuses: ReadonlyArray<string | null | undefined>;
   deliveredAt: Date | string | null | undefined;
   returnedAt: Date | string | null | undefined;
 }) {
-  const isFailed =
-    orderStatus === "rto" ||
-    orderStatus === "cancelled" ||
-    normalizedStatus === "rto" ||
-    normalizedStatus === "failed";
-
-  const steps: Step[] = isFailed
-    ? [
-        ...SUCCESS_STEPS.slice(0, 4),
-        {
-          key: "delivered",
-          label: orderStatus === "rto" || normalizedStatus === "rto" ? "Returned" : "Failed",
-          icon: orderStatus === "rto" || normalizedStatus === "rto" ? Undo2 : AlertCircle,
-        },
-      ]
-    : SUCCESS_STEPS;
-
-  const reached = isFailed ? steps.length - 1 : reachedStepIndex(orderStatus, normalizedStatus);
+  const progress = deliveryProgress({ orderStatus, normalizedStatus, trackingNumber, eventStatuses });
+  const { steps, terminal } = progress;
 
   return (
     <div className="rounded-lg border border-[rgba(209,213,219,0.08)] bg-[#1A1D2E] p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-[#F3F4F6]">Delivery progress</h3>
-        <span className="text-xs text-[#9CA3AF]">
-          {Math.min(reached + 1, steps.length)} of {steps.length}
-        </span>
+        <span className={`text-xs ${terminal ? "text-[#F87171]" : "text-[#9CA3AF]"}`}>{progress.summary}</span>
       </div>
       <div className="flex items-start">
         {steps.map((step, idx) => {
-          const completed = idx < reached;
-          const active = idx === reached;
-          const Icon = step.icon;
-          const failedTerminal = isFailed && idx === steps.length - 1 && active;
-          const circleClass = failedTerminal
+          const Icon = step.key === "terminal" && terminal === "returned" ? Undo2 : STEP_ICON[step.key];
+          const failed = step.state === "failed";
+          const reached = step.state !== "upcoming";
+          const circleClass = failed
             ? "border-[#F87171] bg-[rgba(239,68,68,0.18)] text-[#F87171]"
-            : completed
+            : step.state === "completed"
               ? "border-brand bg-brand text-brand-fg"
-              : active
+              : step.state === "active"
                 ? "border-brand bg-brand/20 text-brand ring-2 ring-brand/35"
                 : "border-[rgba(209,213,219,0.2)] bg-[#111318] text-[#6B7280]";
-          const labelClass = active
-            ? failedTerminal
-              ? "text-[#F87171]"
-              : "text-[#F3F4F6]"
-            : completed
-              ? "text-[#D1D5DB]"
-              : "text-[#6B7280]";
+          const labelClass = failed
+            ? "text-[#F87171]"
+            : step.state === "active"
+              ? "text-[#F3F4F6]"
+              : step.state === "completed"
+                ? "text-[#D1D5DB]"
+                : "text-[#6B7280]";
           return (
             <div key={step.key} className="flex flex-1 flex-col items-center">
               <div className="flex w-full items-center">
                 <div
                   className={`h-0.5 flex-1 ${
-                    idx === 0
-                      ? "bg-transparent"
-                      : idx <= reached
-                        ? "bg-brand"
-                        : "bg-[rgba(209,213,219,0.15)]"
+                    idx === 0 ? "bg-transparent" : reached ? "bg-brand" : "bg-[rgba(209,213,219,0.15)]"
                   }`}
                 />
-                <div
-                  className={`flex h-8 w-8 items-center justify-center rounded-full border ${circleClass}`}
-                >
+                <div className={`flex h-8 w-8 items-center justify-center rounded-full border ${circleClass}`}>
                   <Icon className="h-4 w-4" />
                 </div>
                 <div
                   className={`h-0.5 flex-1 ${
                     idx === steps.length - 1
                       ? "bg-transparent"
-                      : idx < reached
+                      : step.state === "completed"
                         ? "bg-brand"
                         : "bg-[rgba(209,213,219,0.15)]"
                   }`}
                 />
               </div>
-              <span
-                className={`mt-2 text-center text-[10px] font-medium uppercase tracking-wide ${labelClass}`}
-              >
+              <span className={`mt-2 text-center text-[10px] font-medium uppercase tracking-wide ${labelClass}`}>
                 {step.label}
               </span>
-              {active && step.key === "delivered" && deliveredAt && !isFailed && (
+              {step.state === "active" && step.key === "delivered" && deliveredAt && (
                 <span className="mt-0.5 text-[10px] text-[#9CA3AF]">{formatDate(deliveredAt)}</span>
               )}
-              {active && failedTerminal && returnedAt && (
+              {failed && terminal === "returned" && returnedAt && (
                 <span className="mt-0.5 text-[10px] text-[#9CA3AF]">{formatDate(returnedAt)}</span>
               )}
             </div>

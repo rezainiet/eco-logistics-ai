@@ -116,10 +116,30 @@ export function settingsOf(page: { locales?: unknown; defaultLocale?: unknown })
   return normalizeLocaleSettings(page.locales, page.defaultLocale, "en");
 }
 
+function publicUrlPattern(): string | null {
+  return env.LANDING_PUBLIC_URL_PATTERN ?? (env.NODE_ENV === "production" ? null : "http://{slug}.localhost:3002");
+}
+
 export function publicUrlFor(slug: string | null | undefined): string | null {
-  const pattern =
-    env.LANDING_PUBLIC_URL_PATTERN ?? (env.NODE_ENV === "production" ? null : "http://{slug}.localhost:3002");
-  return landingPublicUrl(pattern, slug);
+  return landingPublicUrl(publicUrlPattern(), slug);
+}
+
+/**
+ * The host a page's subdomain sits under ("confirmx.ai" for
+ * "https://{slug}.confirmx.ai"), for the editor's "served at <slug>.<base>"
+ * hint. Null when public hosting isn't configured or the pattern isn't a
+ * `{slug}.` subdomain pattern.
+ */
+export function subdomainBaseOf(pattern: string | null | undefined): string | null {
+  if (!pattern) return null;
+  const host = pattern.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split("/")[0] ?? "";
+  if (!host.startsWith("{slug}.")) return null;
+  const base = host.slice("{slug}.".length);
+  return base && !base.includes("{") ? base : null;
+}
+
+export function subdomainBase(): string | null {
+  return subdomainBaseOf(publicUrlPattern());
 }
 
 export function pageSummary(page: PageDoc) {
@@ -132,6 +152,8 @@ export function pageSummary(page: PageDoc) {
     ...settingsOf(page),
     slug: page.slug ?? null,
     publicUrl: page.status === "published" ? publicUrlFor(page.slug) : null,
+    /** Deployment-wide host the page's subdomain sits under; null if hosting is off. */
+    subdomainBase: subdomainBase(),
     draftRevision: page.draftRevision,
     publishedRevisionNumber: page.publishedRevisionNumber ?? null,
     publishedAt: page.publishedAt ?? null,

@@ -5,6 +5,13 @@ import { useSession } from "next-auth/react";
 import { MailCheck, Clock } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { deriveOnboardingProgress } from "@/lib/onboarding/progress";
+import {
+  EMAIL_UNAVAILABLE_COPY,
+  type EmailDelivery,
+  emailDeliveryFromBody,
+  parseEmailDelivery,
+  verifyPromptState,
+} from "@/lib/email-delivery";
 
 /**
  * Welcome hero rendered above the onboarding checklist on /dashboard/getting-started.
@@ -138,6 +145,7 @@ export function DashboardHero({ initialName }: { initialName?: string }) {
             trialDaysLeft={trialDaysLeft}
             emailVerified={emailVerified}
             email={profile.data?.email}
+            emailDelivery={parseEmailDelivery(profile.data?.emailDelivery)}
           />
         </div>
         <ProgressRing
@@ -155,11 +163,13 @@ function HeroPills({
   trialDaysLeft,
   emailVerified,
   email,
+  emailDelivery,
 }: {
   isTrial?: boolean;
   trialDaysLeft?: number | null;
   emailVerified: boolean;
   email?: string;
+  emailDelivery: EmailDelivery;
 }) {
   const [verifyDismissed, setVerifyDismissed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -167,17 +177,20 @@ function HeroPills({
   });
   const [resending, setResending] = useState(false);
   const [resent, setResent] = useState(false);
+  const [resendDelivery, setResendDelivery] = useState<EmailDelivery>("available");
 
   async function resendVerification() {
     if (!email) return;
     setResending(true);
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-      await fetch(`${apiUrl}/auth/resend-verification`, {
+      const res = await fetch(`${apiUrl}/auth/resend-verification`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      if (!res.ok) return;
+      setResendDelivery(emailDeliveryFromBody(await res.json().catch(() => null)));
       setResent(true);
     } finally {
       setResending(false);
@@ -192,7 +205,14 @@ function HeroPills({
   }
 
   const showTrial = isTrial && typeof trialDaysLeft === "number" && trialDaysLeft > 0;
-  const showVerify = !emailVerified && !verifyDismissed && Boolean(email);
+  const verifyState = verifyPromptState({
+    loaded: Boolean(email),
+    emailVerified,
+    dismissed: verifyDismissed,
+    delivery: emailDelivery === "unavailable" ? "unavailable" : resendDelivery,
+    resent,
+  });
+  const showVerify = verifyState !== "hidden";
 
   if (!showTrial && !showVerify) return null;
 
@@ -207,7 +227,22 @@ function HeroPills({
       {showVerify ? (
         <span className="inline-flex items-center gap-2 rounded-full border border-warning/25 bg-warning/10 px-2.5 py-1 text-xs font-medium text-warning">
           <MailCheck className="h-3 w-3" aria-hidden />
-          {resent ? (
+          {verifyState === "unavailable" ? (
+            <>
+              <span title={EMAIL_UNAVAILABLE_COPY.verifyLong}>{EMAIL_UNAVAILABLE_COPY.verifyShort}</span>
+              <span aria-hidden className="text-warning/40">
+                ·
+              </span>
+              <button
+                type="button"
+                onClick={dismissVerify}
+                className="text-warning/80 hover:text-warning"
+                aria-label="Dismiss email verification notice"
+              >
+                dismiss
+              </button>
+            </>
+          ) : verifyState === "sent" ? (
             <span>Verification sent — check your inbox</span>
           ) : (
             <>

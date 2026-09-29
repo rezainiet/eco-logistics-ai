@@ -41,4 +41,4 @@ Next.js refuses to compile when `app/foo/page.tsx` AND `app/(group)/foo/page.tsx
 
 ## Tests
 - E2E: Playwright (`apps/web/e2e/`). Requires the api + web stack running.
-- No unit-test runner configured here; logic-heavy code lives in `apps/api`.
+- Unit: Vitest (`npm --workspace apps/web run test`, config `vitest.config.mts`) for `src/**/*.test.{ts,tsx}` — pure logic and presentational components rendered with `react-dom/server` (node environment, no DOM, no tRPC). Keep logic you want to test in plain modules (e.g. `lib/notifications/account-alerts.ts`) and keep tRPC calls in the component. Business logic still belongs in `apps/api`.

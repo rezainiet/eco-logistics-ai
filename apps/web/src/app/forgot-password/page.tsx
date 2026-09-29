@@ -9,6 +9,7 @@ import { AlertCircle, ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EMAIL_UNAVAILABLE_COPY, type EmailDelivery, emailDeliveryFromBody } from "@/lib/email-delivery";
 
 const schema = z.object({
   email: z.string().email("That doesn't look like an email."),
@@ -17,6 +18,9 @@ type FormValues = z.infer<typeof schema>;
 
 export default function ForgotPasswordPage() {
   const [submitted, setSubmitted] = useState(false);
+  // "unavailable" when the deployment has no email provider — the reset link
+  // can't be sent, so "check your inbox" would be false. Same for every email.
+  const [delivery, setDelivery] = useState<EmailDelivery>("available");
   const [error, setError] = useState<string | null>(null);
   const {
     register,
@@ -48,7 +52,28 @@ export default function ForgotPasswordPage() {
       }
       return;
     }
+    setDelivery(emailDeliveryFromBody(await res.json().catch(() => null)));
     setSubmitted(true);
+  }
+
+  if (submitted && delivery === "unavailable") {
+    return (
+      <div className="cordon-card animate-slide-up border border-stroke/30 bg-surface p-7 shadow-elevated">
+        <div role="status" className="flex flex-col items-center gap-3 text-center">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-warning-subtle text-warning">
+            <AlertCircle className="h-5 w-5" aria-hidden />
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-fg">{EMAIL_UNAVAILABLE_COPY.resetTitle}</h1>
+          <p className="max-w-sm text-sm text-fg-subtle">{EMAIL_UNAVAILABLE_COPY.resetBody}</p>
+        </div>
+        <Link
+          href="/login"
+          className="mt-6 inline-flex w-full items-center justify-center gap-1.5 text-sm font-medium text-fg-muted hover:text-fg"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
+        </Link>
+      </div>
+    );
   }
 
   if (submitted) {

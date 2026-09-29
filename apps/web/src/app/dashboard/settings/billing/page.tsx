@@ -59,6 +59,13 @@ import { toast } from "@/components/ui/toast";
 import { humanizeError } from "@/lib/friendly-errors";
 import { SettingsPageHeader } from "@/components/settings/section";
 import { SETTINGS_BY_KEY } from "@/components/settings/nav-config";
+import { classifyMeter } from "@/lib/billing/meters";
+import {
+  PAYMENT_METHOD_LABEL,
+  type PaymentFormMethod,
+  isPaymentMethodAvailable,
+  paymentMethodHelp,
+} from "@/lib/billing/payment-method-help";
 const PLAN_ICON = {
   starter: Sparkles,
   growth: Zap,
@@ -72,14 +79,6 @@ const METRIC_LABEL: Record<string, string> = {
   fraudReviewsUsed: "Order verifications",
   callsInitiated: "Calls initiated",
   callMinutesUsed: "Call minutes used",
-};
-
-const METHOD_HELP: Record<string, { label: string; hint: string }> = {
-  bkash: { label: "bKash", hint: "Send to 01XXXXXXXXX (Personal). Use the provided reference." },
-  nagad: { label: "Nagad", hint: "Send to 01XXXXXXXXX (Personal)." },
-  bank_transfer: { label: "Bank transfer", hint: "DBBL — A/C 1234567890 — ConfirmX Technologies Ltd." },
-  card: { label: "Card", hint: "Upload your card payment receipt for manual review." },
-  other: { label: "Other", hint: "Add details in the notes field." },
 };
 
 function formatBDT(n: number): string {
@@ -102,6 +101,10 @@ export default function BillingPage() {
   const plans = trpc.billing.listPlans.useQuery();
   const usage = trpc.billing.getUsage.useQuery();
   const payments = trpc.billing.listPayments.useQuery({ limit: 25 });
+  // Real payment destinations (server env). Never hardcode a number here.
+  const paymentInstructions = trpc.billing.getPaymentInstructions.useQuery(undefined, {
+    staleTime: 60_000,
+  });
   const utils = trpc.useUtils();
 
   // Surface Stripe redirect outcome the moment the merchant lands back here.
@@ -467,28 +470,31 @@ export default function BillingPage() {
             {usage.data?.meters.map((m) => {
               const label = METRIC_LABEL[m.metric] ?? m.metric;
               const limitLabel = m.limit === null ? "unlimited" : m.limit.toLocaleString();
+              const state = classifyMeter(m);
               return (
                 <div key={m.metric}>
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-fg-muted">{label}</span>
                     <span
                       className={
-                        m.blocked
+                        state === "blocked"
                           ? "text-danger"
-                          : m.warning
+                          : state === "warning"
                             ? "text-warning"
                             : "text-fg-subtle"
                       }
                     >
-                      {m.used.toLocaleString()} / {limitLabel}
+                      {state === "not_included"
+                        ? "Not included in your plan"
+                        : `${m.used.toLocaleString()} / ${limitLabel}`}
                     </span>
                   </div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-surface">
                     <div
                       className={
-                        m.blocked
+                        state === "blocked"
                           ? "h-full bg-danger"
-                          : m.warning
+                          : state === "warning"
                             ? "h-full bg-warning"
                             : "h-full bg-brand"
                       }
@@ -637,14 +643,25 @@ export default function BillingPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(METHOD_HELP).map(([k, v]) => (
+                  {(Object.keys(PAYMENT_METHOD_LABEL) as PaymentFormMethod[]).map((k) => (
                     <SelectItem key={k} value={k}>
-                      {v.label}
+                      {PAYMENT_METHOD_LABEL[k]}
+                      {isPaymentMethodAvailable(k, paymentInstructions.data?.options) ? "" : " (not set up)"}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-fg-faint">{METHOD_HELP[form.method]?.hint}</p>
+              {(() => {
+                const help = paymentMethodHelp(form.method, paymentInstructions.data?.options);
+                return (
+                  <p
+                    className={help.configured === false ? "text-xs text-warning" : "text-xs text-fg-faint"}
+                    role={help.configured === false ? "status" : undefined}
+                  >
+                    {help.text}
+                  </p>
+                );
+              })()}
             </div>
             <div className="space-y-1.5">
               <Label>Amount (BDT)</Label>

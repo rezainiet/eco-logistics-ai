@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, ShieldAlert } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { classifyMeter, type MeterState } from "@/lib/billing/meters";
 import { useVisibilityInterval } from "@/lib/use-visibility-interval";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -60,10 +61,11 @@ export function UsageOverview() {
 
   // Worst-case across all meters drives the global banner — if anything
   // is blocked we show a hard block; otherwise if anything is in the
-  // warning range we show a soft warning.
-  const blocked = meters.some((m) => m.blocked) ||
+  // warning range we show a soft warning. A feature outside the plan
+  // (limit 0, nothing used) is "not included", not a limit that was hit.
+  const blocked = meters.some((m) => classifyMeter(m) === "blocked") ||
     (integrationsView !== null && integrationsView.cap > 0 && integrationsView.used >= integrationsView.cap);
-  const warning = meters.some((m) => m.warning) ||
+  const warning = meters.some((m) => classifyMeter(m) === "warning") ||
     (integrationsView !== null && integrationsView.cap > 0 && integrationsView.used >= integrationsView.cap * 0.8);
 
   return (
@@ -113,7 +115,8 @@ export function UsageOverview() {
               used={m.used}
               limit={m.limit}
               ratio={m.ratio}
-              tone={m.blocked ? "danger" : m.warning ? "warning" : "default"}
+              tone={meterTone(classifyMeter(m))}
+              notIncluded={classifyMeter(m) === "not_included"}
             />
           ))}
           {integrationsView ? (
@@ -150,18 +153,25 @@ export function UsageOverview() {
   );
 }
 
+function meterTone(state: MeterState): "default" | "warning" | "danger" {
+  return state === "blocked" ? "danger" : state === "warning" ? "warning" : "default";
+}
+
 function Meter({
   label,
   used,
   limit,
   ratio,
   tone,
+  notIncluded = false,
 }: {
   label: string;
   used: number;
   limit: number | null;
   ratio: number;
   tone: "default" | "warning" | "danger";
+  /** Feature outside the current plan (limit 0, nothing used). */
+  notIncluded?: boolean;
 }) {
   const pct = Math.round(Math.min(1, ratio) * 100);
   const remaining = limit === null ? null : Math.max(0, limit - used);
@@ -202,7 +212,9 @@ function Meter({
           aria-label={`${pct}% used`}
         />
       </div>
-      {remaining !== null ? (
+      {notIncluded ? (
+        <p className="text-2xs text-fg-faint">Not included in your plan.</p>
+      ) : remaining !== null ? (
         <p className="text-2xs text-fg-faint">
           {remaining > 0 ? (
             <>{remaining.toLocaleString()} remaining</>

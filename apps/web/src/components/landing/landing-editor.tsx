@@ -616,8 +616,17 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="text-sm font-medium text-fg">Subdomain</div>
                 <p className="text-xs text-fg-subtle">
-                  Your page will be served at <span className="font-mono">{slugInput || "your-name"}.&lt;landing domain&gt;</span> once public
-                  hosting is switched on.
+                  {page.subdomainBase ? (
+                    <>
+                      Your page will be served at{" "}
+                      <span className="font-mono">
+                        {slugInput || "your-name"}.{page.subdomainBase}
+                      </span>
+                      .
+                    </>
+                  ) : (
+                    <>Your page gets its own subdomain once public hosting is switched on.</>
+                  )}
                 </p>
                 <div className="flex gap-2">
                   <Input

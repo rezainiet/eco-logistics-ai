@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsSection } from "@/components/settings/section";
 import { FormField, FormError } from "@/components/settings/form-field";
+import { EMAIL_UNAVAILABLE_COPY, emailDeliveryFromBody } from "@/lib/email-delivery";
 
 export function SecuritySection() {
   const profile = trpc.merchants.getProfile.useQuery();
@@ -72,6 +73,11 @@ export function SecuritySection() {
       body: JSON.stringify({ email: profile.data.email }),
     });
     if (res.ok) {
+      // No email provider on this deployment: nothing was sent, so don't say it was.
+      if (emailDeliveryFromBody(await res.json().catch(() => null)) === "unavailable") {
+        toast.error("Couldn't send the email", EMAIL_UNAVAILABLE_COPY.resendFailed);
+        return;
+      }
       toast.success("Verification email sent", "Check your inbox.");
       void utils.merchants.getProfile.invalidate();
     } else {

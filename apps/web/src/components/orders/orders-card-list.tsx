@@ -1,6 +1,6 @@
 "use client";
 
-import { SearchX } from "lucide-react";
+import { ChevronRight, SearchX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatBDT, formatDate } from "@/lib/formatters";
@@ -31,6 +31,8 @@ interface OrdersCardListProps {
   isLoading: boolean;
   selected: Set<string>;
   onToggleRow: (id: string) => void;
+  /** Opens the order detail drawer — the same one the desktop "View" button opens. */
+  onOpenOrder: (id: string) => void;
   onResetFilters: () => void;
 }
 
@@ -40,14 +42,16 @@ interface OrdersCardListProps {
  * cards so phones don't horizontal-scroll.
  *
  * Selection state and the bookable predicate are passed in by the parent
- * so a single Set<string> stays in sync between table + cards. Actions
- * still flow through the bottom <BulkAutomationBar />.
+ * so a single Set<string> stays in sync between table + cards. Bulk actions
+ * still flow through the bottom <BulkAutomationBar />; each card has its own
+ * "View details" button that opens the order detail drawer.
  */
 export function OrdersCardList({
   rows,
   isLoading,
   selected,
   onToggleRow,
+  onOpenOrder,
   onResetFilters,
 }: OrdersCardListProps) {
   if (isLoading) {
@@ -171,14 +175,28 @@ export function OrdersCardList({
                     {formatDate(r.createdAt)}
                   </span>
                 </div>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onOpenOrder(r.id)}
+                    aria-label={`View order ${r.orderNumber}`}
+                    className="min-h-10 border-stroke/14 text-fg-muted"
+                  >
+                    View details
+                    <ChevronRight className="ml-1 h-3.5 w-3.5" aria-hidden />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
         );
       })}
       <p className="px-1 pt-1 text-2xs text-fg-faint">
-        Tap the checkbox on a card and use the action bar at the bottom of
-        the screen to confirm, reject, or book the selected orders.
+        Tap &ldquo;View details&rdquo; to open an order. Tap the checkbox on a
+        card and use the action bar at the bottom of the screen to confirm,
+        reject, or book the selected orders.
       </p>
     </div>
   );
