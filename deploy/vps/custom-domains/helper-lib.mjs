@@ -27,27 +27,8 @@ export const BIN = Object.freeze({
   systemctl: "/usr/bin/systemctl",
 });
 
-/** Where the root-owned copy of this helper is installed (never the app release tree). */
-export const INSTALL_DIR = "/usr/local/lib/confirmx/domains-helper";
-/** Trees the helper must never execute from: they are writable by the unprivileged app user. */
-export const UNTRUSTED_TREES = ["/opt/confirmx", "/home", "/tmp", "/var/tmp"];
-
-/**
- * Refuses to run as root from code a less-privileged user could have
- * modified. `chain` = every path from the helper's files up to "/"
- * ({ path, uid, mode, isDir }). A problem is any entry that is not
- * root-owned, is writable by group/other, or lies under an app-writable
- * tree. Any problem → the helper exits before doing anything.
- */
-export function trustedInstallProblems(chain) {
-  const problems = [];
-  for (const e of chain) {
-    if (UNTRUSTED_TREES.some((t) => e.path === t || e.path.startsWith(`${t}/`))) problems.push(`${e.path}: inside an app-writable tree`);
-    if (e.uid !== 0) problems.push(`${e.path}: not owned by root`);
-    if ((e.mode & 0o022) !== 0) problems.push(`${e.path}: writable by group/other`);
-  }
-  return problems;
-}
+// The installation trust check lives in the bootstrap (confirmx-domains-helper.mjs),
+// which runs it BEFORE this module is loaded at all.
 
 export const DEFAULT_PATHS = Object.freeze({
   nginxDir: "/etc/nginx/confirmx-custom-domains",
@@ -187,19 +168,22 @@ export async function reconcile(deps, paths = DEFAULT_PATHS) {
   for (const d of entries) {
     if (d.action === "hold") continue;
     const expiry = await deps.certExpiry(d.hostname);
+    if (d.issueAllowed === false) {
+      // Active retry backoff after a failed issuance — checked FIRST, whatever
+      // the certificate's state: never call certbot (Let's Encrypt
+      // failed-validation limits) and report NOTHING, so the API keeps its
+      // failure count and retryAfter (a "live" report would reset them just
+      // because an old certificate is still valid). An existing certificate
+      // keeps being served.
+      if (expiry) serve.push(d.hostname);
+      deps.log({ evt: "issue_backoff", hostname: d.hostname, retryAfter: d.retryAfter ?? null });
+      continue;
+    }
     const fresh = expiry && expiry.getTime() - deps.now().getTime() > RENEW_BEFORE_MS;
     if (!fresh && d.action === "serve" && expiry && expiry.getTime() > deps.now().getTime()) {
       // Serving with a still-valid cert: certbot.timer renews it; keep serving.
       serve.push(d.hostname);
       results.push({ hostname: d.hostname, outcome: "live", certExpiresAt: expiry.toISOString() });
-      continue;
-    }
-    if (!fresh && d.issueAllowed === false) {
-      // The API's retry backoff after a failed issuance: don't call certbot
-      // (Let's Encrypt failed-validation limits). Keep serving an existing
-      // certificate if there is one; report nothing (no false "live").
-      if (expiry) serve.push(d.hostname);
-      deps.log({ evt: "issue_backoff", hostname: d.hostname, retryAfter: d.retryAfter ?? null });
       continue;
     }
     if (!fresh) {

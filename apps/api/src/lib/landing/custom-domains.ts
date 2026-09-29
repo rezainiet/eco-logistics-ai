@@ -381,19 +381,32 @@ export async function applyHelperReport(results: unknown): Promise<{ applied: nu
     const error = typeof r.error === "string" && SAFE_ERROR.test(r.error) ? r.error : "The certificate could not be issued. Check the DNS records and try again.";
     let res;
     if (r.outcome === "live") {
+      // During an active retry backoff a "live" report can only mean that an
+      // older certificate is still valid (the helper never issues then): it
+      // must not reset the failure count / retry time. Outside a backoff it
+      // is a success and clears the failure state.
+      const cur = await LandingPageHost.findOne({ hostname: check.hostname, ...CUSTOM }).select("customDomain.sslFailures customDomain.sslFailedAt").lean();
+      const retryAt = sslRetryAt(cur?.customDomain);
+      const inBackoff = !!retryAt && retryAt.getTime() > now.getTime();
       res = await LandingPageHost.updateOne(
-        { hostname: check.hostname, ...CUSTOM, status: { $in: ["ssl_pending", "live"] } },
+        {
+          hostname: check.hostname,
+          ...CUSTOM,
+          status: { $in: ["ssl_pending", "live"] },
+          // CAS: the failure state we decided on is still the one stored.
+          ...(inBackoff ? { "customDomain.sslFailedAt": cur!.customDomain!.sslFailedAt } : {}),
+        },
         [
           {
             $set: {
               status: "live",
               "customDomain.liveAt": { $ifNull: ["$customDomain.liveAt", now] },
               "customDomain.helperReportedAt": now,
-              "customDomain.sslFailures": 0,
+              ...(inBackoff ? {} : { "customDomain.sslFailures": 0 }),
               ...(expires ? { "customDomain.certExpiresAt": expires } : {}),
             },
           },
-          { $unset: ["customDomain.lastError", "customDomain.sslFailedAt"] },
+          ...(inBackoff ? [] : [{ $unset: ["customDomain.lastError", "customDomain.sslFailedAt"] }]),
         ],
       );
     } else {

@@ -13,7 +13,9 @@ import { applyHelperReport, desiredDomains } from "../lib/landing/custom-domains
  *  - the TCP peer is loopback (the helper calls 127.0.0.1 directly);
  *  - no proxy headers — Nginx adds X-Forwarded-For / X-Real-IP to every
  *    proxied request, so a request through api.<domain> is refused even
- *    though Nginx itself connects from loopback.
+ *    though Nginx itself connects from loopback;
+ *  - the path uses the exact lower-case prefix (Nginx also returns 404 for
+ *    /internal/ in any letter case on the API host).
  */
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -36,8 +38,13 @@ export function helperRequestAllowed(req: Pick<Request, "headers" | "socket">, t
 
 export const customDomainsInternalRouter = Router();
 
+// Express matches mount paths case-insensitively; the helper only ever uses
+// this exact lower-case prefix, so anything else (e.g. /INTERNAL/…) is refused
+// here too, not only by Nginx.
+const EXACT_PREFIX = "/internal/custom-domains/";
+
 customDomainsInternalRouter.use((req, res, next) => {
-  if (!helperRequestAllowed(req)) {
+  if (!req.originalUrl.startsWith(EXACT_PREFIX) || !helperRequestAllowed(req)) {
     res.status(404).json({ ok: false });
     return;
   }

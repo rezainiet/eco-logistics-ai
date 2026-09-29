@@ -31,9 +31,13 @@ failing domain must not be retried on every timer tick. The API persists
 `customDomain.sslFailures` (consecutive) and `sslFailedAt`; the next attempt is
 allowed 15 min after the first failure, doubling per consecutive failure, capped
 at 6 h. The desired list carries `issueAllowed: false` (+ `retryAfter`) during the
-backoff and the helper then makes no certbot call for that domain (an existing
-certificate keeps being served; nothing is reported). The merchant's **Check DNS**
-retry is gated by the same backoff. A successful issuance resets it.
+backoff and the helper then makes no certbot call for that domain and reports
+nothing for it — **whatever the state of its certificate**: an existing (even
+still-valid) certificate keeps being served, but no "live" report is sent, so
+the failure count and `retryAfter` are kept. The API also ignores the reset part
+of a "live" report while a backoff is active. The merchant's **Check DNS** retry
+is gated by the same backoff. Once it has passed, a successful issuance (or a
+valid certificate) reports "live" and resets it.
 
 ## What the helper can do (and nothing else)
 
@@ -55,7 +59,10 @@ Redis, other Nginx files, application code, or the platform's own certificates.
 
 The internal API endpoints answer only loopback requests without proxy headers
 that carry `Authorization: Bearer $CUSTOM_DOMAIN_HELPER_TOKEN`; everything else
-gets 404. The API vhost additionally returns 404 for `/internal/`.
+gets 404, and so does any path that is not exactly the lower-case
+`/internal/custom-domains/` prefix. The API vhost additionally returns 404 for
+`/internal` in **any letter case** (`location ~* ^/internal(?:/|$)`), before the
+request can reach the API.
 
 ## Trust model — why the helper is installed outside the release tree
 
@@ -69,15 +76,26 @@ Therefore:
 - The unit executes **only** `/usr/local/lib/confirmx/domains-helper/confirmx-domains-helper.mjs`.
 - That directory and its files are `root:root`, not group/other-writable, and so
   are all parent directories — `confirmx` cannot modify, replace or rename them.
-- The helper checks this itself at start (`trustedInstallProblems`): if any of its
-  files or any parent directory is not root-owned, is group/other-writable, or lies
-  under `/opt/confirmx`, `/home`, `/tmp` or `/var/tmp`, it exits (code 3) before
-  contacting the API or running anything.
+- The entry file is a **bootstrap** that statically imports only `node:` built-ins
+  and checks the installation (`trustProblems`) **before any other code is
+  loaded**; only if the check passes does it import `helper-lib.mjs`, dynamically,
+  from the verified directory. The check uses `lstat` (never follows links) and
+  fails with exit code 3 — before contacting the API or running anything — if:
+  - it was not started as `/usr/local/lib/confirmx/domains-helper/confirmx-domains-helper.mjs`
+    (exact directory and file name);
+  - any helper file, the install directory or any parent up to `/` **is a
+    symlink**, or any of them does not resolve (`realpath`) to exactly itself —
+    so nothing can point outside the install directory;
+  - any of them is not root-owned or is group/other-writable;
+  - any of them lies under `/opt/confirmx`, `/home`, `/tmp` or `/var/tmp`;
+  - a helper file is missing or not a regular file.
+  `--dry-run` from an untrusted location is only tolerated for a **non-root** user
+  (nothing privileged can happen then); as root it is refused like a normal run.
 - The copy is updated only by an operator, from a reviewed commit (below) — never
   automatically by a release.
 - `UnsetEnvironment=NODE_OPTIONS NODE_PATH`: nothing in the environment can make
-  node preload other code. The helper imports only `node:*` built-ins and its
-  sibling `helper-lib.mjs` (no `node_modules`).
+  node preload other code. The helper loads only `node:*` built-ins and its
+  verified sibling `helper-lib.mjs` (no `node_modules`).
 
 ## Installation (operator, when approved — NOT done by any deploy)
 
@@ -146,7 +164,7 @@ Updating the helper later = repeat steps 0–2 from the new reviewed commit, the
 | confirmx cannot replace | `sudo -u confirmx touch /usr/local/lib/confirmx/domains-helper/x` | `Permission denied` |
 | Env file | `stat -c '%U:%G %a' /etc/confirmx/domains-helper.env` | `root:root 600` |
 | Unit/timer files | `stat -c '%U:%G %a %n' /etc/systemd/system/confirmx-domains-helper.*` | `root:root 644` |
-| Self-check works | temporarily `chmod g+w` a copy in a scratch root-owned dir and run it | exits 3, `untrusted_install` |
+| Self-check works | as root, run `node <any other path>/confirmx-domains-helper.mjs` (e.g. a scratch copy, or via a symlink) | exits 3, `untrusted_install`, no API request |
 
 ## systemd sandbox (confirmx-domains-helper.service)
 
@@ -164,16 +182,16 @@ Updating the helper later = repeat steps 0–2 from the new reviewed commit, the
 | `… /var/www/certbot` | certbot webroot: writes the HTTP-01 challenge file. |
 | `… /var/log/nginx` | `nginx -t` opens the configured log files for writing; fails on a read-only FS. |
 | `… -/var/lib/nginx` | `nginx -t` checks/creates its temp paths (optional: `-` = ignore if absent). |
-| (no `/run`) | Not needed: talking to systemd over its unix socket works on a read-only mount. **Staging must confirm** `systemctl reload nginx` works (see below). |
+| (no `/run`) | Not needed: talking to systemd over its unix socket works on a read-only mount. Verified in the local WSL validation: `systemctl reload nginx` succeeds from inside this sandbox (graceful, master PID unchanged). |
 | `ProtectHome=true` | `/root`, `/home` invisible. |
 | `PrivateTmp=true` | Own `/tmp` (certbot temp files), nothing shared. |
 | `PrivateDevices=true` | Only pseudo devices (`/dev/null`, `/dev/urandom`). |
 | `NoNewPrivileges=true` | No setuid escalation from anything it runs (certbot/nginx/systemctl need none). |
-| `CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER` | Root keeps only file-permission capabilities: `nginx -t` as root opens `www-data`-owned logs (DAC_OVERRIDE) and may chown temp paths (CHOWN); certbot manages file modes (FOWNER). No NET_ADMIN, SYS_ADMIN, KILL, SETUID… — it cannot change firewall rules, mount, or kill processes. |
+| `CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_NET_BIND_SERVICE` | Root keeps only file-permission capabilities — `nginx -t` as root opens `www-data`-owned logs (DAC_OVERRIDE) and may chown temp paths (CHOWN); certbot manages file modes (FOWNER) — plus **CAP_NET_BIND_SERVICE, because `nginx -t` binds the configured `:80`/`:443` listeners** to test them (without it every candidate config fails with `bind() … (13: Permission denied)` and is rolled back). No NET_ADMIN, SYS_ADMIN, KILL, SETUID… — it cannot change firewall rules, mount, or kill processes. |
 | `RestrictSUIDSGID=true` | Cannot create setuid/setgid files. |
 | `ProtectKernelTunables/Modules/Logs=true`, `ProtectControlGroups=true`, `ProtectClock=true`, `ProtectHostname=true` | No sysctl, module loading, kernel log, cgroup, clock or hostname changes. |
 | `RestrictNamespaces=true`, `RestrictRealtime=true`, `LockPersonality=true`, `SystemCallArchitectures=native` | Closes namespace/realtime/personality/foreign-ABI tricks. |
-| `SystemCallFilter=@system-service` | systemd's standard allowlist for service processes (node, python/certbot, nginx -t fit in it). |
+| `SystemCallFilter=@system-service @pkey` | systemd's standard allowlist for service processes, plus `@pkey` (`pkey_alloc`/`pkey_free`/`pkey_mprotect` only): node's V8 calls `pkey_alloc` at start-up — even on CPUs without protection keys — and without `@pkey` seccomp kills node with SIGSYS before the helper runs. Any other syscall outside the set still kills the process. |
 | `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` | Unix socket (systemd), IPv4/IPv6 (loopback API + Let's Encrypt over HTTPS). No raw/netlink/packet sockets. IP-level allowlisting is not possible: Let's Encrypt's addresses are not fixed. |
 | (no `MemoryDenyWriteExecute`) | Deliberately absent: node's JIT needs W+X memory and would crash. |
 | (no `PrivateNetwork`) | It must reach the API (loopback) and Let's Encrypt. |
@@ -183,21 +201,25 @@ location, the writable-path set, the capability set and the key sandbox
 directives, so a future change can't silently point ExecStart back into
 `/opt/confirmx/app` or widen the sandbox.
 
-## Staging validation (NOT yet performed — no Nginx/systemd available locally)
+## Staging validation
 
-What is proven locally: the helper's logic with fake side effects, the command
-allowlist, the trust check, the unit file's directives (static), and the
-generated config's structure (balanced blocks, known directives, fixed paths).
-**Not** proven: that real Nginx 1.24 accepts it, that the sandbox lets certbot and
-the reload work. Before production, on a non-production VPS with the same OS:
+A local WSL (Ubuntu 24.04, systemd 255, nginx 1.24, node 18) validation has run
+the installed helper under this unit against a loopback API stub and a
+**certbot stub** (no ACME): real `nginx -t`, graceful reload, rollback, backoff,
+the trust check and the sandbox were exercised there. Still **not** proven: real
+certbot/ACME issuance and renewal, real DNS / HTTP-01, the verbatim production
+template with the real platform certificates, and the production kernel/CPU/node
+version. Before production, on a non-production VPS with the same OS:
 
 1. Install per the steps above against a staging API (flag on, test merchant only).
 2. `systemd-analyze verify` the unit; `systemctl daemon-reload`.
 3. Render a config with a test domain and run `nginx -t` (checks the
    `ssl_session_cache shared:confirmx_tls:10m` reuse and `listen … ssl http2`).
 4. Run the helper `--dry-run`, then `systemctl start` it with a domain pointing at
-   the staging box, using Let's Encrypt **staging** first (temporarily add
-   `--test-cert` in a scratch copy — never in the installed one) to avoid rate limits.
+   the staging box, using Let's Encrypt **staging** first to avoid rate limits: on
+   the staging box only, set `server = https://acme-staging-v02.api.letsencrypt.org/directory`
+   in `/etc/letsencrypt/cli.ini` (certbot reads it; the helper's argv and code stay
+   unchanged — a modified copy would be refused by the trust check anyway).
 5. Confirm under the sandbox: certbot writes `/etc/letsencrypt`, `nginx -t` passes,
    `systemctl reload nginx` succeeds (if it fails with a read-only error on `/run`,
    add `ReadWritePaths=/run/systemd` only — nothing broader), and existing

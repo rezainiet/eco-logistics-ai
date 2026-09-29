@@ -89,7 +89,7 @@ async function goLive(s: Awaited<ReturnType<typeof shop>>, hostname: string) {
   return d;
 }
 
-async function internal(method: "GET" | "POST", path: string, headers: Record<string, string>, body?: unknown) {
+async function internal(method: "GET" | "POST", path: string, headers: Record<string, string>, body?: unknown, prefix = "/internal/custom-domains") {
   const app = express();
   app.use(express.json());
   app.use("/internal/custom-domains", customDomainsInternalRouter);
@@ -98,7 +98,7 @@ async function internal(method: "GET" | "POST", path: string, headers: Record<st
   });
   const port = (server.address() as { port: number }).port;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/internal/custom-domains${path}`, {
+    const res = await fetch(`http://127.0.0.1:${port}${prefix}${path}`, {
       method,
       headers: { "content-type": "application/json", ...headers },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -374,6 +374,29 @@ describe("custom domains — server helper contract", () => {
     await applyHelperReport([{ hostname: "shop.example.com", outcome: "failed" }]);
     expect(await entry()).toMatchObject({ action: "serve", issueAllowed: false });
     expect(await resolve("shop.example.com")).toMatchObject({ kind: "ok" });
+
+    // A "live" report DURING that backoff (an older certificate is still valid) must not reset it (Phase 3 L1).
+    const before = (await LandingPageHost.findOne({ hostname: "shop.example.com" }).lean())!.customDomain!;
+    const retryBefore = (await entry()).retryAfter;
+    expect(before.sslFailures).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      tick(2 * 60_000);
+      await applyHelperReport([{ hostname: "shop.example.com", outcome: "live", certExpiresAt: "2026-12-28T10:00:00Z" }]);
+    }
+    const during = (await LandingPageHost.findOne({ hostname: "shop.example.com" }).lean())!;
+    expect(during.status).toBe("live");
+    expect(during.customDomain).toMatchObject({ sslFailures: 1, sslFailedAt: before.sslFailedAt });
+    expect(during.customDomain?.lastError).toBeTruthy();
+    expect(await entry()).toMatchObject({ action: "serve", issueAllowed: false, retryAfter: retryBefore });
+
+    // Once the backoff is over, a live report is a success again and clears the failure state.
+    tick(10 * 60_000);
+    await applyHelperReport([{ hostname: "shop.example.com", outcome: "live", certExpiresAt: "2026-12-28T10:00:00Z" }]);
+    const after = (await LandingPageHost.findOne({ hostname: "shop.example.com" }).lean())!.customDomain!;
+    expect(after.sslFailures).toBe(0);
+    expect(after.sslFailedAt).toBeUndefined();
+    expect(after.lastError).toBeUndefined();
+    expect(await entry()).toEqual({ hostname: "shop.example.com", action: "serve", issueAllowed: true });
   });
 
   it("internal endpoints: 404 without the token, through a proxy, or when unconfigured", async () => {
@@ -384,6 +407,11 @@ describe("custom domains — server helper contract", () => {
     expect((await internal("GET", "/desired", { ...auth, "x-real-ip": "198.51.100.7" })).status).toBe(404);
     const ok = await internal("GET", "/desired", auth);
     expect(ok).toMatchObject({ status: 200, body: { ok: true, enabled: true, domains: [] } });
+    // Any other letter case is refused by the API too (Express mount paths are case-insensitive) — Phase 3 M2.
+    for (const prefix of ["/INTERNAL/custom-domains", "/Internal/custom-domains", "/internal/Custom-Domains", "/iNtErNaL/custom-domains"]) {
+      const r = await internal("GET", "/desired", auth, undefined, prefix);
+      expect(r.status, prefix).toBe(404);
+    }
 
     const s = await shop("cd-internal");
     const d = await s.caller.landingPages.addDomain({ id: s.page.id, hostname: "shop.example.com" });

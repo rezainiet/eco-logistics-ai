@@ -6,8 +6,9 @@
 # `systemctl reload nginx` require it. It executes the ROOT-OWNED copy in
 # /usr/local/lib/confirmx/domains-helper/ — never the app release tree
 # (/opt/confirmx/...), which the unprivileged `confirmx` user owns. The helper
-# also verifies this itself at start and exits if its files or any parent
-# directory are not root-owned or are group/other-writable.
+# bootstrap verifies this itself before loading any other code (lstat: no
+# symlinks; exact install dir; every file and parent root-owned and not
+# group/other-writable) and exits 3 otherwise.
 # Every directive below is explained in README.md ("systemd sandbox").
 [Unit]
 Description=ConfirmX custom-domain helper (certificates + nginx routing)
@@ -33,7 +34,7 @@ PrivateDevices=true
 
 # --- Privileges ---
 NoNewPrivileges=true
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_NET_BIND_SERVICE
 RestrictSUIDSGID=true
 
 # --- Kernel / system surfaces it never needs ---
@@ -47,7 +48,7 @@ RestrictNamespaces=true
 RestrictRealtime=true
 LockPersonality=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service @pkey
 
 # --- Network: loopback API, Let's Encrypt (HTTPS), systemd over a unix socket ---
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

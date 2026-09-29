@@ -9,9 +9,6 @@ export interface HelperPaths {
   letsencryptLive: string;
 }
 export declare const DEFAULT_PATHS: Readonly<HelperPaths>;
-export declare const INSTALL_DIR: string;
-export declare const UNTRUSTED_TREES: string[];
-export declare function trustedInstallProblems(chain: Array<{ path: string; uid: number; mode: number; isDir?: boolean }>): string[];
 export declare function validHostname(h: unknown, opts?: { extraPlatformDomains?: string[] }): boolean;
 export declare function certName(host: string): string;
 export declare function commandAllowed(bin: string, args: string[]): boolean;

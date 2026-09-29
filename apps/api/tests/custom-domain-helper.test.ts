@@ -1,10 +1,12 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   BIN,
   DEFAULT_PATHS,
-  INSTALL_DIR,
-  trustedInstallProblems,
   MAX_ISSUES_PER_RUN,
   commandAllowed,
   deleteArgs,
@@ -16,6 +18,8 @@ import {
   type HelperDeps,
   type HelperResult,
 } from "../../../deploy/vps/custom-domains/helper-lib.mjs";
+// The bootstrap entry: importing it never runs main() (see isEntrypoint — argv[1] is not this file).
+import { INSTALL_DIR, isEntrypoint, trustProblems, type TrustFs } from "../../../deploy/vps/custom-domains/confirmx-domains-helper.mjs";
 
 /**
  * The root custom-domain helper (deploy/vps/custom-domains/), exercised with
@@ -239,33 +243,380 @@ describe("custom-domain helper — retry backoff", () => {
     expect(w.commands.filter((c) => c.args[0] === "certonly")).toHaveLength(1);
     expect(w.reports.flat()).toEqual([expect.objectContaining({ hostname: "expired.example.com", outcome: "live" })]);
   });
-});
 
-describe("custom-domain helper — trusted install (H1)", () => {
-  const root = (path: string, mode = 0o40755) => ({ path, uid: 0, mode });
-  const good = [
-    root(`${INSTALL_DIR}/confirmx-domains-helper.mjs`, 0o100644),
-    root(`${INSTALL_DIR}/helper-lib.mjs`, 0o100644),
-    root(INSTALL_DIR),
-    root("/usr/local/lib/confirmx"),
-    root("/usr/local/lib"),
-    root("/usr/local"),
-    root("/usr"),
-    root("/"),
-  ];
-
-  it("accepts a root-owned, non-writable install under /usr/local/lib/confirmx", () => {
-    expect(trustedInstallProblems(good)).toEqual([]);
+  it("active backoff wins over a still-valid certificate: no certbot, no report (the API keeps its failure state), still served", async () => {
+    for (const validFor of [80 * DAY, 10 * DAY]) {
+      const w = world({
+        desired: { enabled: true, domains: [{ hostname: "valid.example.com", action: "serve", issueAllowed: false, retryAfter: "2026-09-29T10:15:00Z" }] },
+        certs: { "valid.example.com": new Date(NOW.getTime() + validFor) },
+        conf: renderNginxConfig(["valid.example.com"]),
+      });
+      for (let tick = 0; tick < 3; tick++) await reconcile(w.deps);
+      expect(w.commands.filter((c) => c.bin === BIN.certbot)).toEqual([]);
+      expect(w.reports.flat()).toEqual([]); // no "live" that would reset sslFailures / retryAfter
+      expect(w.files[CONF]).toContain("server_name valid.example.com;");
+    }
   });
 
-  it("refuses the app release tree, non-root owners and group/other-writable files or parents", () => {
-    const inRelease = [{ path: "/opt/confirmx/app/deploy/vps/custom-domains/helper-lib.mjs", uid: 0, mode: 0o100644 }];
-    expect(trustedInstallProblems(inRelease)).toEqual([expect.stringMatching(/app-writable tree/)]);
-    expect(trustedInstallProblems([{ ...good[0]!, uid: 999 }])).toEqual([expect.stringMatching(/not owned by root/)]);
-    expect(trustedInstallProblems([{ ...good[1]!, mode: 0o100664 }])).toEqual([expect.stringMatching(/writable by group\/other/)]);
-    // e.g. a setgid "staff"-writable /usr/local/lib/confirmx
-    expect(trustedInstallProblems([{ ...good[3]!, mode: 0o42775 }])).toEqual([expect.stringMatching(/writable by group\/other/)]);
-    expect(trustedInstallProblems([{ path: "/tmp/helper-lib.mjs", uid: 0, mode: 0o100644 }])).not.toEqual([]);
+  it("after the backoff, normal evaluation resumes (valid cert → live report, no certbot)", async () => {
+    const w = world({
+      desired: { enabled: true, domains: [{ hostname: "valid.example.com", action: "serve", issueAllowed: true }] },
+      certs: { "valid.example.com": new Date(NOW.getTime() + 10 * DAY) },
+      conf: renderNginxConfig(["valid.example.com"]),
+    });
+    await reconcile(w.deps);
+    expect(w.commands.filter((c) => c.bin === BIN.certbot)).toEqual([]);
+    expect(w.reports.flat()).toEqual([expect.objectContaining({ hostname: "valid.example.com", outcome: "live" })]);
+  });
+});
+
+describe("custom-domain helper — trusted install (bootstrap, lstat, no symlinks)", () => {
+  type Node = { type: "dir" | "file" | "link"; uid?: number; mode?: number; target?: string };
+  /** A tiny fake filesystem: lstat never follows links; realpath resolves them component by component. */
+  function fakeFs(nodes: Record<string, Node>): TrustFs {
+    const get = (p: string) => {
+      const n = nodes[p];
+      if (!n) throw Object.assign(new Error(`ENOENT ${p}`), { code: "ENOENT" });
+      return n;
+    };
+    const realpath = (p: string, depth = 0): string => {
+      if (depth > 20) throw new Error("ELOOP");
+      const parts = p.split("/").filter(Boolean);
+      let cur = "/";
+      for (let i = 0; i < parts.length; i++) {
+        const next = cur === "/" ? `/${parts[i]}` : `${cur}/${parts[i]}`;
+        const n = get(next);
+        if (n.type === "link") return realpath([n.target!, ...parts.slice(i + 1)].join("/").replace(/\/+/g, "/"), depth + 1);
+        cur = next;
+      }
+      return cur;
+    };
+    return {
+      lstat: (p) => {
+        const n = get(p);
+        const typeBits = n.type === "dir" ? 0o040000 : n.type === "file" ? 0o100000 : 0o120000;
+        return {
+          uid: n.uid ?? 0,
+          mode: typeBits | (n.mode ?? (n.type === "dir" ? 0o755 : n.type === "file" ? 0o644 : 0o777)),
+          isSymbolicLink: () => n.type === "link",
+          isFile: () => n.type === "file",
+          isDirectory: () => n.type === "dir",
+        };
+      },
+      realpath: (p) => realpath(p),
+    };
+  }
+  const ENTRY = `${INSTALL_DIR}/confirmx-domains-helper.mjs`;
+  const LIB = `${INSTALL_DIR}/helper-lib.mjs`;
+  const base = (): Record<string, Node> => ({
+    "/": { type: "dir" },
+    "/usr": { type: "dir" },
+    "/usr/local": { type: "dir" },
+    "/usr/local/lib": { type: "dir" },
+    "/usr/local/lib/confirmx": { type: "dir" },
+    [INSTALL_DIR]: { type: "dir" },
+    [ENTRY]: { type: "file" },
+    [LIB]: { type: "file" },
+  });
+  const problems = (nodes: Record<string, Node>, invokedAs = ENTRY) => trustProblems(fakeFs(nodes), { invokedAs });
+
+  it("accepts the normal installation (root-owned, 0755 dirs / 0644 files, no links)", () => {
+    expect(problems(base())).toEqual([]);
+  });
+
+  it("refuses a symlinked helper-lib.mjs — even to a root-owned file", () => {
+    const n = base();
+    n[LIB] = { type: "link", target: "/usr/local/lib/confirmx/other/helper-lib.mjs" };
+    n["/usr/local/lib/confirmx/other"] = { type: "dir" };
+    n["/usr/local/lib/confirmx/other/helper-lib.mjs"] = { type: "file" };
+    expect(problems(n)).toEqual(expect.arrayContaining([`${LIB}: is a symlink`, `${LIB}: resolves to /usr/local/lib/confirmx/other/helper-lib.mjs`]));
+  });
+
+  it("refuses a symlinked main helper (entry file)", () => {
+    const n = base();
+    n[ENTRY] = { type: "link", target: "/usr/local/lib/confirmx/other/confirmx-domains-helper.mjs" };
+    n["/usr/local/lib/confirmx/other"] = { type: "dir" };
+    n["/usr/local/lib/confirmx/other/confirmx-domains-helper.mjs"] = { type: "file" };
+    expect(problems(n)).toEqual(expect.arrayContaining([`${ENTRY}: is a symlink`]));
+  });
+
+  it("refuses a symlinked parent directory (install tree redirected into /opt/confirmx)", () => {
+    const n = base();
+    n["/usr/local/lib/confirmx"] = { type: "link", target: "/opt/confirmx/app/deploy" };
+    delete n[INSTALL_DIR];
+    delete n[ENTRY];
+    delete n[LIB];
+    Object.assign(n, {
+      "/opt": { type: "dir" },
+      "/opt/confirmx": { type: "dir", uid: 999 },
+      "/opt/confirmx/app": { type: "dir", uid: 999 },
+      "/opt/confirmx/app/deploy": { type: "dir", uid: 999 },
+      "/opt/confirmx/app/deploy/domains-helper": { type: "dir", uid: 999 },
+      "/opt/confirmx/app/deploy/domains-helper/confirmx-domains-helper.mjs": { type: "file", uid: 999 },
+      "/opt/confirmx/app/deploy/domains-helper/helper-lib.mjs": { type: "file", uid: 999 },
+    });
+    // lstat of INSTALL_DIR itself goes through the linked parent: model it as the link's view.
+    n[INSTALL_DIR] = { type: "dir", uid: 999 };
+    n[ENTRY] = { type: "file", uid: 999 };
+    n[LIB] = { type: "file", uid: 999 };
+    const p = problems(n);
+    expect(p).toEqual(expect.arrayContaining(["/usr/local/lib/confirmx: is a symlink", expect.stringMatching(/resolves to \/opt\/confirmx/)]));
+  });
+
+  it("refuses a symlink whose target is outside the install tree (/tmp)", () => {
+    const n = base();
+    n[LIB] = { type: "link", target: "/tmp/evil/helper-lib.mjs" };
+    n["/tmp"] = { type: "dir", mode: 0o1777 };
+    n["/tmp/evil"] = { type: "dir" };
+    n["/tmp/evil/helper-lib.mjs"] = { type: "file" };
+    expect(problems(n)).toEqual(expect.arrayContaining([`${LIB}: is a symlink`, `${LIB}: resolves to /tmp/evil/helper-lib.mjs`]));
+  });
+
+  it("refuses the Phase 3 exploit: link to a ROOT-owned file inside a CONFIRMX-owned directory", () => {
+    const n = base();
+    n[LIB] = { type: "link", target: "/var/lib/cx-attacker/helper-lib.mjs" };
+    n["/var"] = { type: "dir" };
+    n["/var/lib"] = { type: "dir" };
+    n["/var/lib/cx-attacker"] = { type: "dir", uid: 999 };
+    n["/var/lib/cx-attacker/helper-lib.mjs"] = { type: "file", uid: 0 };
+    expect(problems(n)).toEqual(expect.arrayContaining([`${LIB}: is a symlink`, `${LIB}: resolves to /var/lib/cx-attacker/helper-lib.mjs`]));
+  });
+
+  it("refuses wrong ownership, unsafe parents, writable files and missing files", () => {
+    let n = base();
+    n[LIB] = { type: "file", uid: 999 };
+    expect(problems(n)).toEqual([`${LIB}: not owned by root`]);
+    n = base();
+    n["/usr/local/lib/confirmx"] = { type: "dir", mode: 0o2775 };
+    expect(problems(n)).toEqual(["/usr/local/lib/confirmx: writable by group/other"]);
+    n = base();
+    n[ENTRY] = { type: "file", mode: 0o666 };
+    expect(problems(n)).toEqual([`${ENTRY}: writable by group/other`]);
+    n = base();
+    delete n[LIB];
+    expect(problems(n)).toEqual([`${LIB}: missing`]);
+  });
+
+  it("refuses any other install location: the release tree, /home, /tmp, /var/tmp, a checkout", () => {
+    for (const dir of ["/opt/confirmx/app/deploy/vps/custom-domains", "/home/deploy/helper", "/tmp/helper", "/var/tmp/helper", "/srv/checkout/deploy/vps/custom-domains"]) {
+      const p = problems(base(), `${dir}/confirmx-domains-helper.mjs`);
+      expect(p, dir).toEqual(expect.arrayContaining([`${dir}: not the trusted install directory ${INSTALL_DIR}`]));
+    }
+    expect(problems(base(), `${INSTALL_DIR}/something-else.mjs`)).toEqual(expect.arrayContaining([expect.stringMatching(/not the helper entry file/)]));
+  });
+
+});
+
+describe("custom-domain helper — bootstrap load order (static analysis)", () => {
+  const BOOTSTRAP_SRC = readFileSync(new URL("../../../deploy/vps/custom-domains/confirmx-domains-helper.mjs", import.meta.url), "utf8");
+
+  /** Source with comments blanked out (string / template contents kept), so comments can't hide or fake an import. */
+  function stripComments(src: string): string {
+    let out = "";
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i]!;
+      const n = src[i + 1];
+      if (c === "/" && n === "/") {
+        while (i < src.length && src[i] !== "\n") i++;
+        continue;
+      }
+      if (c === "/" && n === "*") {
+        i += 2;
+        while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+        i += 2;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        const q = c;
+        out += c;
+        i++;
+        while (i < src.length && src[i] !== q) {
+          if (src[i] === "\\") {
+            out += src[i]! + (src[i + 1] ?? "");
+            i += 2;
+            continue;
+          }
+          out += src[i]!;
+          i++;
+        }
+        out += src[i] ?? "";
+        i++;
+        continue;
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  /** Every module specifier loaded statically: import … from, bare import, export … from (either quote style). */
+  function staticSpecifiers(src: string): string[] {
+    const code = stripComments(src);
+    const specs: string[] = [];
+    const forms = [
+      /(?:^|[;\n}])\s*import\s*(?:[\w$]+\s*,?\s*)?(?:\*\s*as\s+[\w$]+|\{[^}]*\})?\s*from\s*(['"])([^'"\n]+)\1/g, // import x / {a} / * as n / x, {a} from '…'
+      /(?:^|[;\n}])\s*import\s*(['"])([^'"\n]+)\1/g, // import '…'  (side effect)
+      /(?:^|[;\n}])\s*export\s*(?:\*(?:\s*as\s+[\w$]+)?|\{[^}]*\})\s*from\s*(['"])([^'"\n]+)\1/g, // export * / {a} from '…'
+    ];
+    for (const re of forms) for (const m of code.matchAll(re)) specs.push(m[2]!);
+    return specs;
+  }
+
+  /** Every dynamic import( … ) expression in code (comments stripped). */
+  function dynamicImports(src: string): Array<{ at: number; text: string }> {
+    const code = stripComments(src);
+    const out: Array<{ at: number; text: string }> = [];
+    for (const m of code.matchAll(/\bimport\s*\(/g)) {
+      // Take the whole argument, balancing nested parentheses.
+      let depth = 0;
+      let end = code.length;
+      for (let i = m.index! + m[0].length - 1; i < code.length; i++) {
+        if (code[i] === "(") depth++;
+        else if (code[i] === ")" && --depth === 0) {
+          end = i + 1;
+          break;
+        }
+      }
+      out.push({ at: m.index!, text: code.slice(m.index!, end) });
+    }
+    return out;
+  }
+
+  it("the detector itself catches every static form that would load helper-lib.mjs early", () => {
+    const forbidden = [
+      `import x from "./helper-lib.mjs";`,
+      `import "./helper-lib.mjs";`,
+      `import x from './helper-lib.mjs';`,
+      `import './helper-lib.mjs';`,
+      `export { reconcile } from "./helper-lib.mjs";`,
+      `export { reconcile } from './helper-lib.mjs';`,
+      `export * from "./helper-lib.mjs";`,
+      `export * as lib from './helper-lib.mjs';`,
+      `import * as lib from "./helper-lib.mjs";`,
+      `import { reconcile, BIN } from './helper-lib.mjs';`,
+      `import def, { a } from "./helper-lib.mjs";`,
+      `import{reconcile}from"./helper-lib.mjs"`,
+    ];
+    for (const line of forbidden) {
+      const src = `import { lstatSync } from "node:fs";\n${line}\nconst a = 1;\n`;
+      expect(staticSpecifiers(src), line).toContain("./helper-lib.mjs");
+    }
+    // …and does not flag comments or strings that merely mention it.
+    const benign = `import { lstatSync } from "node:fs";\n// import "./helper-lib.mjs";\n/* export * from './helper-lib.mjs' */\nconst s = "import './helper-lib.mjs'";\n`;
+    expect(staticSpecifiers(benign)).toEqual(["node:fs"]);
+  });
+
+  it("the bootstrap statically loads ONLY node: built-ins (and all of them are found)", () => {
+    const specs = staticSpecifiers(BOOTSTRAP_SRC);
+    expect(specs.sort()).toEqual(["node:child_process", "node:crypto", "node:fs", "node:fs/promises", "node:path", "node:url"]);
+    expect(specs.every((s) => s.startsWith("node:"))).toBe(true);
+  });
+
+  it("helper-lib.mjs is loaded exactly once: one dynamic import from the verified directory, after the trust check and exit 3", () => {
+    const code = stripComments(BOOTSTRAP_SRC);
+    const dyn = dynamicImports(BOOTSTRAP_SRC);
+    expect(dyn).toHaveLength(1);
+    expect(dyn[0]!.text).toContain('P.join(P.dirname(P.resolve(invokedAs)), "helper-lib.mjs")');
+    // helper-lib.mjs appears in code exactly twice: as a name in the TRUSTED_FILES list (a string the
+    // trust check lstat()s — not a load) and inside that single dynamic import. Nothing else.
+    const trustedListAt = code.indexOf('export const TRUSTED_FILES = ["confirmx-domains-helper.mjs", "helper-lib.mjs"];');
+    expect(trustedListAt).toBeGreaterThan(0);
+    const mentions = [...code.matchAll(/helper-lib\.mjs/g)].map((m) => m.index!);
+    expect(mentions).toHaveLength(2);
+    expect(mentions[0]!).toBeGreaterThan(trustedListAt);
+    expect(mentions[0]!).toBeLessThan(trustedListAt + 90);
+    expect(mentions[1]!).toBeGreaterThan(dyn[0]!.at);
+    expect(mentions[1]!).toBeLessThan(dyn[0]!.at + dyn[0]!.text.length);
+    // Order inside main(): trust check → exit 3 → dynamic import.
+    const mainAt = code.indexOf("export async function main(");
+    const checkAt = code.indexOf("trustProblems(realFs", mainAt);
+    const exit3At = code.indexOf("process.exit(3)", mainAt);
+    expect(mainAt).toBeGreaterThan(0);
+    expect(checkAt).toBeGreaterThan(mainAt);
+    expect(exit3At).toBeGreaterThan(checkAt);
+    expect(dyn[0]!.at).toBeGreaterThan(exit3At);
+    // main() runs only through the entrypoint check — no environment variable decides it.
+    expect(code).toMatch(/if \(isEntrypoint\(process\.argv\[1\], fileURLToPath\(import\.meta\.url\)\)\) await main\(\);/);
+    expect(code).not.toMatch(/process\.env\.VITEST/);
+    expect([...code.matchAll(/await main\(/g)]).toHaveLength(1);
+  });
+});
+
+describe("custom-domain helper — bootstrap entrypoint (real node child processes)", () => {
+  const BOOTSTRAP = fileURLToPath(new URL("../../../deploy/vps/custom-domains/confirmx-domains-helper.mjs", import.meta.url));
+  const cleanEnv = (extra: Record<string, string> = {}) => {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "VITEST" && !k.startsWith("VITEST_")) env[k] = v;
+    return { ...env, ...extra };
+  };
+  const node = (args: string[], env: Record<string, string>) => spawnSync(process.execPath, args, { env, encoding: "utf8", timeout: 20_000 });
+
+  it("isEntrypoint: true only when argv[1] resolves to the module itself (symlink too); false for imports / odd argv", () => {
+    // isEntrypoint resolves argv[1] with the platform path module, so the fake is keyed by resolve().
+    const real = (m: Record<string, string>) => {
+      const byResolved = new Map(Object.entries(m).map(([k, v]) => [resolve(k), v]));
+      return (p: string) => {
+        const v = byResolved.get(resolve(p));
+        if (v === undefined) throw new Error("ENOENT");
+        return v;
+      };
+    };
+    const mod = "/usr/local/lib/confirmx/domains-helper/confirmx-domains-helper.mjs";
+    const fs = real({ [mod]: mod, "/usr/local/bin/cx": mod, "/x/vitest.mjs": "/x/vitest.mjs" });
+    expect(isEntrypoint(mod, mod, fs)).toBe(true);
+    expect(isEntrypoint("/usr/local/bin/cx", mod, fs)).toBe(true); // symlinked start → main runs → trust check exits 3
+    expect(isEntrypoint("/x/vitest.mjs", mod, fs)).toBe(false); // imported by a test runner
+    expect(isEntrypoint("/does/not/exist.mjs", mod, fs)).toBe(false);
+    expect(isEntrypoint(undefined, mod, fs)).toBe(false);
+    expect(isEntrypoint("", mod, fs)).toBe(false);
+    // In this very test process the bootstrap was imported (top of file) and main() did not run.
+    expect(isEntrypoint(process.argv[1], BOOTSTRAP)).toBe(false);
+  });
+
+  it("A: importing the bootstrap in a real node process does NOT run main()", () => {
+    const r = node(["--input-type=module", "-e", `await import(${JSON.stringify(pathToFileURL(BOOTSTRAP).href)}); console.log("IMPORTED_OK");`], cleanEnv());
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("IMPORTED_OK");
+    expect(r.stderr).not.toContain("untrusted_install");
+  });
+
+  it("B: executing the helper as the entrypoint DOES run main() (here: refused by the trust check, exit 3)", () => {
+    const r = node([BOOTSTRAP], cleanEnv());
+    expect(r.status).toBe(3);
+    expect(r.stderr).toContain('"evt":"untrusted_install"');
+  });
+
+  it("C: VITEST (or any env var) does not turn the entrypoint into a no-op", () => {
+    const variants: Array<Record<string, string>> = [{ VITEST: "true" }, { VITEST: "1", VITEST_WORKER_ID: "1", NODE_ENV: "test" }];
+    for (const extra of variants) {
+      const r = node([BOOTSTRAP], cleanEnv(extra));
+      expect(r.status, JSON.stringify(extra)).toBe(3);
+      expect(r.stderr).toContain('"evt":"untrusted_install"');
+    }
+  });
+
+  it("D: trust validation runs before helper-lib.mjs is evaluated (a planted helper-lib.mjs never runs when trust fails)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cx-bootstrap-"));
+    try {
+      copyFileSync(BOOTSTRAP, join(dir, "confirmx-domains-helper.mjs"));
+      writeFileSync(join(dir, "helper-lib.mjs"), `process.stdout.write("HELPER_LIB_EVALUATED\\n");\nexport const DEFAULT_PATHS = {};\n`);
+      const token = "t".repeat(48);
+      // Untrusted location, normal run → exit 3, planted module never evaluated.
+      const r = node([join(dir, "confirmx-domains-helper.mjs")], cleanEnv({ CUSTOM_DOMAIN_HELPER_TOKEN: token, CONFIRMX_API_URL: "http://127.0.0.1:9" }));
+      expect(r.status).toBe(3);
+      expect(r.stdout).not.toContain("HELPER_LIB_EVALUATED");
+      // Positive control (POSIX, non-root only — the bootstrap builds its import path with path.posix,
+      // i.e. for Linux; a root --dry-run from here is refused too): the planted module IS evaluated once
+      // the check is passed/tolerated, so its absence above is meaningful. Also run in the WSL validation.
+      if (process.platform !== "win32" && !(typeof process.getuid === "function" && process.getuid() === 0)) {
+        const c = node([join(dir, "confirmx-domains-helper.mjs"), "--dry-run"], cleanEnv({ CUSTOM_DOMAIN_HELPER_TOKEN: token, CONFIRMX_API_URL: "http://127.0.0.1:9" }));
+        expect(c.stdout).toContain("untrusted_install_ignored_for_non_root_dry_run");
+        expect(c.stdout).toContain("HELPER_LIB_EVALUATED");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -300,6 +651,9 @@ describe("custom-domain helper — systemd unit (static)", () => {
       ["RestrictSUIDSGID", "true"],
       ["ProtectKernelModules", "true"],
       ["SystemCallArchitectures", "native"],
+      // @pkey: node's V8 calls pkey_alloc at start-up; without it seccomp kills node (SIGSYS) — Phase 3 finding B1.
+      ["SystemCallFilter", "@system-service @pkey"],
+      ["UMask", "0022"],
     ];
     for (const [k, v] of expected) expect(get(k), k).toEqual([v]);
     const rw = get("ReadWritePaths")
@@ -309,8 +663,11 @@ describe("custom-domain helper — systemd unit (static)", () => {
     expect(new Set(rw)).toEqual(
       new Set(["/etc/nginx/confirmx-custom-domains", "/etc/letsencrypt", "/var/lib/letsencrypt", "/var/log/letsencrypt", "/var/www/certbot", "/var/log/nginx", "/var/lib/nginx"]),
     );
-    const caps = get("CapabilityBoundingSet").join(" ").split(/\s+/);
-    expect(caps.every((c) => ["CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER"].includes(c))).toBe(true);
+    // Exactly these: file-permission capabilities for certbot / nginx -t, plus CAP_NET_BIND_SERVICE because
+    // `nginx -t` binds the configured :80/:443 listeners (Phase 3 finding B2). Nothing else.
+    const caps = get("CapabilityBoundingSet").join(" ").split(/\s+/).sort();
+    expect(caps).toEqual(["CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_NET_BIND_SERVICE"]);
+    expect(get("ReadWritePaths").join(" ")).not.toMatch(/(^|\s)-?\/run(\s|$)/);
     expect(get("RestrictAddressFamilies")).toEqual(["AF_UNIX AF_INET AF_INET6"]);
     // Node's JIT needs W+X memory: MemoryDenyWriteExecute must stay off or the helper cannot start.
     expect(get("MemoryDenyWriteExecute")).toEqual([]);
@@ -354,7 +711,12 @@ describe("custom-domain helper — generated Nginx config (structural)", () => {
   it("the repo Nginx template includes the helper file and hides /internal/ on the API host", () => {
     const tpl = readFileSync(new URL("../../../deploy/vps/nginx/confirmx.conf", import.meta.url), "utf8");
     expect(tpl).toContain("include /etc/nginx/confirmx-custom-domains/*.conf;");
-    expect(tpl).toMatch(/server_name api\.confirmx\.ai;[\s\S]*?location \^~ \/internal\/ \{ return 404; \}/);
+    // Case-insensitive regex (Phase 3 finding M2): /INTERNAL/, /Internal/ … are blocked at Nginx too.
+    expect(tpl).toMatch(/server_name api\.confirmx\.ai;[\s\S]*?location ~\* \^\/internal\(\?:\/\|\$\) \{ return 404; \}/);
+    expect(tpl).not.toMatch(/location \^~ \/internal\//);
+    const re = /^\/internal(?:\/|$)/i; // the same pattern Nginx applies (PCRE, ~* = case-insensitive)
+    for (const u of ["/internal/", "/INTERNAL/custom-domains/desired", "/Internal/x", "/iNtErNaL/custom-domains/report", "/internal"]) expect(re.test(u), u).toBe(true);
+    for (const u of ["/internals", "/api/internal/x", "/", "/trpc/internal"]) expect(re.test(u), u).toBe(false);
     // The snippet the generated blocks include exists in the repo.
     const snippet = readFileSync(new URL("../../../deploy/vps/nginx/snippets/confirmx-proxy-sites.conf", import.meta.url), "utf8");
     expect(snippet).toContain("proxy_set_header Host");
