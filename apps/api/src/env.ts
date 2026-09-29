@@ -119,6 +119,23 @@ const schema = z
      * without it that header is ignored. Never exposed to browsers.
      */
     LANDING_PROXY_SECRET: z.string().trim().min(24).max(200).optional().or(z.literal("").transform(() => undefined)),
+    /**
+     * Custom domains per landing page ("on" / "off"). Off by default in
+     * production, so nothing about hosting changes until the operator has
+     * installed the domain helper and switched this on (see
+     * deploy/vps/custom-domains/README.md). On by default elsewhere.
+     */
+    LANDING_CUSTOM_DOMAINS: z.enum(["on", "off"]).optional().or(z.literal("").transform(() => undefined)),
+    /** Public IPv4 merchants point an A record at (shown in DNS instructions, checked on verify). */
+    CUSTOM_DOMAIN_TARGET_IPV4: z.string().trim().ip({ version: "v4" }).optional().or(z.literal("").transform(() => undefined)),
+    /** Hostname merchants may CNAME a subdomain to (e.g. domains.confirmx.ai); optional. */
+    CUSTOM_DOMAIN_CNAME_TARGET: z.string().trim().max(253).optional().or(z.literal("").transform(() => undefined)),
+    /**
+     * Bearer token of the root domain helper on the server (reads the desired
+     * domain list, reports certificate results). Unset → the internal
+     * endpoints are disabled. Never exposed to browsers.
+     */
+    CUSTOM_DOMAIN_HELPER_TOKEN: z.string().trim().min(32).max(200).optional().or(z.literal("").transform(() => undefined)),
     /** Canonical merchant-facing frontend origin (no trailing slash).
      *  Same prod-required posture as PUBLIC_API_URL. */
     RESEND_API_KEY: z.string().optional(),

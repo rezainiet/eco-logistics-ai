@@ -1,5 +1,5 @@
-import { normalizeHost, sanitizeAttribution } from "@ecom/landing";
-import { landingApiUrl, landingRootDomain } from "@/lib/config";
+import { normalizeHost, sanitizeAttribution, validateCustomDomain } from "@ecom/landing";
+import { customDomainsAllowed, landingApiUrl, landingRootDomain, nonPublicDomainsAllowed } from "@/lib/config";
 
 /**
  * Same-origin checkout proxy for published landing pages.
@@ -43,7 +43,10 @@ const json = (status: number, body: unknown) =>
 export async function POST(req: Request): Promise<Response> {
   const host = normalizeHost(req.headers.get("host"));
   const root = landingRootDomain();
-  if (!host || !root || !host.endsWith(`.${root}`)) return json(404, { ok: false, code: "page_unavailable" });
+  const platformHost = !!host && !!root && host.endsWith(`.${root}`);
+  const customHost = !!host && customDomainsAllowed() && validateCustomDomain(host, { rootDomain: root, allowNonPublic: nonPublicDomainsAllowed() }).ok;
+  // The API decides whether the host is a live page; this only filters junk early.
+  if (!host || (!platformHost && !customHost)) return json(404, { ok: false, code: "page_unavailable" });
   // Same-origin only: a form or script on another site cannot place orders here.
   const origin = req.headers.get("origin");
   if (origin) {

@@ -51,6 +51,7 @@ Production secrets are never copied into git, CI logs or staging.
 | `TRACKING_SYNC_INTERVAL_MIN`, `TRACKING_SYNC_BATCH` | tracking sync worker | O | — | workers |
 | `CUSTOMER_DATA_RETENTION_DAYS`, `…_INTERVAL_MIN` | retention sweep | O | — | workers |
 | `LANDING_ROOT_DOMAIN`, `LANDING_PUBLIC_URL_PATTERN`, `LANDING_SLUG_HOLD_DAYS`, `LANDING_MAX_PAGES_PER_MERCHANT` | landing pages (domain set in DOMAIN phase) | O | — | lib/landing |
+| `LANDING_CUSTOM_DOMAINS`, `CUSTOM_DOMAIN_TARGET_IPV4`, `CUSTOM_DOMAIN_CNAME_TARGET`, `CUSTOM_DOMAIN_HELPER_TOKEN` | custom domain per landing page; off in production until activated (deploy/vps/custom-domains/README.md) | O | — | lib/landing/custom-domains.ts |
 | Feature flags: `FRAUD_NETWORK_*`, `ADDRESS_*`, `INTENT_SCORING_ENABLED`, `DELIVERY_RELIABILITY_*`, `LANE_INTELLIGENCE_*`, `EXTERNAL_DELIVERY_*`, `BDCOURIER_*`, `NETWORK_EVIDENCE_SURFACE_ENABLED` | staged features; defaults in env.ts | O | — | various |
 | `SHOPIFY_FETCH_TIMEOUT_MS`, `SHOPIFY_RETRY_*`, `WOO_*`, `SHOPIFY_RECONNECT_NUDGE_COOLDOWN_DAYS`, `BRANDING_OVERRIDES` | integration tuning (read directly) | O | — | integrations |
 
@@ -85,6 +86,7 @@ Production secrets are never copied into git, CI logs or staging.
 | `LANDING_PROXY_SECRET` | same value as the API's; sent with checkout requests so the API trusts the forwarded customer IP | P | |
 | `LANDING_ALLOW_INDEXING` | `true` lets search engines index pages | O | |
 | `LANDING_ANALYTICS` | `off` disables merchant Meta Pixels platform-wide | O | B |
+| `LANDING_CUSTOM_DOMAINS` | `on` routes merchant custom domains (with the API flag); default off in production; read by the middleware, so set it before `next build` | O | B |
 
 ## Where real values live
 

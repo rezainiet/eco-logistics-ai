@@ -37,6 +37,7 @@ import { storeLandingAsset } from "../../lib/landing/assets.js";
 import { landingAssetBaseUrl, resolveLandingPageByHost } from "../../lib/landing/resolve.js";
 import { getPageTracking, setPageTracking } from "../../lib/landing/tracking.js";
 import { getPageProducts, setPageProducts } from "../../lib/landing/products.js";
+import { addPageDomain, checkPageDomain, listPageDomains, removePageDomain } from "../../lib/landing/custom-domains.js";
 
 /**
  * Merchant landing pages. Tenant = the authenticated merchant: every
@@ -185,6 +186,22 @@ export const landingPagesRouter = router({
   archive: protectedProcedure
     .input(z.object({ id: pageId }))
     .mutation(({ ctx, input }) => archivePage(actorOf(ctx), { pageId: input.id })),
+
+  // ---- Custom domain (one per page) ----
+  domains: protectedProcedure.input(z.object({ id: pageId })).query(({ ctx, input }) => listPageDomains(merchantObjectId(ctx), input.id)),
+
+  addDomain: billableProcedure
+    .input(z.object({ id: pageId, hostname: z.string().trim().min(1).max(270) }))
+    .mutation(({ ctx, input }) => addPageDomain(actorOf(ctx), input.id, input.hostname)),
+
+  checkDomain: billableProcedure
+    .input(z.object({ domainId: z.string().max(40) }))
+    .mutation(({ ctx, input }) => checkPageDomain(actorOf(ctx), input.domainId)),
+
+  // Taking a domain down stays available to lapsed merchants (like unpublish).
+  removeDomain: protectedProcedure
+    .input(z.object({ domainId: z.string().max(40) }))
+    .mutation(({ ctx, input }) => removePageDomain(actorOf(ctx), input.domainId)),
 
   duplicate: billableProcedure
     .input(z.object({ id: pageId, name: pageName.optional() }))

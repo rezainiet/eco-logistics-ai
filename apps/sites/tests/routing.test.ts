@@ -47,6 +47,35 @@ describe("host routing", () => {
   });
 });
 
+describe("custom domains", () => {
+  const on = { ...cfg, customDomains: true };
+
+  it("are off unless enabled: a foreign host is not found", () => {
+    expect(routeFor("shop.example.com", "/", cfg)).toEqual({ kind: "not_found" });
+  });
+
+  it("route a merchant's own domain by its full hostname, with the same path rules", () => {
+    expect(routeFor("Shop.Example.com:443", "/", on)).toEqual({ kind: "page", label: "shop.example.com", locale: null });
+    expect(routeFor("example.com", "/en", on)).toEqual({ kind: "page", label: "example.com", locale: "en" });
+    for (const path of ["/admin", "/lp/other", "/preview-frame", "/fr"]) {
+      expect(routeFor("shop.example.com", path, on), path).toEqual({ kind: "not_found" });
+    }
+  });
+
+  it("never treat platform names, IPs, wildcards or dev-only names as custom domains", () => {
+    for (const host of ["a.b.pages.test", "pages.test", "admin.pages.test", "api.confirmx.ai", "x.y.confirmx.ai", "confirmx.ai", "127.0.0.1", "[::1]", "localhost", "shop.localhost", "shop.test", "*.example.com"]) {
+      expect(routeFor(host, "/", on), host).toEqual({ kind: "not_found" });
+    }
+    // Platform subdomains keep routing by label exactly as before.
+    expect(routeFor("mybrand.pages.test", "/", on)).toEqual({ kind: "page", label: "mybrand", locale: null });
+    expect(routeFor("preview.pages.test", "/", on)).toEqual({ kind: "preview" });
+  });
+
+  it("dev-only names are accepted only when explicitly allowed", () => {
+    expect(routeFor("shop.test", "/", { ...on, rootDomain: "localhost", allowNonPublicDomains: true })).toEqual({ kind: "page", label: "shop.test", locale: null });
+  });
+});
+
 describe("preview protocol", () => {
   const spec = SYSTEM_TEMPLATES.find((t) => t.key === "bd-modern-shop")!.spec;
 

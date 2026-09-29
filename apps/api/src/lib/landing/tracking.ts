@@ -3,7 +3,7 @@ import { normalizeGa4Id, normalizeGoogleAdsId, normalizeGoogleAdsLabel, normaliz
 import { LandingPage, LandingPageHost } from "@ecom/db";
 import { writeAudit } from "../audit.js";
 import { type Actor, getOwnedPage } from "./pages.js";
-import { invalidateLandingHost } from "./resolve.js";
+import { invalidateLandingHost, invalidatePageCustomDomains } from "./resolve.js";
 
 /**
  * Per-landing-page analytics (page Settings → Analytics & Tracking).
@@ -133,7 +133,7 @@ export async function setPageTracking(actor: Actor, input: TrackingInput): Promi
   await LandingPage.updateOne({ _id: page._id, merchantId: actor.merchantId }, { $set: { tracking: next } });
   // Only this page's cached public payloads change.
   const hosts = await LandingPageHost.find({ pageId: page._id, merchantId: actor.merchantId, status: "active" }).select("hostname").lean();
-  await Promise.all(hosts.map((h) => invalidateLandingHost(h.hostname)));
+  await Promise.all([...hosts.map((h) => invalidateLandingHost(h.hostname)), invalidatePageCustomDomains(page._id)]);
   const after = trackingView(next);
   const summary = (v: LandingTrackingSettings) => ({
     metaPixelId: v.metaPixelId,

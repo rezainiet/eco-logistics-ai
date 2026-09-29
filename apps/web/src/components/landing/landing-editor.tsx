@@ -43,6 +43,7 @@ import { DevicePreview, DeviceToggle } from "./device-preview";
 import { type FieldEditorEnv, FieldInput, LockedField, issuesAt } from "./field-editor";
 import { LandingStatusBadge } from "./status-badge";
 import { TrackingSettings } from "./tracking-settings";
+import { DomainSettings } from "./domain-settings";
 import { PageProductsPanel } from "@/components/commerce/page-products-panel";
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -664,6 +665,8 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                   </ul>
                 )}
               </div>
+
+              <DomainSettings pageId={pageId} disabled={archived} />
 
               <TrackingSettings pageId={pageId} />
 

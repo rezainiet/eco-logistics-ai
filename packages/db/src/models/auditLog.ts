@@ -149,6 +149,9 @@ export const AUDIT_ACTIONS = [
   "landing.slug_claimed",
   "landing.tracking_updated",
   "landing.products_updated",
+  "landing.domain_added",
+  "landing.domain_verified",
+  "landing.domain_removed",
   // --- Commerce ---
   "product.created",
   "product.updated",

@@ -124,3 +124,46 @@ export function landingPublicUrl(pattern: string | null | undefined, slug: strin
   if (!pattern || !slug || !validateSlug(slug).ok || !pattern.includes("{slug}")) return null;
   return pattern.replace("{slug}", slug);
 }
+
+/** Top-level names that never reach the public internet (and a few look-alike traps). */
+const NON_PUBLIC_TLDS: ReadonlySet<string> = new Set(["localhost", "local", "internal", "intranet", "lan", "home", "corp", "arpa", "invalid", "onion", "test", "example"]);
+
+/** Parent domains of the platform itself: never usable as a merchant's custom domain. */
+export const PLATFORM_DOMAINS: readonly string[] = ["confirmx.ai"];
+
+export type CustomDomainCheck =
+  | { ok: true; hostname: string }
+  | { ok: false; reason: "format" | "platform" | "not_public"; message: string };
+
+/**
+ * A merchant's own domain for one landing page (e.g. `shop.example.com` or
+ * `example.com`). ASCII only — internationalised names must be entered in
+ * their punycode (`xn--`) form. Never the platform's own domain or any name
+ * under it (those are platform subdomains), never an IP, never a wildcard.
+ * `opts.allowNonPublic` admits `.test`/`.localhost`-style names for local
+ * development only.
+ */
+export function validateCustomDomain(
+  raw: string | null | undefined,
+  opts: { rootDomain?: string | null; allowNonPublic?: boolean } = {},
+): CustomDomainCheck {
+  const input = typeof raw === "string" ? raw.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/+$/, "") : "";
+  const bad = (message: string): CustomDomainCheck => ({ ok: false, reason: "format", message });
+  if (!input) return bad("Enter a domain like shop.example.com");
+  if (input.includes("*")) return bad("Wildcard domains are not supported");
+  if (/[:/?#@\s]/.test(input)) return bad("Enter only the domain name — no https://, port or path");
+  const host = normalizeHost(input);
+  if (!host) return bad("That is not a valid domain name");
+  const labels = host.split(".");
+  if (labels.length < 2) return bad("Enter a full domain like shop.example.com");
+  const tld = labels[labels.length - 1]!;
+  if (!/^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/.test(tld)) return bad("That is not a valid domain name");
+  const platform = [...PLATFORM_DOMAINS, ...(opts.rootDomain ? [normalizeHost(opts.rootDomain)] : [])].filter((d): d is string => !!d);
+  if (platform.some((d) => host === d || host.endsWith(`.${d}`))) {
+    return { ok: false, reason: "platform", message: "That is a ConfirmX address — use the subdomain setting for it" };
+  }
+  if (!opts.allowNonPublic && NON_PUBLIC_TLDS.has(tld)) {
+    return { ok: false, reason: "not_public", message: "Use a public domain you own" };
+  }
+  return { ok: true, hostname: host };
+}

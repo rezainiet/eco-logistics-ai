@@ -27,6 +27,21 @@ export function previewHost(): string | null {
   return isProd ? null : "preview.localhost";
 }
 
+/**
+ * Custom merchant domains (one per landing page), e.g. shop.example.com.
+ * LANDING_CUSTOM_DOMAINS=on|off; off by default in production so hosting
+ * is unchanged until the operator enables it (the API decides which domains
+ * are live; Nginx only routes domains the server helper configured).
+ */
+export function customDomainsAllowed(): boolean {
+  return (process.env.LANDING_CUSTOM_DOMAINS?.trim().toLowerCase() || (isProd ? "off" : "on")) === "on";
+}
+
+/** Development only: `.test`/`.localhost` names are accepted as custom domains. */
+export function nonPublicDomainsAllowed(): boolean {
+  return !isProd;
+}
+
 export function editorOrigins(): string[] {
   const raw = process.env.LANDING_EDITOR_ORIGINS?.trim();
   const list = raw ? raw.split(",") : isProd ? [] : ["http://localhost:3001"];

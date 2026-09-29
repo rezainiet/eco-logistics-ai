@@ -37,7 +37,8 @@ export type PublicLanding =
  */
 export const resolveCurrentHost = cache(async (label: string, locale: string | null): Promise<PublicLanding> => {
   const host = normalizeHost(headers().get("host"));
-  if (!host || !host.startsWith(`${label}.`)) return { kind: "not_found" };
+  // The label is the platform subdomain label, or the full custom domain.
+  if (!host || (host !== label && !host.startsWith(`${label}.`))) return { kind: "not_found" };
   const input = encodeURIComponent(JSON.stringify({ host, locale }));
   let res: Response;
   try {

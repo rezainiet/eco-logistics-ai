@@ -14,6 +14,7 @@ import {
   readLocalized,
   resolveContent,
   resolveSeo,
+  validateCustomDomain,
 } from "@ecom/landing";
 import { LandingPage, LandingPageHost, LandingPageRevision, LandingPageTemplate, Merchant } from "@ecom/db";
 import { env } from "../../env.js";
@@ -89,6 +90,45 @@ export function landingAssetBaseUrl(): string {
   return `${(env.PUBLIC_API_URL ?? `http://localhost:${env.API_PORT}`).replace(/\/+$/, "")}/api/landing-assets`;
 }
 
+/**
+ * Custom domains per landing page: "on" by default outside production; in
+ * production only once LANDING_CUSTOM_DOMAINS=on (after the server helper
+ * is installed). Off → custom hostnames resolve to not found, as before.
+ */
+export function customDomainsEnabled(): boolean {
+  return (env.LANDING_CUSTOM_DOMAINS ?? (env.NODE_ENV === "production" ? "off" : "on")) === "on";
+}
+
+/**
+ * What a request hostname names: a platform subdomain label
+ * (`<label>.<root>`), or — when enabled — a merchant's custom domain.
+ * Anything under the root/platform domains is never a custom domain.
+ */
+export type HostKey = { kind: "label"; label: string } | { kind: "custom"; hostname: string };
+
+export function hostKeyFor(hostname: string | null | undefined, root: string | null): HostKey | null {
+  if (root) {
+    const label = extractLandingLabel(hostname, root);
+    if (label) return { kind: "label", label };
+  }
+  if (!customDomainsEnabled()) return null;
+  const check = validateCustomDomain(hostname, { rootDomain: root, allowNonPublic: env.NODE_ENV !== "production" });
+  return check.ok ? { kind: "custom", hostname: check.hostname } : null;
+}
+
+const cacheLabel = (key: HostKey) => (key.kind === "label" ? key.label : `custom:${key.hostname}`);
+
+/** Drop cached public payloads of a custom domain (status change, removal). */
+export async function invalidateCustomDomain(hostname: string): Promise<void> {
+  await invalidateLandingHost(`custom:${hostname}`);
+}
+
+/** Drop cached payloads of every custom domain of a page (publish, unpublish, archive, tracking). */
+export async function invalidatePageCustomDomains(pageId: unknown): Promise<void> {
+  const rows = await LandingPageHost.find({ pageId, kind: "custom_domain" }).select("hostname").lean();
+  await Promise.all(rows.map((r) => invalidateCustomDomain(r.hostname)));
+}
+
 export function landingHostCacheKey(label: string, locale: Locale | null = null): string {
   return `landing:host:${label}:${locale ?? "default"}`;
 }
@@ -109,9 +149,8 @@ export async function resolveLandingPageByHost(
   opts: { rootDomain?: string | null; useCache?: boolean; locale?: string | null } = {},
 ): Promise<PublicLandingResult> {
   const root = opts.rootDomain === undefined ? landingRootDomain() : opts.rootDomain;
-  if (!root) return { kind: "not_found" };
-  const label = extractLandingLabel(hostname, root);
-  if (!label) return { kind: "not_found" };
+  const key = hostKeyFor(hostname, root);
+  if (!key) return { kind: "not_found" };
   let locale: Locale | null = null;
   if (opts.locale != null && opts.locale !== "") {
     if (!isLocale(opts.locale)) return { kind: "not_found" };
@@ -119,8 +158,8 @@ export async function resolveLandingPageByHost(
   }
   const base =
     opts.useCache === false
-      ? await resolveLabel(label, locale)
-      : await cached(landingHostCacheKey(label, locale), CACHE_TTL_S, () => resolveLabel(label, locale));
+      ? await resolveKey(key, locale)
+      : await cached(landingHostCacheKey(cacheLabel(key), locale), CACHE_TTL_S, () => resolveKey(key, locale));
   return withLiveCommerce(base);
 }
 
@@ -140,20 +179,18 @@ async function withLiveCommerce(base: CachedResult): Promise<PublicLandingResult
  * cached, and it never trusts anything but the hostname.
  */
 export async function resolvePublishedForOrder(hostname: string | null | undefined, locale: string | null) {
-  const root = landingRootDomain();
-  if (!root) return null;
-  const label = extractLandingLabel(hostname, root);
-  if (!label) return null;
+  const key = hostKeyFor(hostname, landingRootDomain());
+  if (!key) return null;
   // The default language is served at "/" (requested as null), others by code.
   const wanted = locale && isLocale(locale) ? locale : null;
-  let r = await resolveLabel(label, wanted);
+  let r = await resolveKey(key, wanted);
   if (r.kind === "not_found" && wanted) {
-    r = await resolveLabel(label, null);
+    r = await resolveKey(key, null);
     if (r.kind === "ok" && r.locale !== wanted) return null;
   }
   if (r.kind !== "ok" || !r.productScope) return null;
   return {
-    label,
+    label: r.slug,
     locale: r.locale,
     revision: r.revision.number,
     merchantId: r.productScope.merchantId,
@@ -163,14 +200,18 @@ export async function resolvePublishedForOrder(hostname: string | null | undefin
   };
 }
 
-async function resolveLabel(label: string, requested: Locale | null): Promise<CachedResult> {
-  const host = await LandingPageHost.findOne({ hostname: label, status: "active" })
+async function resolveKey(key: HostKey, requested: Locale | null): Promise<CachedResult> {
+  // Platform subdomain: the active label row. Custom domain: only a "live"
+  // row (ownership verified, certificate installed) — never a pending one.
+  const host = await LandingPageHost.findOne(
+    key.kind === "label" ? { hostname: key.label, status: "active" } : { hostname: key.hostname, kind: "custom_domain", status: "live" },
+  )
     .select("merchantId pageId")
     .lean();
   if (!host) return { kind: "not_found" };
 
   const page = await LandingPage.findOne({ _id: host.pageId, merchantId: host.merchantId })
-    .select("status publishedRevisionId tracking")
+    .select("status publishedRevisionId tracking slug")
     .lean();
   if (!page || page.status !== "published" || !page.publishedRevisionId) return { kind: "not_found" };
 
@@ -199,7 +240,8 @@ async function resolveLabel(label: string, requested: Locale | null): Promise<Ca
   const template = await LandingPageTemplate.findById(version.templateId).select("key").lean();
   return {
     kind: "ok",
-    slug: label,
+    // Analytics/cart key: the page's platform label, on either kind of host.
+    slug: key.kind === "label" ? key.label : (page.slug ?? key.hostname),
     locale,
     locales: settings.locales,
     defaultLocale: settings.defaultLocale,

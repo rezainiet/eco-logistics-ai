@@ -33,6 +33,7 @@ import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
 import { trackingRouter as trackingCollectorRouter } from "./server/tracking/collector.js";
 import { webhookLimiter } from "./middleware/rateLimit.js";
 import { landingOrdersRouter } from "./server/landing-orders.js";
+import { customDomainsInternalRouter } from "./server/custom-domains-internal.js";
 import { registerTrackingSyncWorker, scheduleTrackingSync } from "./workers/trackingSync.js";
 import { registerRiskRecomputeWorker } from "./workers/riskRecompute.js";
 import {
@@ -462,6 +463,8 @@ async function main() {
   app.use("/api/landing-assets", landingAssetRouter);
   // Landing-page checkout (public, rate-limited, idempotent).
   app.use("/api/landing/orders", landingOrdersRouter);
+  // Custom-domain server helper (loopback + bearer token only; 404 otherwise).
+  app.use("/internal/custom-domains", customDomainsInternalRouter);
   // Behavior tracker collector. CORS is wide-open so storefronts on any
   // origin can post events; they prove ownership via the merchant's
   // public tracking key.

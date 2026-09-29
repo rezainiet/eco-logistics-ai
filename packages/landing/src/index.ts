@@ -171,8 +171,10 @@ export {
   normalizeHost,
   extractLandingLabel,
   landingPublicUrl,
+  PLATFORM_DOMAINS,
+  validateCustomDomain,
 } from "./host.js";
-export type { SlugCheck } from "./host.js";
+export type { CustomDomainCheck, SlugCheck } from "./host.js";
 
 export {
   safeUrl,

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { landingRootDomain, previewHost } from "./lib/config";
+import { customDomainsAllowed, landingRootDomain, nonPublicDomainsAllowed, previewHost } from "./lib/config";
 import { routeFor } from "./lib/routing";
 
 /**
@@ -17,6 +17,8 @@ export function middleware(req: NextRequest) {
   const route = routeFor(req.headers.get("host"), req.nextUrl.pathname, {
     rootDomain: landingRootDomain(),
     previewHost: previewHost(),
+    customDomains: customDomainsAllowed(),
+    allowNonPublicDomains: nonPublicDomainsAllowed(),
   });
   const url = req.nextUrl.clone();
   url.search = "";

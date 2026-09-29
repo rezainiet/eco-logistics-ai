@@ -27,7 +27,7 @@ import { env } from "../../env.js";
 import { writeAudit } from "../audit.js";
 import { assertAssetsOwned } from "./assets.js";
 import { publishableRefs } from "./products.js";
-import { invalidateLandingHost } from "./resolve.js";
+import { invalidateLandingHost, invalidatePageCustomDomains } from "./resolve.js";
 import { type LoadedVersion, loadTemplateVersion } from "./templates.js";
 
 /**
@@ -279,6 +279,7 @@ export async function publishPage(actor: Actor, input: { pageId: string; expecte
   if (!live) return conflictOrMissing(actor.merchantId, input.pageId);
 
   await invalidateLandingHost(host.hostname);
+  await invalidatePageCustomDomains(page._id);
   await audit(actor, "landing.page_published", page._id, {
     revision: revision.number,
     templateVersionId: String(page.templateVersionId),
@@ -299,6 +300,7 @@ export async function unpublishPage(actor: Actor, input: { pageId: string }) {
   ).lean();
   if (!updated) return conflictOrMissing(actor.merchantId, input.pageId);
   await invalidateLandingHost(page.slug);
+  await invalidatePageCustomDomains(page._id);
   await audit(actor, "landing.page_unpublished", page._id, { revision: page.publishedRevisionNumber });
   return pageSummary(updated);
 }
@@ -328,7 +330,12 @@ export async function archivePage(actor: Actor, input: { pageId: string }) {
   if (!updated) return conflictOrMissing(actor.merchantId, input.pageId);
   const released = await releaseActiveHost(actor.merchantId, page._id);
   await invalidateLandingHost(released ?? page.slug);
-  await audit(actor, "landing.page_archived", page._id, { releasedSlug: released });
+  // An archived page gives up its custom domain too (the server helper then
+  // removes its certificate and routing); reconnecting needs DNS proof again.
+  await invalidatePageCustomDomains(page._id);
+  const domains = await LandingPageHost.find({ pageId: page._id, merchantId: actor.merchantId, kind: "custom_domain" }).select("hostname").lean();
+  if (domains.length) await LandingPageHost.deleteMany({ _id: { $in: domains.map((d) => d._id) }, merchantId: actor.merchantId, kind: "custom_domain" });
+  await audit(actor, "landing.page_archived", page._id, { releasedSlug: released, ...(domains.length ? { releasedDomains: domains.map((d) => d.hostname) } : {}) });
   return pageSummary(updated);
 }
 
