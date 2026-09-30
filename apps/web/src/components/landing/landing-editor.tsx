@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  type ContentIssue,
   LOCALE_LABELS,
   type Locale,
   type LocalizedContent,
@@ -27,7 +28,6 @@ import {
   type PreviewSelectMessage,
   type TemplateSpec,
   effectiveSections,
-  isLocale,
   resolveEditTarget,
   validateLocalizedContent,
 } from "@ecom/landing";
@@ -41,6 +41,15 @@ import { cn } from "@/lib/utils";
 import { editorBnFont } from "./bn-font";
 import { DevicePreview, DeviceToggle } from "./device-preview";
 import { type FieldEditorEnv, FieldInput, LockedField, issuesAt } from "./field-editor";
+import {
+  type PublishBlocker,
+  blockerWhere,
+  describePublishBlockers,
+  fieldIssuesForLocale,
+  parseServerPublishIssues,
+} from "./publish-blockers";
+import { PublishBlockersDialog } from "./publish-blockers-dialog";
+import { type RevealElement, revealField } from "./reveal-field";
 import { LandingStatusBadge } from "./status-badge";
 import { TrackingSettings } from "./tracking-settings";
 import { DomainSettings } from "./domain-settings";
@@ -86,7 +95,14 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const [langDraft, setLangDraft] = useState<{ locales: Locale[]; defaultLocale: Locale } | null>(null);
   // Click-to-edit: schema path of the selected element ("hero.headline", "products.items.2").
   const [selected, setSelected] = useState<{ path: string; label: string } | null>(null);
-  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null);
+  // `focus: true` = an explicit "go to this field" (blocked publish): always focus the control.
+  const [reveal, setReveal] = useState<{ path: string; n: number; focus?: boolean } | null>(null);
+  // After a blocked publish attempt the editor marks every blocking field; the
+  // marks follow the live validation, so fixing a field clears it immediately.
+  const [showPublishErrors, setShowPublishErrors] = useState(false);
+  const [blockedOpen, setBlockedOpen] = useState(false);
+  // Issues the server reported on publish (normally identical to the client check).
+  const [serverIssues, setServerIssues] = useState<ContentIssue[]>([]);
   const formRef = useRef<HTMLDivElement>(null);
   const localeChosen = useRef(false);
 
@@ -141,7 +157,20 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   };
 
   const save = trpc.landingPages.saveDraft.useMutation({ onError: onError("Draft not saved") });
-  const publish = trpc.landingPages.publish.useMutation({ onError: onError("Not published") });
+  const publish = trpc.landingPages.publish.useMutation({
+    onError: (err) => {
+      // A server-side validation rejection lists field paths — show them on
+      // their fields and in the blocked-publish dialog instead of a raw toast.
+      const reported = parseServerPublishIssues(err.message);
+      if (reported.some((i) => i.path)) {
+        setServerIssues(reported);
+        setShowPublishErrors(true);
+        setBlockedOpen(true);
+        return;
+      }
+      onError("Not published")(err);
+    },
+  });
   const unpublish = trpc.landingPages.unpublish.useMutation({ onError: onError("Could not unpublish") });
   const setSlug = trpc.landingPages.setSlug.useMutation({ onError: onError("Subdomain not saved") });
   const rename = trpc.landingPages.rename.useMutation({ onError: onError("Could not rename") });
@@ -175,6 +204,8 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     const r = await publish.mutateAsync({ id: pageId, expectedRevision: rev }).catch(() => null);
     setConfirm(null);
     if (!r) return;
+    setServerIssues([]);
+    setShowPublishErrors(false);
     toast.success(r.unchanged ? "Already live" : `Published revision ${r.revisionNumber}`, r.page.publicUrl ?? undefined);
     await refresh();
   };
@@ -212,26 +243,12 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     const raf = requestAnimationFrame(() => {
       const root = formRef.current;
       if (!root) return;
-      const parts = reveal.path.split(".");
-      const details = root.querySelector<HTMLDetailsElement>(`details[data-section-id="${CSS.escape(parts[0]!)}"]`);
-      if (details) details.open = true;
-      let anchor: HTMLElement | null = null;
-      for (let n = parts.length; n > 1 && !anchor; n--) {
-        anchor = root.querySelector<HTMLElement>(`[data-field-path="${CSS.escape(parts.slice(0, n).join("."))}"]`);
-      }
-      const target = anchor ?? details;
-      if (!target) return;
-      // A field is centred; a whole section is shown from its top.
-      target.scrollIntoView({ block: anchor ? "center" : "start", behavior: "smooth" });
-      target.classList.add(...FLASH);
-      setTimeout(() => target.classList.remove(...FLASH), 1600);
-      // Keyboard focus only with a mouse/trackpad — on touch it would pop the keyboard.
-      if (anchor && window.matchMedia("(pointer: fine)").matches) {
-        const input =
-          anchor.querySelector<HTMLElement>("input:not([type=file]):not([type=hidden]):not([type=checkbox]), textarea, select") ??
-          anchor.querySelector<HTMLElement>("button");
-        input?.focus({ preventScroll: true });
-      }
+      // Keyboard focus only with a mouse/trackpad — on touch it would pop the
+      // keyboard — unless the merchant explicitly asked to go fix this field.
+      revealField(root as unknown as RevealElement, reveal.path, {
+        focus: !!reveal.focus || window.matchMedia("(pointer: fine)").matches,
+        flash: FLASH,
+      });
     });
     return () => cancelAnimationFrame(raf);
   }, [reveal]);
@@ -265,17 +282,29 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const page = data.page;
   const archived = page.status === "archived";
   const busy = save.isLoading || publish.isLoading;
-  const localePrefix = `${locale}.`;
-  const issues = (draftCheck?.issues ?? [])
-    .filter((i) => i.path.startsWith(localePrefix))
-    .map((i) => ({ ...i, path: i.path.slice(localePrefix.length) }));
-  const blockers = publishCheck?.issues ?? [];
-  // "bn.order.cta" → "বাংলা · Order call to action" — merchants never see raw paths.
-  const blockerWhere = (path: string): string => {
-    const [loc, sectionId] = path.split(".");
-    const langLabel = loc && isLocale(loc) ? LOCALE_LABELS[loc].native : null;
-    const section = spec ? effectiveSections(spec, locale).find((s) => s.id === sectionId) : undefined;
-    return [langLabel, section?.label ?? sectionId].filter(Boolean).join(" · ");
+  // Everything below comes from the shared validator (the server runs the same
+  // one on publish): draft issues always, publish-only (required) issues once a
+  // publish has been blocked, plus anything the server itself reported.
+  const draftIssues = draftCheck?.issues ?? [];
+  const publishIssues = [...(publishCheck?.issues ?? []), ...serverIssues];
+  const issues = fieldIssuesForLocale(locale, draftIssues, publishIssues, showPublishErrors);
+  const blockers = describePublishBlockers(spec, publishIssues, draftIssues);
+  const multiLocale = page.locales.length > 1;
+  const jumpTo = (b: PublishBlocker) => {
+    setBlockedOpen(false);
+    if (!b.fieldPath) return;
+    if (b.locale && b.locale !== locale) setLocale(b.locale);
+    setTab("content");
+    setPane("edit");
+    setReveal((r) => ({ path: b.fieldPath!, n: (r?.n ?? 0) + 1, focus: true }));
+  };
+  const requestPublish = () => {
+    if (blockers.length) {
+      setShowPublishErrors(true);
+      setBlockedOpen(true);
+      return;
+    }
+    setConfirm("publish");
   };
   const localeContent: PageContent = content[locale] ?? {};
   const sectionTargets = sections.filter((s) => s.visual).map((s) => ({ id: s.id, label: s.label }));
@@ -290,6 +319,10 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   };
 
   const updateField = (sectionId: string, key: string, value: unknown) => {
+    // A server-reported issue on this field is superseded by the edit; the
+    // live client check (same validator) takes over.
+    const edited = `${locale}.${sectionId}.${key}`;
+    setServerIssues((prev) => (prev.length ? prev.filter((i) => i.path !== edited && !i.path.startsWith(`${edited}.`)) : prev));
     setContent((prev) => {
       if (!prev) return prev;
       const current = prev[locale] ?? {};
@@ -301,7 +334,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const localeTabs = page.locales.length > 1 && (
     <div className="flex items-center gap-1 rounded-lg bg-surface-raised p-1 text-sm" role="tablist" aria-label="Content language">
       {page.locales.map((l) => {
-        const errs = (draftCheck?.issues ?? []).filter((i) => i.path.startsWith(`${l}.`)).length;
+        const errs = fieldIssuesForLocale(l, draftIssues, publishIssues, showPublishErrors).length;
         return (
           <button
             key={l}
@@ -378,7 +411,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               Unpublish
             </Button>
           ) : null}
-          <Button size="sm" disabled={busy || archived} onClick={() => setConfirm("publish")}>
+          <Button size="sm" disabled={busy || archived} onClick={requestPublish}>
             <Globe className="mr-1.5 h-4 w-4" />
             {page.status === "published" ? "Publish changes" : "Publish"}
           </Button>
@@ -666,11 +699,25 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                   </p>
                 ) : (
                   <ul className="space-y-1 text-xs text-danger">
-                    {blockers.slice(0, 8).map((b) => (
-                      <li key={`${b.path}:${b.message}`}>
-                        {b.message} <span className="text-fg-faint">({blockerWhere(b.path)})</span>
-                      </li>
-                    ))}
+                    {blockers.slice(0, 8).map((b) => {
+                      const where = blockerWhere(b, multiLocale);
+                      return (
+                        <li key={b.key}>
+                          {b.fieldPath ? (
+                            <button
+                              type="button"
+                              onClick={() => jumpTo(b)}
+                              className="text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/40"
+                            >
+                              {b.message}
+                            </button>
+                          ) : (
+                            b.message
+                          )}
+                          {where ? <span className="text-fg-faint"> ({where})</span> : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -710,22 +757,17 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         onOpenChange={(o) => !o && setConfirm(null)}
         tone="neutral"
         title={page.status === "published" ? "Publish changes?" : "Publish this page?"}
-        description={
-          blockers.length
-            ? `${blockers.length === 1 ? "1 required field is" : `${blockers.length} required fields are`} still empty. Fill ${blockers.length === 1 ? "it" : "them"} in before publishing.`
-            : "Your saved draft becomes the live version in every language. You can unpublish or restore an earlier revision at any time."
-        }
-        confirmLabel={blockers.length ? "Show what's missing" : "Publish"}
+        description="Your saved draft becomes the live version in every language. You can unpublish or restore an earlier revision at any time."
+        confirmLabel="Publish"
         loading={busy}
-        onConfirm={() => {
-          if (blockers.length) {
-            setTab("publish");
-            setPane("edit");
-            setConfirm(null);
-            return;
-          }
-          void doPublish();
-        }}
+        onConfirm={() => void doPublish()}
+      />
+      <PublishBlockersDialog
+        open={blockedOpen && blockers.length > 0}
+        onOpenChange={setBlockedOpen}
+        blockers={blockers}
+        multiLocale={multiLocale}
+        onJump={jumpTo}
       />
       <ConfirmDialog
         open={confirm === "unpublish"}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ImagePlus, Loader2, Lock, Plus, Trash2 } from "lucide-react";
 import {
   ALLOWED_ASSET_MIME,
@@ -36,13 +36,47 @@ export interface FieldEditorEnv {
   sectionTargets: Array<{ id: string; label: string }>;
 }
 
-const selectCls =
-  "h-10 w-full rounded-md border border-stroke/14 bg-surface-raised px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30";
-const textareaCls =
-  "min-h-[88px] w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg placeholder:text-fg-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30";
+/**
+ * Invalid state for any control carrying aria-invalid="true": danger border
+ * plus a subtle ring (design-system danger token), also while focused.
+ */
+export const invalidCls =
+  "aria-[invalid=true]:border-danger aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-danger/20 aria-[invalid=true]:focus-visible:border-danger aria-[invalid=true]:focus-visible:ring-danger/35";
+const selectCls = cn(
+  "h-10 w-full rounded-md border border-stroke/14 bg-surface-raised px-3 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+  invalidCls,
+);
+const textareaCls = cn(
+  "min-h-[88px] w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg placeholder:text-fg-faint focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30",
+  invalidCls,
+);
 
 export function issuesAt(issues: ContentIssue[], path: string): string[] {
   return issues.filter((i) => i.path === path || i.path.startsWith(`${path}.`)).map((i) => i.message);
+}
+
+/** Ids tying a field's controls to its visible label and its error message. */
+interface FieldA11y {
+  labelId: string;
+  errorId: string;
+  invalid: boolean;
+  /** Spread onto the control(s) that hold the field's value. */
+  control: { "aria-labelledby": string; "aria-invalid"?: true; "aria-describedby"?: string };
+}
+
+function useFieldA11y(errors: string[]): FieldA11y {
+  const id = useId();
+  const labelId = `${id}-label`;
+  const errorId = `${id}-error`;
+  const invalid = errors.length > 0;
+  return {
+    labelId,
+    errorId,
+    invalid,
+    control: invalid
+      ? { "aria-labelledby": labelId, "aria-invalid": true, "aria-describedby": errorId }
+      : { "aria-labelledby": labelId },
+  };
 }
 
 function FieldShell({
@@ -52,6 +86,7 @@ function FieldShell({
   errors,
   children,
   path,
+  a11y,
 }: {
   label: string;
   help?: string;
@@ -60,16 +95,28 @@ function FieldShell({
   children: ReactNode;
   /** Click-to-edit anchor: the preview selects a field by this path. */
   path: string;
+  a11y: FieldA11y;
 }) {
   return (
-    <div className="space-y-1.5 rounded-md" data-field-path={path}>
-      <div className="text-xs font-medium text-fg-muted">
+    <div className="space-y-1.5 rounded-md" data-field-path={path} data-invalid={a11y.invalid || undefined}>
+      <div id={a11y.labelId} className={cn("text-xs font-medium", a11y.invalid ? "text-danger" : "text-fg-muted")}>
         {label}
-        {required ? <span className="ml-0.5 text-danger">*</span> : null}
+        {required ? (
+          <>
+            <span aria-hidden className="ml-0.5 text-danger">
+              *
+            </span>
+            <span className="sr-only"> (required)</span>
+          </>
+        ) : null}
       </div>
       {children}
       {help ? <p className="text-2xs text-fg-faint">{help}</p> : null}
-      {errors.length ? <p className="text-2xs text-danger">{errors[0]}</p> : null}
+      {errors.length ? (
+        <p id={a11y.errorId} className="text-2xs text-danger">
+          {errors[0]}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -98,8 +145,9 @@ export function FieldInput({
   env: FieldEditorEnv;
 }) {
   const errors = issuesAt(issues, path);
-  const shell = (children: ReactNode) => (
-    <FieldShell label={field.label} help={field.help} required={field.required} errors={errors} path={path}>
+  const a11y = useFieldA11y(errors);
+  const shell = (children: ReactNode, help = field.help) => (
+    <FieldShell label={field.label} help={help} required={field.required} errors={errors} path={path} a11y={a11y}>
       {children}
     </FieldShell>
   );
@@ -115,8 +163,9 @@ export function FieldInput({
           maxLength={field.type === "text" ? field.maxLength ?? 160 : 2000}
           placeholder={field.type === "url" ? "https://…" : field.placeholder}
           onChange={(e) => onChange(e.target.value)}
-          aria-invalid={errors.length > 0}
+          {...a11y.control}
           {...(field.type === "text" ? langProps : {})}
+          className={cn(field.type === "text" ? langProps.className : undefined, invalidCls)}
         />,
       );
     case "textarea":
@@ -127,25 +176,20 @@ export function FieldInput({
           value={str}
           maxLength={field.maxLength ?? 1200}
           onChange={(e) => onChange(e.target.value)}
+          {...a11y.control}
         />,
       );
     case "richtext":
-      return (
-        <FieldShell
-          label={field.label}
-          required={field.required}
-          errors={errors}
-          path={path}
-          help={field.help ?? "Blank line = new paragraph. **bold**, _italic_, and lines starting with “- ” for bullets."}
-        >
-          <textarea
-            lang={env.locale}
-            className={cn(textareaCls, "min-h-[120px]", langProps.className)}
-            value={str}
-            maxLength={field.maxLength ?? 6000}
-            onChange={(e) => onChange(e.target.value)}
-          />
-        </FieldShell>
+      return shell(
+        <textarea
+          lang={env.locale}
+          className={cn(textareaCls, "min-h-[120px]", langProps.className)}
+          value={str}
+          maxLength={field.maxLength ?? 6000}
+          onChange={(e) => onChange(e.target.value)}
+          {...a11y.control}
+        />,
+        field.help ?? "Blank line = new paragraph. **bold**, _italic_, and lines starting with “- ” for bullets.",
       );
     case "color":
       return shell(
@@ -157,12 +201,12 @@ export function FieldInput({
             className="h-10 w-12 cursor-pointer rounded-md border border-stroke/14 bg-transparent p-1"
             aria-label={field.label}
           />
-          <Input value={str} maxLength={7} onChange={(e) => onChange(e.target.value)} className="font-mono" />
+          <Input value={str} maxLength={7} onChange={(e) => onChange(e.target.value)} className={cn("font-mono", invalidCls)} {...a11y.control} />
         </div>,
       );
     case "select":
       return shell(
-        <select className={selectCls} value={str} onChange={(e) => onChange(e.target.value)}>
+        <select className={selectCls} value={str} onChange={(e) => onChange(e.target.value)} {...a11y.control}>
           {field.options.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
@@ -173,12 +217,14 @@ export function FieldInput({
     case "toggle":
       return (
         <div className="flex items-center justify-between gap-3 rounded-md border border-stroke/10 px-3 py-2" data-field-path={path}>
-          <span className="text-sm text-fg-muted">{field.label}</span>
-          <Switch checked={value === true} onCheckedChange={(v) => onChange(v)} />
+          <span id={a11y.labelId} className="text-sm text-fg-muted">
+            {field.label}
+          </span>
+          <Switch checked={value === true} onCheckedChange={(v) => onChange(v)} aria-labelledby={a11y.labelId} />
         </div>
       );
     case "image":
-      return shell(<ImageInput value={value as ImageValue | null} onChange={onChange} env={env} />);
+      return shell(<ImageInput value={value as ImageValue | null} onChange={onChange} env={env} a11y={a11y} />);
     case "price":
       return shell(
         <div className="relative">
@@ -188,7 +234,7 @@ export function FieldInput({
             inputMode="decimal"
             min={0}
             step="any"
-            className="pl-7"
+            className={cn("pl-7", invalidCls)}
             value={typeof value === "number" ? String(value) : ""}
             onChange={(e) => {
               const raw = e.target.value.trim();
@@ -196,12 +242,12 @@ export function FieldInput({
               const n = Number(raw);
               onChange(Number.isFinite(n) ? n : raw);
             }}
-            aria-invalid={errors.length > 0}
+            {...a11y.control}
           />
         </div>,
       );
     case "cta":
-      return shell(<CtaInput value={value as CtaValue} onChange={onChange} env={env} />);
+      return shell(<CtaInput value={value as CtaValue} onChange={onChange} env={env} a11y={a11y} label={field.label} />);
     case "repeater":
       return (
         <RepeaterInput field={field} value={Array.isArray(value) ? value : []} onChange={onChange} path={path} issues={issues} env={env} />
@@ -213,10 +259,12 @@ function ImageInput({
   value,
   onChange,
   env,
+  a11y,
 }: {
   value: ImageValue | null;
   onChange: (v: unknown) => void;
   env: FieldEditorEnv;
+  a11y: FieldA11y;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -248,7 +296,12 @@ function ImageInput({
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-3">
-        <div className="flex h-16 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border border-stroke/12 bg-surface-overlay">
+        <div
+          className={cn(
+            "flex h-16 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-surface-overlay",
+            a11y.invalid ? "border-danger ring-2 ring-danger/20" : "border-stroke/12",
+          )}
+        >
           {src ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt="" className="h-full w-full object-cover" />
@@ -257,7 +310,15 @@ function ImageInput({
           )}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+            aria-describedby={a11y.invalid ? a11y.errorId : undefined}
+            className={a11y.invalid ? "border-danger" : undefined}
+          >
             {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
             {value ? "Replace" : "Upload"}
           </Button>
@@ -319,21 +380,49 @@ function blankAction(kind: CtaAction["kind"], env: FieldEditorEnv): CtaAction {
   }
 }
 
-function CtaInput({ value, onChange, env }: { value: CtaValue | undefined; onChange: (v: unknown) => void; env: FieldEditorEnv }) {
+function CtaInput({
+  value,
+  onChange,
+  env,
+  a11y,
+  label,
+}: {
+  value: CtaValue | undefined;
+  onChange: (v: unknown) => void;
+  env: FieldEditorEnv;
+  a11y: FieldA11y;
+  label: string;
+}) {
   const v: CtaValue = value ?? { label: "", action: { kind: "none" } };
   const a = v.action;
   const set = (action: CtaAction) => onChange({ ...v, action });
+  // Mark the part that is actually missing: the button text, the action, or
+  // (for a malformed destination) the destination inputs.
+  const labelInvalid = a11y.invalid && !v.label.trim();
+  const actionInvalid = a11y.invalid && a.kind === "none";
+  const detailInvalid = a11y.invalid && !labelInvalid && !actionInvalid;
+  const mark = (invalid: boolean) =>
+    invalid ? { "aria-invalid": true as const, "aria-describedby": a11y.errorId } : {};
+  const detail = { ...mark(detailInvalid), className: invalidCls };
   return (
-    <div className="space-y-2 rounded-md border border-stroke/10 p-3">
+    <div className={cn("space-y-2 rounded-md border p-3", a11y.invalid ? "border-danger-border" : "border-stroke/10")}>
       <Input
         value={v.label}
         maxLength={60}
         placeholder="Button text"
         lang={env.locale}
-        className={localeInputClass(env.locale)}
+        className={cn(localeInputClass(env.locale), invalidCls)}
+        aria-label={`${label} — button text`}
+        {...mark(labelInvalid)}
         onChange={(e) => onChange({ ...v, label: e.target.value })}
       />
-      <select className={selectCls} value={a.kind} onChange={(e) => set(blankAction(e.target.value as CtaAction["kind"], env))}>
+      <select
+        className={selectCls}
+        value={a.kind}
+        aria-label={`${label} — what the button does`}
+        {...mark(actionInvalid)}
+        onChange={(e) => set(blankAction(e.target.value as CtaAction["kind"], env))}
+      >
         {CTA_ACTION_KINDS.map((k) => (
           <option key={k} value={k}>
             {CTA_KIND_LABEL[k]}
@@ -341,24 +430,31 @@ function CtaInput({ value, onChange, env }: { value: CtaValue | undefined; onCha
         ))}
       </select>
       {a.kind === "link" ? (
-        <Input value={a.url} placeholder="https://…" maxLength={2000} onChange={(e) => set({ ...a, url: e.target.value })} />
+        <Input value={a.url} placeholder="https://…" maxLength={2000} aria-label={`${label} — link`} {...detail} onChange={(e) => set({ ...a, url: e.target.value })} />
       ) : null}
       {a.kind === "phone" || a.kind === "whatsapp" ? (
-        <Input value={a.phone} placeholder="+8801XXXXXXXXX" maxLength={30} onChange={(e) => set({ ...a, phone: e.target.value })} />
+        <Input value={a.phone} placeholder="+8801XXXXXXXXX" maxLength={30} aria-label={`${label} — phone number`} {...detail} onChange={(e) => set({ ...a, phone: e.target.value })} />
       ) : null}
       {a.kind === "whatsapp" ? (
         <Input
           value={a.message ?? ""}
+          aria-label={`${label} — WhatsApp message`}
           placeholder="Pre-filled message (optional)"
           maxLength={300}
           onChange={(e) => set({ ...a, message: e.target.value })}
         />
       ) : null}
       {a.kind === "email" ? (
-        <Input value={a.email} placeholder="you@example.com" maxLength={254} onChange={(e) => set({ ...a, email: e.target.value })} />
+        <Input value={a.email} placeholder="you@example.com" maxLength={254} aria-label={`${label} — email address`} {...detail} onChange={(e) => set({ ...a, email: e.target.value })} />
       ) : null}
       {a.kind === "section" ? (
-        <select className={selectCls} value={a.sectionId} onChange={(e) => set({ ...a, sectionId: e.target.value })}>
+        <select
+          className={selectCls}
+          value={a.sectionId}
+          aria-label={`${label} — section to scroll to`}
+          {...mark(detailInvalid)}
+          onChange={(e) => set({ ...a, sectionId: e.target.value })}
+        >
           {env.sectionTargets.map((s) => (
             <option key={s.id} value={s.id}>
               {s.label}
@@ -386,7 +482,9 @@ function RepeaterInput({
   env: FieldEditorEnv;
 }) {
   const items = value as Array<Record<string, unknown>>;
-  const errors = issuesAt(issues, path).filter((_, i) => i === 0);
+  // The list's own issues (too few items, none at all); item-field issues show on the item fields.
+  const errors = issues.filter((i) => i.path === path).map((i) => i.message);
+  const a11y = useFieldA11y(errors);
   const move = (from: number, to: number) => {
     const next = [...items];
     const [it] = next.splice(from, 1);
@@ -394,11 +492,18 @@ function RepeaterInput({
     onChange(next);
   };
   return (
-    <div className="space-y-2 rounded-md" data-field-path={path}>
+    <div className="space-y-2 rounded-md" data-field-path={path} data-invalid={a11y.invalid || undefined}>
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-fg-muted">
+        <span id={a11y.labelId} className={cn("text-xs font-medium", a11y.invalid ? "text-danger" : "text-fg-muted")}>
           {field.label}
-          {field.required ? <span className="ml-0.5 text-danger">*</span> : null}
+          {field.required ? (
+            <>
+              <span aria-hidden className="ml-0.5 text-danger">
+                *
+              </span>
+              <span className="sr-only"> (required)</span>
+            </>
+          ) : null}
           <span className="ml-2 text-fg-faint">
             {items.length}/{field.maxItems}
           </span>
@@ -409,6 +514,8 @@ function RepeaterInput({
           variant="outline"
           disabled={items.length >= field.maxItems}
           onClick={() => onChange([...items, newRepeaterItem(field)])}
+          aria-describedby={a11y.invalid ? a11y.errorId : undefined}
+          className={a11y.invalid ? "border-danger" : undefined}
         >
           <Plus className="mr-1 h-3.5 w-3.5" /> Add {field.itemLabel.toLowerCase()}
         </Button>
@@ -459,7 +566,11 @@ function RepeaterInput({
           ))}
         </div>
       ))}
-      {errors.length && !items.length ? <p className="text-2xs text-danger">{errors[0]}</p> : null}
+      {errors.length ? (
+        <p id={a11y.errorId} className="text-2xs text-danger">
+          {errors[0]}
+        </p>
+      ) : null}
     </div>
   );
 }
