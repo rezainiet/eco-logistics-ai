@@ -12,7 +12,9 @@ import { enqueueInboundWebhook } from "../server/ingest.js";
 import type { IntegrationCredentials } from "../lib/integrations/types.js";
 import {
   ensureFreshShopifyAccessToken,
+  isShopifyCredentialsUnreadableError,
   isShopifyTokenMigrationRequiredError,
+  SHOPIFY_CREDENTIALS_UNREADABLE_MESSAGE,
   SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
 } from "../lib/integrations/shopify-token-refresh.js";
 
@@ -143,18 +145,36 @@ export async function syncOneIntegration(
     try {
       await ensureFreshShopifyAccessToken(integration);
     } catch (err: any) {
-      const errMsg = isShopifyTokenMigrationRequiredError(err)
+      // Permanent failures (retrying can never succeed) move the row to
+      // `status: "error"` so the connected-only sweep stops selecting it
+      // and the merchant sees a reconnect prompt.
+      const permanentMsg = isShopifyTokenMigrationRequiredError(err)
         ? SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE
-        : err?.message?.slice(0, 500) ?? "shopify token refresh failed";
+        : isShopifyCredentialsUnreadableError(err)
+          ? SHOPIFY_CREDENTIALS_UNREADABLE_MESSAGE
+          : null;
+      const errMsg =
+        permanentMsg ?? err?.message?.slice(0, 500) ?? "shopify token refresh failed";
+      console.warn(
+        JSON.stringify({
+          evt: "order_sync.token_error",
+          integrationId: String(integrationId),
+          provider: integration.provider,
+          merchantId: String(integration.merchantId),
+          code: err?.code ?? null,
+          permanent: permanentMsg !== null,
+          error: errMsg.slice(0, 200),
+        }),
+      );
       await Integration.updateOne(
         { _id: integration._id },
         {
           $set: {
-            ...(isShopifyTokenMigrationRequiredError(err)
+            ...(permanentMsg
               ? {
                   status: "error",
                   "health.ok": false,
-                  "health.lastError": SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE,
+                  "health.lastError": permanentMsg,
                   "health.lastCheckedAt": new Date(),
                 }
               : {}),

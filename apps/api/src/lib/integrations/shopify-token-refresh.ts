@@ -30,6 +30,40 @@ export function isShopifyTokenMigrationRequiredError(
 export const SHOPIFY_TOKEN_MIGRATION_REQUIRED_MESSAGE =
   "Shopify token migration required: stored token is legacy non-expiring offline token metadata. Reconnect or run the expiring-token migration.";
 
+export const SHOPIFY_CREDENTIALS_UNREADABLE = "shopify_credentials_unreadable";
+
+/**
+ * The stored access token can't be decrypted (AES-GCM authentication
+ * failure or a malformed payload). Retrying can never succeed — the
+ * merchant has to reconnect the store.
+ *
+ * The message is the underlying decrypt error, unchanged, so callers that
+ * only read `err.message` behave exactly as before. Background workers use
+ * `isShopifyCredentialsUnreadableError` to stop retrying.
+ */
+export class ShopifyCredentialsUnreadableError extends Error {
+  readonly code = SHOPIFY_CREDENTIALS_UNREADABLE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ShopifyCredentialsUnreadableError";
+  }
+}
+
+export function isShopifyCredentialsUnreadableError(
+  err: unknown,
+): err is ShopifyCredentialsUnreadableError {
+  return (
+    err instanceof ShopifyCredentialsUnreadableError ||
+    (typeof err === "object" &&
+      err !== null &&
+      (err as { code?: unknown }).code === SHOPIFY_CREDENTIALS_UNREADABLE)
+  );
+}
+
+export const SHOPIFY_CREDENTIALS_UNREADABLE_MESSAGE =
+  "Shopify credentials could not be read: the stored access token failed to decrypt. Reconnect the Shopify store to resume syncing.";
+
 /**
  * Lazily rotate a Shopify access token before any Admin API call.
  *
@@ -181,7 +215,14 @@ export async function ensureFreshShopifyAccessToken(
   if (!accessTokenEnc) {
     throw new Error("integration has no access token to refresh");
   }
-  const accessToken = decryptSecret(accessTokenEnc);
+  let accessToken: string;
+  try {
+    accessToken = decryptSecret(accessTokenEnc);
+  } catch (err) {
+    throw new ShopifyCredentialsUnreadableError(
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   const expiresAt = creds.accessTokenExpiresAt
     ? new Date(creds.accessTokenExpiresAt).getTime()
