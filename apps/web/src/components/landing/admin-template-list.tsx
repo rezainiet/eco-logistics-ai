@@ -123,7 +123,7 @@ export function AdminTemplateList() {
               onClick={() => setFilter(c)}
               className={cn(
                 "min-h-9 rounded-full px-4 text-sm font-medium",
-                c === filter ? "bg-brand text-white" : "bg-surface-raised text-fg-subtle hover:text-fg",
+                c === filter ? "bg-brand text-brand-fg" : "bg-surface-raised text-fg-subtle hover:text-fg",
               )}
             >
               {c === "all" ? "All" : CATEGORY_LABEL[c] ?? c}

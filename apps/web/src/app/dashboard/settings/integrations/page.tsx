@@ -29,6 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { PLAN_NAME } from "@/lib/plan-pricing";
 import { isEmbedded } from "@/lib/embedded";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -260,12 +261,8 @@ function StatusPill({ status, healthOk }: { status: string; healthOk: boolean })
   );
 }
 
-const TIER_LABEL: Record<string, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
+// Plan names come from the catalogue (tier `scale` is shown as "Pro").
+const TIER_LABEL: Record<string, string> = PLAN_NAME;
 
 export default function IntegrationsPage() {
   const list = trpc.integrations.list.useQuery();

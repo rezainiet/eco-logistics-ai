@@ -5,6 +5,8 @@ import styles from "./landing.module.css";
 import { RoiCalculator } from "./_components/roi-calculator";
 import { FloatingLossIndicator } from "./_components/floating-loss-indicator";
 import { PricingHighlighter } from "./_components/pricing-highlighter";
+import { HomePricing } from "./_components/home-pricing";
+import { planOffers } from "@/lib/plan-pricing";
 
 // The cookies() call below opts this page out of static rendering
 // automatically. No explicit `export const dynamic = "force-dynamic"`
@@ -155,29 +157,8 @@ const JSON_LD_SOFTWARE_APPLICATION = {
   operatingSystem: "Web",
   url: `${SITE_URL}/`,
   description: PAGE_DESCRIPTION,
-  offers: [
-    {
-      "@type": "Offer",
-      name: "Starter",
-      price: "1990",
-      priceCurrency: "BDT",
-      url: `${SITE_URL}/#pricing`,
-    },
-    {
-      "@type": "Offer",
-      name: "Growth",
-      price: "4990",
-      priceCurrency: "BDT",
-      url: `${SITE_URL}/#pricing`,
-    },
-    {
-      "@type": "Offer",
-      name: "Scale",
-      price: "12990",
-      priceCurrency: "BDT",
-      url: `${SITE_URL}/#pricing`,
-    },
-  ],
+  // One Offer per plan, prices from the canonical catalogue.
+  offers: planOffers(`${SITE_URL}/#pricing`),
 };
 
 const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
@@ -1037,92 +1018,12 @@ export default function HomePage() {
               Nagad receipt if you&apos;d rather not card.
             </p>
 
-            <div className="pricing-grid">
-              <div className="price-card" data-plan="Starter">
-                <div className="tier">Starter</div>
-                <div className="price">৳1,990<span className="unit">/mo</span></div>
-                <div className="price-desc">
-                  For new stores still finding their footing — up to 500 orders a month.
-                </div>
-                <ul className="price-features">
-                  <li>Shopify or Woo connection</li>
-                  <li>Manual + Semi-auto modes</li>
-                  <li>1 courier integration</li>
-                  <li>Email support</li>
-                </ul>
-                {signedIn ? (
-                  <Link href="/dashboard" className="btn btn-secondary">Open dashboard</Link>
-                ) : (
-                  <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
-                )}
-              </div>
-
-              <div className="price-card featured" data-plan="Growth">
-                <div className="tier">Growth · most popular</div>
-                <div className="price">৳4,990<span className="unit">/mo</span></div>
-                <div className="price-desc">
-                  The default for stores doing 500–5,000 orders a month with a real ops bleed.
-                </div>
-                <ul className="price-features">
-                  <li>All Starter features</li>
-                  <li>Full-auto mode + Twilio calls</li>
-                  <li>3 couriers (Pathao + Steadfast + RedX)</li>
-                  <li>Cross-merchant signal network</li>
-                  <li>Cart recovery worker</li>
-                </ul>
-                {signedIn ? (
-                  <Link href="/dashboard" className="btn btn-primary">
-                    Open dashboard <span className="arrow">→</span>
-                  </Link>
-                ) : (
-                  <Link href="/signup" className="btn btn-primary">
-                    Start saving today <span className="arrow">→</span>
-                  </Link>
-                )}
-              </div>
-
-              <div className="price-card" data-plan="Scale">
-                <div className="tier">Scale</div>
-                <div className="price">৳12,990<span className="unit">/mo</span></div>
-                <div className="price-desc">
-                  For 5,000–25,000 orders, multi-store ops, and finer-grained automation
-                  control.
-                </div>
-                <ul className="price-features">
-                  <li>All Growth features</li>
-                  <li>Multi-store / multi-merchant</li>
-                  <li>Custom verification rules + tuning</li>
-                  <li>Priority queue + Slack support</li>
-                </ul>
-                {signedIn ? (
-                  <Link href="/dashboard" className="btn btn-secondary">Open dashboard</Link>
-                ) : (
-                  <Link href="/signup" className="btn btn-secondary">Start your 14-day trial</Link>
-                )}
-              </div>
-
-              <div className="price-card" data-plan="Enterprise">
-                <div className="tier">Enterprise</div>
-                <div className="price">Custom</div>
-                <div className="price-desc">
-                  For 25,000+ orders, dedicated infrastructure, custom courier integrations.
-                </div>
-                <ul className="price-features">
-                  <li>Everything in Scale</li>
-                  <li>SLA + dedicated support</li>
-                  <li>Custom courier adapters</li>
-                  <li>Volume pricing</li>
-                </ul>
-                <a
-                  href={`mailto:${SAAS_BRANDING.salesEmail}?subject=${encodeURIComponent(`${SAAS_BRANDING.name} Enterprise — sales conversation`)}&body=${encodeURIComponent(
-                    "Hi ConfirmX,\n\nI run a Bangladesh ecommerce store doing 25,000+ COD orders a month. I'd like to talk about Enterprise.\n\nMonthly order volume:\nCouriers we use:\nPlatform (Shopify / WooCommerce / custom):\nTimezone for the call:\n\nThanks,",
-                  )}`}
-                  className="btn btn-secondary"
-                >
-                  Talk to ConfirmX — Enterprise
-                </a>
-              </div>
-            </div>
+            {/* Prices, names, quotas and order come from PLANS (the billing catalogue). */}
+            <HomePricing
+              signedIn={signedIn}
+              brandName={SAAS_BRANDING.name}
+              salesEmail={SAAS_BRANDING.salesEmail}
+            />
           </div>
         </section>
 

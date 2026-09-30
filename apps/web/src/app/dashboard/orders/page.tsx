@@ -482,7 +482,7 @@ export default function OrdersPage() {
               Bulk upload
             </Button>
             <Button
-              className="bg-brand text-white hover:bg-brand-hover"
+              variant="brand"
               onClick={() => setCreateOpen(true)}
             >
               <Plus className="mr-2 h-4 w-4" />
@@ -593,7 +593,7 @@ export default function OrdersPage() {
             </Button>
             <Button
               size="sm"
-              className="bg-brand text-white hover:bg-brand-hover"
+              variant="brand"
               onClick={() => setBookOpen(true)}
             >
               <PackageCheck className="mr-1.5 h-3.5 w-3.5" />
@@ -702,7 +702,7 @@ export default function OrdersPage() {
                             <Button
                               asChild
                               size="sm"
-                              className="bg-brand text-white hover:bg-brand-hover"
+                              variant="brand"
                             >
                               <Link href="/dashboard/integrations">
                                 <Plug className="mr-1.5 h-3.5 w-3.5" />

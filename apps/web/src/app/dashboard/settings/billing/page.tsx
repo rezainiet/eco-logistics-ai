@@ -57,6 +57,7 @@ import {
 import { toast } from "@/components/ui/toast";
 
 import { humanizeError } from "@/lib/friendly-errors";
+import { PLAN_NAME, formatPlanPrice } from "@/lib/plan-pricing";
 import { SettingsPageHeader } from "@/components/settings/section";
 import { SETTINGS_BY_KEY } from "@/components/settings/nav-config";
 import { classifyMeter } from "@/lib/billing/meters";
@@ -411,7 +412,7 @@ export default function BillingPage() {
             </div>
             <div className="flex items-center justify-between">
               <span className="text-fg-subtle">Price</span>
-              <span className="text-fg">{currentPlan ? formatBDT(currentPlan.priceBDT) : "—"} / mo</span>
+              <span className="text-fg">{currentPlan ? formatPlanPrice(currentPlan.priceBDT) : "—"} / mo</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-fg-subtle">Trial ends</span>
@@ -534,7 +535,7 @@ export default function BillingPage() {
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <div className="text-2xl font-semibold text-fg">
-                    {formatBDT(p.priceBDT)}
+                    {formatPlanPrice(p.priceBDT)}
                     <span className="ml-1 text-xs text-fg-subtle">/ month</span>
                   </div>
                   <ul className="space-y-1 text-xs text-fg-muted">
@@ -627,7 +628,7 @@ export default function BillingPage() {
                 <SelectContent>
                   {plans.data?.map((p) => (
                     <SelectItem key={p.tier} value={p.tier}>
-                      {p.name} — {formatBDT(p.priceBDT)}
+                      {p.name} — {formatPlanPrice(p.priceBDT)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -775,7 +776,7 @@ export default function BillingPage() {
                   return (
                     <TableRow key={p.id}>
                       <TableCell>{formatDate(p.createdAt)}</TableCell>
-                      <TableCell className="capitalize">{p.plan}</TableCell>
+                      <TableCell className="capitalize">{PLAN_NAME[p.plan as PlanTier] ?? p.plan}</TableCell>
                       <TableCell>
                         <span className="inline-flex items-center gap-1.5 capitalize">
                           {provider === "stripe" ? (

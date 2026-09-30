@@ -1,4 +1,7 @@
 import Link from "next/link";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { formatPlanPrice } from "@/lib/plan-pricing";
 import {
   ArrowRight,
   CheckCircle2,
@@ -60,10 +63,6 @@ const FAQ = [
     a: "All Twilio call-center minutes shown above are included in your plan. Webhook ingestion and analytics are unlimited within your monthly order quota.",
   },
 ];
-
-function formatBDT(n: number): string {
-  return `৳${n.toLocaleString()}`;
-}
 
 const PROVIDER_LABEL: Record<PlanIntegrationProvider, string> = {
   csv: "CSV upload",
@@ -152,7 +151,7 @@ export default function PricingPage() {
           </Link>
           <Link
             href="/signup"
-            className="inline-flex h-9 items-center gap-1 rounded-md bg-brand px-3.5 text-sm font-medium text-white transition-colors hover:bg-brand-hover"
+            className={cn(buttonVariants({ variant: "brand", size: "sm" }), "gap-1 px-3.5")}
           >
             Start free trial
             <ArrowRight className="h-3.5 w-3.5" />
@@ -174,7 +173,11 @@ export default function PricingPage() {
         </p>
       </section>
 
-      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-12">
+      <section className="relative z-10 mx-auto max-w-6xl px-6 pb-12" aria-labelledby="plans-heading">
+        {/* Keeps the outline h1 → h2 → h3 (plan names) for screen readers. */}
+        <h2 id="plans-heading" className="sr-only">
+          Plans and monthly prices
+        </h2>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {plans.map((p) => {
             const Icon = ICON[p.tier] ?? Sparkles;
@@ -189,28 +192,24 @@ export default function PricingPage() {
                 }`}
               >
                 {featured ? (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand px-2.5 py-0.5 text-2xs font-semibold uppercase tracking-[0.06em] text-white shadow-glow">
+                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand px-2.5 py-0.5 text-2xs font-semibold uppercase tracking-[0.06em] text-brand-fg shadow-glow">
                     Most popular
                   </span>
                 ) : null}
-                <div className="flex items-center justify-between">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/14 text-brand">
-                    <Icon className="h-5 w-5" />
-                  </span>
-                  <span className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-faint">
-                    {p.tier}
-                  </span>
-                </div>
+                {/* The tier id (e.g. `scale`) is internal — only the plan name is shown. */}
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/14 text-brand">
+                  <Icon className="h-5 w-5" />
+                </span>
                 <div className="space-y-1">
                   <h3 className="text-lg font-semibold text-fg">{p.name}</h3>
                   <p className="min-h-[40px] text-xs text-fg-subtle">{p.tagline}</p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-3xl font-semibold tracking-tight text-fg">
-                    {formatBDT(p.priceBDT)}
+                    {formatPlanPrice(p.priceBDT)}
                     <span className="ml-1 text-xs font-normal text-fg-subtle">/ month</span>
                   </p>
-                  <p className="text-2xs text-fg-faint">≈ ${p.priceUSD} USD</p>
+                  <p className="text-2xs text-fg-subtle">≈ ${p.priceUSD} USD</p>
                 </div>
                 <ul className="space-y-1.5 text-xs text-fg-muted">
                   {/* Derived bullets — kept in sync with `features`
@@ -228,11 +227,12 @@ export default function PricingPage() {
                 </ul>
                 <Link
                   href={`/signup?plan=${p.tier}`}
-                  className={`mt-auto inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-semibold transition-colors ${
+                  className={cn(
                     featured
-                      ? "bg-brand text-white shadow-glow hover:bg-brand-hover"
-                      : "border border-stroke/14 bg-surface text-fg hover:bg-surface-raised"
-                  }`}
+                      ? cn(buttonVariants({ variant: "brand" }), "shadow-glow")
+                      : "inline-flex items-center justify-center border border-stroke/14 bg-surface text-fg transition-colors hover:bg-surface-raised",
+                    "mt-auto h-10 gap-1.5 rounded-lg px-4 text-sm font-semibold",
+                  )}
                 >
                   Start free trial
                   <ArrowRight className="h-3.5 w-3.5" />
@@ -367,7 +367,7 @@ export default function PricingPage() {
               </tbody>
             </table>
           </div>
-          <p className="mt-4 text-2xs text-fg-faint">
+          <p className="mt-4 text-2xs text-fg-subtle">
             Need higher caps than Enterprise? <Link className="text-brand hover:underline" href="/contact">Talk to us</Link> — we
             negotiate one-off ceilings for high-volume merchants.
           </p>
@@ -435,7 +435,7 @@ export default function PricingPage() {
           </div>
           <Link
             href="/signup"
-            className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-lg bg-brand px-5 text-sm font-semibold text-white shadow-glow transition-colors hover:bg-brand-hover"
+            className={cn(buttonVariants({ variant: "brand", size: "lg" }), "shrink-0 gap-1.5 rounded-lg px-5 font-semibold shadow-glow")}
           >
             Start free trial
             <ArrowRight className="h-4 w-4" />

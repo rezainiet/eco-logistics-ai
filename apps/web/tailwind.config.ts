@@ -35,6 +35,18 @@ const config: Config = {
       fontSize: {
         "2xs": ["0.6875rem", { lineHeight: "1rem", letterSpacing: "0.02em" }],
       },
+      spacing: {
+        // Bottom-anchored mobile layout (see --app-bottom-inset in globals.css).
+        // `above-mobile-nav` = clear the bottom nav + a 0.75rem gap (only the
+        // bottom dock sits there); on md+ the inset is 0, i.e. `bottom-3`.
+        // `above-bottom-dock` is for every other bottom bar, and `page-end`
+        // is the content padding that reserves room for nav + dock.
+        "mobile-nav-row": "var(--mobile-nav-row)",
+        "mobile-nav": "var(--mobile-nav-height)",
+        "above-mobile-nav": "calc(var(--app-bottom-inset) + 0.75rem)",
+        "above-bottom-dock": "calc(var(--app-bottom-inset) + var(--bottom-dock-space) + 0.75rem)",
+        "page-end": "calc(var(--app-bottom-inset) + var(--bottom-dock-space) + 2rem)",
+      },
       colors: {
         // Legacy shadcn tokens — kept so radix/shadcn primitives keep working.
         border: "hsl(var(--border))",

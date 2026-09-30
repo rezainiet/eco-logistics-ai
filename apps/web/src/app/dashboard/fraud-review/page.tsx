@@ -798,23 +798,25 @@ export default function FraudReviewPage() {
                 </div>
 
                 {/*
-                  Action bar.
-                  Mobile: sticky to the bottom of the viewport so an
-                  operator scrolling through risk signals can decide
-                  without scrolling back up. Two-row 2x2 grid keeps
-                  every action 44px tall (above the iOS / Material
-                  tap-target floor) and keeps the four primary verbs
-                  visible at a glance — Call / Verify / No answer /
-                  Reject — without horizontal cramming. A faint top
-                  border + soft backdrop blur signals the bar is
-                  floating on top of content beneath it.
-                  Desktop (md+): falls back to the original single
-                  row, in-flow layout. No regression on operator
-                  desktop workflows.
+                  Action bar — in normal flow at the end of the order detail,
+                  directly under the notes, on every viewport.
+                  The actions decide THIS order, so they belong after its
+                  risk signals (read, then decide) and must not float over
+                  the queue. It used to be bottom-sticky on mobile, but a
+                  sticky element can't rise above the top of its containing
+                  block (this card's content, which starts below the queue):
+                  while the card scrolled in, the bar was pinned to the
+                  card's top and sat half under the fixed bottom nav with
+                  clipped buttons. In flow, the dashboard's page-end padding
+                  lets it scroll fully clear of the nav. Mobile keeps the
+                  2x2 grid of 44px targets; md+ a row that wraps (at 768 and
+                  1024 the detail column is narrower than the four buttons,
+                  which used to push Reject past the card and the viewport).
                 */}
-                <div className="sticky bottom-0 z-10 -mx-6 mt-2 grid grid-cols-2 gap-2 border-t border-stroke/15 bg-surface px-6 py-3 md:static md:mx-0 md:flex md:flex-row md:gap-2 md:border-t md:border-stroke/8 md:bg-transparent md:px-0 md:py-0 md:pt-4">
+                <div className="mt-2 grid grid-cols-2 gap-2 border-t border-stroke/8 pt-4 md:flex md:flex-row md:flex-wrap">
                   <Button
-                    className="h-11 flex-1 bg-brand text-white hover:bg-brand-hover disabled:opacity-60 md:h-10"
+                    variant="brand"
+                    className="h-11 flex-1 disabled:opacity-60 md:h-10"
                     title={
                       !callConfigured.data?.configured
                         ? "In-app calling isn't enabled for your account yet — call the customer from your phone and use Verify / No answer to record the outcome."

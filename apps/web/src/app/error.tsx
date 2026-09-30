@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { AlertTriangle, RotateCcw } from "lucide-react";
 import { captureException } from "@/lib/telemetry";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * Global Next.js error boundary. Caught at the App Router root, this fires
@@ -44,7 +46,7 @@ export default function GlobalError({
           <button
             type="button"
             onClick={reset}
-            className="inline-flex h-10 items-center gap-1.5 rounded-md bg-brand px-4 text-sm font-medium text-white shadow-glow transition-colors hover:bg-brand-hover"
+            className={cn(buttonVariants({ variant: "brand" }), "gap-1.5 shadow-glow")}
           >
             <RotateCcw className="h-3.5 w-3.5" />
             Try again

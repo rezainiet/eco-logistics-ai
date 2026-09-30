@@ -116,7 +116,7 @@ export default function DashboardPage() {
                 </Link>
               </Button>
             ) : null}
-            <Button asChild className="bg-brand text-white hover:bg-brand-hover">
+            <Button asChild variant="brand">
               <Link href="/dashboard/orders">
                 View orders
                 <ArrowUpRight className="ml-1.5 h-4 w-4" />

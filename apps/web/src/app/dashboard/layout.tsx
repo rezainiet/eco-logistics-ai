@@ -15,6 +15,8 @@ import { Providers } from "@/app/providers";
 import { ActivationToaster } from "@/components/onboarding/activation-moments";
 import { IncidentBanner } from "@/components/dashboard/incident-banner";
 import { SupportFooter } from "@/components/dashboard/support-footer";
+import { PendingRejectBanner } from "@/components/orders/pending-reject-banner";
+import { BottomDock } from "@/components/dashboard/bottom-dock";
 
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -37,7 +39,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         <Sidebar />
         <main className="flex min-w-0 flex-1 flex-col">
           <Topbar userLabel={userLabel} />
-          <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-24 pt-6 md:px-8 md:pb-8 md:pt-8">
+          <div className="mx-auto w-full max-w-[1400px] flex-1 px-4 pb-page-end pt-6 md:px-8 md:pt-8">
             {/* Operational incident banner — env-var driven, renders
                 only when NEXT_PUBLIC_INCIDENT_BANNER_TEXT is set.
                 Critical-level banners are non-dismissible; info /
@@ -51,6 +53,10 @@ export default async function DashboardLayout({ children }: { children: ReactNod
           </div>
         </main>
         <MobileBottomNav />
+        {/* Viewport-fixed notices above the nav; pb-page-end reserves its space. */}
+        <BottomDock />
+        {/* Bulk-reject undo window — app-level so it survives navigation (renders into the dock). */}
+        <PendingRejectBanner />
         <Toaster />
       </div>
       </BrandingProvider>

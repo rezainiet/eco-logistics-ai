@@ -25,12 +25,15 @@ export function PageProductsPanel({
   expectedRevision,
   disabled,
   onSaved,
+  onDirtyChange,
 }: {
   pageId: string;
   expectedRevision: number;
   disabled?: boolean;
   /** New draft revision after saving (the editor's content saves continue from it). */
   onSaved: (draftRevision: number) => void;
+  /** Unsaved product selection — lets the editor guard navigation. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const utils = trpc.useUtils();
   const linked = trpc.landingPages.products.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
@@ -49,6 +52,11 @@ export function PageProductsPanel({
         .map((i) => ({ productId: i.productId, ctaText: i.ctaText ?? "", badge: i.badge ?? "", featured: i.featured === true })),
     );
   }, [linked.data, dirty]);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const byId = useMemo(() => new Map((catalog.data?.items ?? []).map((p) => [p.id, p])), [catalog.data]);
   const current = rows ?? [];

@@ -74,11 +74,23 @@ export function relativeLuminance(r: number, g: number, b: number): number {
   return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
 }
 
-/** "#000" or "#fff" depending on which contrasts better with the given hex. */
+/** WCAG contrast ratio between two relative luminances (1..21). */
+export function contrastRatio(l1: number, l2: number): number {
+  const [hi, lo] = l1 >= l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * "#000" or "#fff" — whichever actually contrasts better with the given hex.
+ * Compares both ratios instead of a fixed luminance cut-off: the old 0.6
+ * threshold put white text on mid-tone accents (e.g. luminance 0.3 → ~3:1),
+ * below WCAG AA. The crossover where both are equal is luminance ≈ 0.18.
+ */
 export function readableFg(hex: string): "#FFFFFF" | "#000000" {
   const rgb = hexToRgb(hex);
   if (!rgb) return "#FFFFFF";
-  return relativeLuminance(rgb[0], rgb[1], rgb[2]) > 0.6 ? "#000000" : "#FFFFFF";
+  const l = relativeLuminance(rgb[0], rgb[1], rgb[2]);
+  return contrastRatio(l, 0) >= contrastRatio(l, 1) ? "#000000" : "#FFFFFF";
 }
 
 /** Lighten/darken an HSL by adjusting lightness (clamped to [0,100]). */
@@ -107,6 +119,34 @@ export function hslToHex(h: number, s: number, l: number): string {
   const b = Math.round((b1 + m) * 255);
   const toHex = (n: number) => n.toString(16).padStart(2, "0");
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase();
+}
+
+export interface BrandStates {
+  brand: HSL;
+  hover: HSL;
+  active: HSL;
+  /** Label colour for all three states. */
+  fg: "#000000" | "#FFFFFF";
+}
+
+/**
+ * Accessible rest / hover / active shades + label colour for a merchant
+ * accent (the dashboard's `--brand*` variables).
+ *
+ * - The label colour is chosen from the colour that is actually rendered
+ *   (the integer HSL the CSS variables carry), not the raw hex.
+ * - Hover and active move lightness AWAY from the label colour: lighter
+ *   behind a black label, darker behind a white one. Luminance is monotonic
+ *   in HSL lightness, so each state's contrast is ≥ the rest state's, which
+ *   `readableFg` guarantees is ≥ 4.58:1. (Always darkening, as before, could
+ *   drop a black-label accent near the crossover below WCAG AA on hover.)
+ */
+export function deriveBrandStates(hex: string, step = 6): BrandStates | null {
+  const brand = hexToHsl(hex);
+  if (!brand) return null;
+  const fg = readableFg(hslToHex(brand.h, brand.s, brand.l));
+  const dir = fg === "#000000" ? 1 : -1;
+  return { brand, hover: adjustL(brand, dir * step), active: adjustL(brand, dir * step * 2), fg };
 }
 
 /** Auto-derive a `brandActive` from `brand` if the admin didn't set one. */

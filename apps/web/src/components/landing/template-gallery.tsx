@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { cn } from "@/lib/utils";
+import { BottomActionBar } from "@/components/dashboard/bottom-dock";
 import { DevicePreview } from "./device-preview";
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -41,7 +42,7 @@ export function TemplateGallery() {
   const chosenLocale: Locale | null = chosen ? (locale && chosen.locales.includes(locale) ? locale : chosen.defaultLocale) : null;
 
   return (
-    <div className={cn("space-y-6", chosen && "pb-40")}>
+    <div className="space-y-6">
       <Link href="/dashboard/landing-pages" className="inline-flex min-h-9 items-center gap-1 text-sm text-fg-subtle hover:text-fg">
         <ArrowLeft className="h-4 w-4" /> Landing pages
       </Link>
@@ -61,7 +62,7 @@ export function TemplateGallery() {
               onClick={() => setCategory(c)}
               className={cn(
                 "min-h-9 rounded-full px-4 text-sm font-medium",
-                c === category ? "bg-brand text-white" : "bg-surface-raised text-fg-subtle hover:text-fg",
+                c === category ? "bg-brand text-brand-fg" : "bg-surface-raised text-fg-subtle hover:text-fg",
               )}
             >
               {CATEGORY_LABEL[c] ?? c}
@@ -121,7 +122,15 @@ export function TemplateGallery() {
       </div>
 
       {chosen && chosenLocale ? (
-        <div className="sticky bottom-20 z-10 flex flex-col gap-3 rounded-xl border border-stroke/12 bg-surface p-4 shadow-lg sm:flex-row sm:items-end md:bottom-4">
+        // Page-level commit action, so a fixed bottom bar rather than sticky:
+        // a sticky bar can't rise above its container's top, which on short
+        // phones sits low enough that the bar started under the nav. It stays
+        // here in DOM order, after the grid it acts on.
+        <BottomActionBar
+          role="region"
+          aria-label="Create page"
+          className="flex flex-col gap-3 rounded-xl border border-stroke/12 bg-surface p-4 shadow-lg sm:flex-row sm:items-end"
+        >
           <div className="flex-1 space-y-1.5">
             <label htmlFor="lp-name" className="text-xs font-medium text-fg-muted">
               Page name (only you see this)
@@ -157,7 +166,7 @@ export function TemplateGallery() {
             {create.isLoading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
             Create with {chosen.name}
           </Button>
-        </div>
+        </BottomActionBar>
       ) : null}
     </div>
   );

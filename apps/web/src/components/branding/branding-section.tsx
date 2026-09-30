@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { dominantColorFromImageData, hexToHsl, readableFg } from "./branding";
+import { brandStyleVars, dominantColorFromImageData, hexToHsl } from "./branding";
 
 const MAX_LOGO_BYTES = 200 * 1024;
 const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/svg+xml", "image/webp", "image/gif"];
@@ -257,7 +257,7 @@ export function BrandingSection() {
           </Button>
           <Button
             type="button"
-            className="bg-brand text-white hover:bg-brand-hover"
+            variant="brand"
             onClick={onSave}
             disabled={!touched || !hexValid || mutation.isLoading}
           >
@@ -289,16 +289,9 @@ function BrandingPreview({
   color: string;
   logoDataUrl: string | null;
 }) {
+  // Same derivation the dashboard applies, so the preview is exact.
   const hsl = color ? hexToHsl(color) : null;
-  const fg = color ? readableFg(color) : "white";
-  const styleVars: React.CSSProperties = hsl
-    ? ({
-        ["--brand" as never]: `${hsl.h} ${hsl.s}% ${hsl.l}%`,
-        ["--brand-hover" as never]: `${hsl.h} ${hsl.s}% ${Math.max(0, hsl.l - 6)}%`,
-        ["--brand-active" as never]: `${hsl.h} ${hsl.s}% ${Math.max(0, hsl.l - 12)}%`,
-        ["--brand-fg" as never]: fg === "white" ? "0 0% 100%" : "0 0% 0%",
-      } as React.CSSProperties)
-    : {};
+  const styleVars = (brandStyleVars(color) ?? {}) as React.CSSProperties;
   return (
     <div
       style={styleVars}

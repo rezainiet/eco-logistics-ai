@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { formatPlanPrice, formatPlanQuantity, planForMonthlyOrders } from "@/lib/plan-pricing";
 
 /**
  * Interactive ROI calculator for the marketing landing.
@@ -15,19 +16,30 @@ import { useEffect, useMemo, useState } from "react";
  */
 
 const fmt = new Intl.NumberFormat("en-IN");
+// Three different kinds of number live in this calculator — keep them apart:
+//   A. Subscription price  — the recommended plan's real monthly price,
+//      straight from the canonical catalogue (PLANS via lib/plan-pricing).
+//      Never a literal here.
+//   B. ROI assumptions      — RTO_REDUCTION below and the visitor's own
+//      inputs (orders, AOV, RTO%). Estimates, labelled as such in the UI.
+//   C. Displayed plan price — (A) formatted by formatPlanPrice, identical to
+//      the pricing cards, /pricing and billing.
 // Estimate-builder default — operator-tested baseline used by the
 // calculator UI. Not surfaced to the merchant as a hard claim;
 // the user-facing hint frames it as "based on operator-tested
 // confirmation workflows; actual reduction varies by store".
 const RTO_REDUCTION = 0.6;
 
-type PlanRec = { name: string; price: number | null; tag: string };
+type PlanRec = { name: string; price: number; tag: string };
 
+/** The cheapest plan whose real monthly order quota covers `orders`. */
 function recommendPlan(orders: number): PlanRec {
-  if (orders < 500) return { name: "Starter", price: 1990, tag: "up to 500/mo" };
-  if (orders < 5000) return { name: "Growth", price: 4990, tag: "500 — 5,000/mo" };
-  if (orders < 25000) return { name: "Scale", price: 12990, tag: "5,000 — 25,000/mo" };
-  return { name: "Enterprise", price: null, tag: "25,000+/mo" };
+  const plan = planForMonthlyOrders(orders);
+  return {
+    name: plan.name,
+    price: plan.priceBDT,
+    tag: `up to ${formatPlanQuantity(plan.features.orderQuota)} orders/mo`,
+  };
 }
 
 export function RoiCalculator() {
@@ -41,14 +53,11 @@ export function RoiCalculator() {
     const monthlySavings = monthlyBleed - remaining;
     const annualSavings = monthlySavings * 12;
     const plan = recommendPlan(orders);
-    const netMonthly =
-      plan.price === null ? null : monthlySavings - plan.price;
+    const netMonthly = monthlySavings - plan.price;
     // ROI multiple — how many times subscription cost is returned
     // each month. Capped at 99x for display sanity.
     const roiMultiple =
-      plan.price && plan.price > 0
-        ? Math.min(99, Math.floor(monthlySavings / plan.price))
-        : null;
+      plan.price > 0 ? Math.min(99, Math.floor(monthlySavings / plan.price)) : null;
     return {
       monthlyBleed,
       remaining,
@@ -138,15 +147,10 @@ export function RoiCalculator() {
           <span className="roi-rec-value">
             <strong>{calc.plan.name}</strong>
             <span className="roi-rec-tag"> · {calc.plan.tag}</span>
-            {calc.plan.price !== null && (
-              <span className="roi-rec-price">
-                {" "}
-                · ৳{fmt.format(calc.plan.price)}/mo
-              </span>
-            )}
+            <span className="roi-rec-price"> · {formatPlanPrice(calc.plan.price)}/mo</span>
           </span>
         </div>
-        {calc.netMonthly !== null && calc.netMonthly > 0 && (
+        {calc.netMonthly > 0 && (
           <div className="roi-rec-row">
             <span className="roi-rec-label">Net gain after subscription</span>
             <span className="roi-rec-value roi-rec-net">

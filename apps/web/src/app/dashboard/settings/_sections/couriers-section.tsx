@@ -115,7 +115,7 @@ export function CouriersSection() {
       actions={
         <Button
           onClick={openNew}
-          className="bg-brand text-white hover:bg-brand-hover"
+          variant="brand"
         >
           Add courier
         </Button>
@@ -248,7 +248,7 @@ function CourierEmptyState({ onConnect }: { onConnect: () => void }) {
       </div>
       <Button
         onClick={onConnect}
-        className="bg-brand text-white hover:bg-brand-hover"
+        variant="brand"
       >
         Connect first courier
       </Button>
@@ -526,7 +526,7 @@ function CourierDialog({
             <Button
               type="submit"
               disabled={mutation.isLoading || !accountId.trim() || !apiKey.trim()}
-              className="bg-brand text-white hover:bg-brand-hover"
+              variant="brand"
             >
               {mutation.isLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

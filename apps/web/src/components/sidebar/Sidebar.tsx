@@ -169,7 +169,7 @@ function NavList({
     <div className="flex h-full flex-col">
       <div className="flex h-14 items-center gap-2.5 border-b border-stroke/8 px-5">
         <span
-          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand text-sm font-bold text-white shadow-glow"
+          className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-brand text-sm font-bold text-brand-fg shadow-glow"
           aria-hidden
         >
           {logoDataUrl ? (

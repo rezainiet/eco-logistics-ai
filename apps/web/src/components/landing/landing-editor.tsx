@@ -37,6 +37,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
+import { useUnsavedChangesGuard } from "@/lib/unsaved-changes/use-unsaved-changes-guard";
+import { type EditorAction, actionDiscardsLocalEdits, shouldAdoptServerDraft } from "./editor-draft-effects";
 import { cn } from "@/lib/utils";
 import { editorBnFont } from "./bn-font";
 import { DevicePreview, DeviceToggle } from "./device-preview";
@@ -108,7 +111,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
 
   // Adopt server state whenever a fresh copy arrives and we hold no edits.
   useEffect(() => {
-    if (!data || dirty) return;
+    if (!data || !shouldAdoptServerDraft({ hasServerData: true, dirty })) return;
     setContent(data.draftContent as LocalizedContent);
     setBaseRevision(data.page.draftRevision);
     setSlugInput(data.page.slug ?? "");
@@ -122,15 +125,14 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     setConflict(false);
   }, [data, dirty]);
 
-  useEffect(() => {
-    if (!dirty) return;
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", warn);
-    return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  // The Products and Settings tabs keep their own unsaved state (linked
+  // products, tracking IDs). They stay mounted once visited — switching tabs
+  // must not throw that state away — and report it here so leaving the
+  // editor asks first.
+  const [productsDirty, setProductsDirty] = useState(false);
+  const [trackingDirty, setTrackingDirty] = useState(false);
+  const [visited, setVisited] = useState<ReadonlySet<"products" | "publish">>(() => new Set());
+  const anyDirty = dirty || productsDirty || trackingDirty;
 
   // Phones and small tablets start on the phone-sized preview.
   useEffect(() => {
@@ -179,8 +181,13 @@ export function LandingEditor({ pageId }: { pageId: string }) {
   const setLocales = trpc.landingPages.setLocales.useMutation({ onError: onError("Languages not saved") });
   const upload = trpc.landingPages.uploadAsset.useMutation();
 
-  const refresh = async () => {
-    setDirty(false);
+  // After an action succeeds, re-read the page. Metadata-only actions
+  // (rename, unpublish, subdomain) keep local edits — while `dirty` the
+  // adopt-server-state effect leaves the content alone. Only actions that
+  // change the server draft replace local edits (EDITOR_ACTION_DRAFT_EFFECT,
+  // audit F-03: rename/unpublish used to wipe unsaved edits here).
+  const afterAction = async (action: EditorAction) => {
+    if (actionDiscardsLocalEdits(action)) setDirty(false);
     await utils.landingPages.get.invalidate({ id: pageId });
     await utils.landingPages.list.invalidate();
   };
@@ -198,6 +205,14 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     return r.page.draftRevision;
   };
 
+  const archivedPage = data?.page.status === "archived";
+  const { guard, dialog: unsavedDialog } = useUnsavedChangesGuard({
+    dirty: anyDirty,
+    // "Save and continue" only when the content draft is the one thing to
+    // save — the products/tracking panels have their own save buttons.
+    save: dirty && !productsDirty && !trackingDirty && !archivedPage ? async () => (await saveDraft()) !== null : null,
+  });
+
   const doPublish = async () => {
     const rev = await saveDraft();
     if (rev === null) return;
@@ -207,7 +222,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     setServerIssues([]);
     setShowPublishErrors(false);
     toast.success(r.unchanged ? "Already live" : `Published revision ${r.revisionNumber}`, r.page.publicUrl ?? undefined);
-    await refresh();
+    await afterAction("publish");
   };
 
   const doSlug = async () => {
@@ -423,7 +438,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
           <span className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 shrink-0" /> This page changed somewhere else. Reload to continue — your unsaved edits here will be discarded.
           </span>
-          <Button size="sm" variant="outline" onClick={() => void refresh()}>
+          <Button size="sm" variant="outline" onClick={() => void afterAction("conflictReload")}>
             <RefreshCw className="mr-1.5 h-4 w-4" /> Reload
           </Button>
         </div>
@@ -442,7 +457,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               const r = await upgrade.mutateAsync({ id: pageId, expectedRevision: baseRevision }).catch(() => null);
               if (r?.upgraded) {
                 toast.success("Template updated", "Review the draft, then publish.");
-                await refresh();
+                await afterAction("upgradeTemplate");
               }
             }}
           >
@@ -476,7 +491,10 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               <button
                 key={t}
                 type="button"
-                onClick={() => setTab(t)}
+                onClick={() => {
+                  setTab(t);
+                  if (t !== "content") setVisited((v) => (v.has(t) ? v : new Set([...v, t])));
+                }}
                 className={cn(
                   "min-h-9 flex-1 rounded-md px-3 py-1.5 font-medium",
                   tab === t ? "bg-surface text-fg shadow-sm" : "text-fg-subtle hover:text-fg",
@@ -547,18 +565,23 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 );
               })}
             </div>
-          ) : tab === "products" ? (
-            <PageProductsPanel
-              pageId={pageId}
-              expectedRevision={baseRevision}
-              disabled={archived}
-              onSaved={(rev) => {
-                setBaseRevision(rev);
-                void linkedProducts.refetch();
-              }}
-            />
-          ) : (
-            <div className="space-y-4">
+          ) : null}
+          {tab === "products" || visited.has("products") ? (
+            <div hidden={tab !== "products"}>
+              <PageProductsPanel
+                pageId={pageId}
+                expectedRevision={baseRevision}
+                disabled={archived}
+                onSaved={(rev) => {
+                  setBaseRevision(rev);
+                  void linkedProducts.refetch();
+                }}
+                onDirtyChange={setProductsDirty}
+              />
+            </div>
+          ) : null}
+          {tab === "publish" || visited.has("publish") ? (
+            <div className="space-y-4" hidden={tab !== "publish"}>
               <div className="space-y-3 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-fg">
                   <Languages className="h-4 w-4" /> Languages
@@ -616,7 +639,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                           .catch(() => null);
                         if (r) {
                           toast.success("Languages updated", "New languages start from the template's copy — review them before publishing.");
-                          await refresh();
+                          await afterAction("setLocales");
                         }
                       }}
                     >
@@ -638,7 +661,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                     disabled={!name.trim() || name === page.name || rename.isLoading || archived}
                     onClick={async () => {
                       const r = await rename.mutateAsync({ id: pageId, name }).catch(() => null);
-                      if (r) await refresh();
+                      if (r) await afterAction("rename");
                     }}
                   >
                     Rename
@@ -724,7 +747,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
 
               <DomainSettings pageId={pageId} disabled={archived} />
 
-              <TrackingSettings pageId={pageId} />
+              <TrackingSettings pageId={pageId} onDirtyChange={setTrackingDirty} />
 
               <div className="space-y-2 rounded-lg border border-stroke/10 bg-surface p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-fg">
@@ -738,7 +761,17 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                         Revision {r.number} · {new Date(r.createdAt as unknown as string).toLocaleString()}
                         {r.live ? <Badge variant="success" className="ml-2">Live</Badge> : null}
                       </span>
-                      <Button size="sm" variant="ghost" disabled={archived} onClick={() => setConfirm({ restore: r.number })}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={archived}
+                        onClick={() =>
+                          guard(
+                            () => setConfirm({ restore: r.number }),
+                            "Restoring a revision replaces your draft, so the changes you haven't saved will be lost.",
+                          )
+                        }
+                      >
                         Restore to draft
                       </Button>
                     </li>
@@ -746,7 +779,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
                 </ul>
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         <div className={cn("lg:sticky lg:top-4 lg:self-start", pane === "edit" && "hidden lg:block")}>{previewPanel}</div>
@@ -762,6 +795,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         loading={busy}
         onConfirm={() => void doPublish()}
       />
+      <UnsavedChangesDialog {...unsavedDialog} />
       <PublishBlockersDialog
         open={blockedOpen && blockers.length > 0}
         onOpenChange={setBlockedOpen}
@@ -782,7 +816,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
           setConfirm(null);
           if (r) {
             toast.success("Page unpublished");
-            await refresh();
+            await afterAction("unpublish");
           }
         }}
       />
@@ -811,7 +845,7 @@ export function LandingEditor({ pageId }: { pageId: string }) {
           setConfirm(null);
           if (r) {
             toast.success("Revision restored to draft");
-            await refresh();
+            await afterAction("restoreRevision");
           }
         }}
       />

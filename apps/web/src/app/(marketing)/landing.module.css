@@ -514,9 +514,9 @@
   background: linear-gradient(180deg, rgba(198,248,79,0.04), var(--c-surface));
 }
 .cordonPage :global(.price-card.featured:hover) { border-color: var(--c-accent); }
-.cordonPage :global(.tier) { font-family: var(--font-mono), monospace; font-size: 11px; color: var(--c-accent); margin-bottom: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.cordonPage :global(.tier) { font-family: var(--font-mono), monospace; font-size: 11px; font-weight: inherit; line-height: inherit; color: var(--c-accent); margin-bottom: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
 .cordonPage :global(.price) { font-size: 38px; font-weight: 600; letter-spacing: -0.03em; margin-bottom: 4px; }
-.cordonPage :global(.price .unit) { font-size: 14px; color: var(--c-text-3); font-weight: 400; margin-left: 2px; }
+.cordonPage :global(.price .unit) { font-size: 14px; color: var(--c-text-2); font-weight: 400; margin-left: 2px; }
 .cordonPage :global(.price-desc) { color: var(--c-text-2); font-size: 13.5px; margin-bottom: 24px; min-height: 60px; line-height: 1.5; }
 .cordonPage :global(.price-features) { list-style: none; padding: 0; margin-bottom: 24px; flex: 1; }
 .cordonPage :global(.price-features li) { font-size: 13.5px; color: var(--c-text-2); padding: 6px 0; display: flex; gap: 10px; }

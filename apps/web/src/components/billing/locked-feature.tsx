@@ -3,15 +3,9 @@
 import Link from "next/link";
 import { ArrowUpRight, Lock } from "lucide-react";
 import { PLANS, type PlanTier } from "@ecom/types";
+import { formatPlanPrice } from "@/lib/plan-pricing";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-
-const TIER_LABEL: Record<PlanTier, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
 
 interface LockedFeatureProps {
   /** The plan tier required to unlock the feature. Tooltip recommends this tier. */
@@ -65,14 +59,14 @@ export function LockedFeature({
         <span className="flex flex-col gap-1.5 text-left">
           <span className="flex items-center gap-1.5 font-medium text-fg">
             <Lock className="h-3 w-3 text-warning" />
-            {feature} requires {TIER_LABEL[requiredTier]}
+            {feature} requires {plan.name}
           </span>
           {hint ? <span className="text-fg-subtle">{hint}</span> : null}
           <Link
             href={`/dashboard/billing?upgrade=${requiredTier}`}
             className="inline-flex items-center gap-1 text-brand underline-offset-4 hover:underline"
           >
-            Upgrade for ৳{plan.priceBDT.toLocaleString()} / mo
+            Upgrade for {formatPlanPrice(plan.priceBDT)} / mo
             <ArrowUpRight className="h-3 w-3" />
           </Link>
         </span>
@@ -113,14 +107,14 @@ export function InlineLockedFeature({
         <span className="flex flex-col gap-1 text-left">
           <span className="flex items-center gap-1 font-medium text-fg">
             <Lock className="h-3 w-3 text-warning" />
-            {feature} · {TIER_LABEL[requiredTier]}
+            {feature} · {plan.name}
           </span>
           {hint ? <span className="text-fg-subtle">{hint}</span> : null}
           <Link
             href={`/dashboard/billing?upgrade=${requiredTier}`}
             className="text-brand underline-offset-4 hover:underline"
           >
-            Upgrade — ৳{plan.priceBDT.toLocaleString()} / mo
+            Upgrade — {formatPlanPrice(plan.priceBDT)} / mo
           </Link>
         </span>
       }

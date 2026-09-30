@@ -10,6 +10,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import type { PlanTier } from "@ecom/types";
+import { PLAN_NAME } from "@/lib/plan-pricing";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,12 +29,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   csv: "CSV",
 };
 
-const TIER_LABEL: Record<PlanTier, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
+// Plan names come from the catalogue (tier `scale` is shown as "Pro").
+const TIER_LABEL: Record<PlanTier, string> = PLAN_NAME;
 
 /**
  * Dialog shown BEFORE a merchant downgrades their plan. Calls the

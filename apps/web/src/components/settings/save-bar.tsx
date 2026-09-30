@@ -64,16 +64,15 @@ export function SaveBar({
       aria-hidden={!dirty}
       className={cn(
         // Position offsets:
-        //   <md (mobile / small tablet): full-width, account for the
-        //     mobile bottom-nav height (h-14 = 3.5rem) + safe-area.
+        //   <md (mobile / small tablet): full-width, above the mobile
+        //     bottom nav + safe-area + bottom dock (above-bottom-dock).
         //   md+ (sidebar visible): shift the bar's left edge by the
         //     sidebar width (w-60 = 15rem) so the centered card
         //     visually centers in the CONTENT column, not the
         //     viewport. Without this offset the bar drifts left on
         //     desktop and crowds the sidebar at narrower laptops.
-        "pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-3 transition-all duration-200",
-        "pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem+3.5rem)]",
-        "md:left-60 md:bottom-3 md:pb-0",
+        "pointer-events-none fixed inset-x-0 bottom-above-bottom-dock z-30 flex justify-center px-3 transition-all duration-200",
+        "md:left-60",
         dirty
           ? "translate-y-0 opacity-100"
           : "pointer-events-none translate-y-2 opacity-0",
@@ -111,7 +110,7 @@ export function SaveBar({
             size="sm"
             onClick={onSave}
             disabled={saving || saveDisabled}
-            className="bg-brand text-white hover:bg-brand-hover"
+            variant="brand"
           >
             {saving ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { isPlanTier, PLANS } from "@ecom/types";
+import { formatPlanPrice } from "@/lib/plan-pricing";
 import {
   CheckCircle2,
   ShieldCheck,
@@ -248,7 +249,7 @@ function ValueColumn() {
           {plan ? (
             <>
               You picked <strong className="text-fg">{plan.name}</strong>{" "}
-              (৳{plan.priceBDT.toLocaleString()} / month after the trial). 14
+              ({formatPlanPrice(plan.priceBDT)} / month after the trial). 14
               days free, no card. Cancel before day 14 and you&apos;re not
               charged.
             </>

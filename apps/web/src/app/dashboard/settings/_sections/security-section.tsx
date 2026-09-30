@@ -167,7 +167,7 @@ export function SecuritySection() {
             <Button
               type="submit"
               disabled={!canSubmit || change.isLoading}
-              className="bg-brand text-white hover:bg-brand-hover"
+              variant="brand"
             >
               {change.isLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />

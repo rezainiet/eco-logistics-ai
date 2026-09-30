@@ -29,11 +29,13 @@ export {
   hslToHex,
   readableFg,
   relativeLuminance,
+  contrastRatio,
   adjustL,
   deriveBrandActive,
+  deriveBrandStates,
 } from "./derive.js";
 
-export type { HSL } from "./derive.js";
+export type { HSL, BrandStates } from "./derive.js";
 
 export { renderBrandingCss, brandingStyleVars } from "./cssVars.js";
 

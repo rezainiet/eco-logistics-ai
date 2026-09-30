@@ -20,8 +20,12 @@ const ITEMS = [
  * surfaces the 5 most-frequent flows; the hamburger covers the long tail
  * (settings sub-tabs, billing, integrations, admin).
  *
- * Pairs with `pb-24 md:pb-0` on the main content wrapper in
- * dashboard/layout.tsx so content is not hidden behind the floating nav.
+ * Its height is the --mobile-nav-height token (globals.css), which feeds
+ * --app-bottom-inset (+ safe area, 0 on md+). Everything bottom-anchored is
+ * built on that token — never a bigger z-index:
+ *   - `pb-page-end` on the dashboard content wrapper reserves nav + dock.
+ *   - BottomDock (bottom-dock.tsx) is fixed at `bottom-above-mobile-nav`.
+ *   - Other fixed/sticky bars use `bottom-above-bottom-dock`.
  */
 export function MobileBottomNav() {
   const pathname = usePathname() ?? "";
@@ -53,7 +57,7 @@ export function MobileBottomNav() {
               <Link
                 href={item.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex min-h-[56px] flex-col items-center justify-center gap-0.5 px-2 py-2 text-[10px] font-medium transition-colors ${
+                className={`flex min-h-mobile-nav-row flex-col items-center justify-center gap-0.5 px-2 py-2 text-[10px] font-medium transition-colors ${
                   active ? "text-fg" : "text-fg-muted hover:text-fg"
                 }`}
               >

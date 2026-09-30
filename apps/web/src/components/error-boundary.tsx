@@ -41,7 +41,7 @@ export function RouteErrorBoundary({
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-center">
-          <Button onClick={reset} className="bg-brand text-white hover:bg-brand-hover">
+          <Button onClick={reset} variant="brand">
             <RefreshCcw className="mr-1.5 h-3.5 w-3.5" />
             Try again
           </Button>

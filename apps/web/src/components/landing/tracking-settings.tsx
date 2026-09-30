@@ -70,7 +70,16 @@ function Toggle({ label, checked, onChange, disabled }: { label: string; checked
 const ok = (v: string, normalize: (x: unknown) => string | null) => v.trim() === "" || normalize(v) !== null;
 const orNull = (v: string) => (v.trim() === "" ? null : v.trim());
 
-export function TrackingSettings({ pageId, className }: { pageId: string; className?: string }) {
+export function TrackingSettings({
+  pageId,
+  className,
+  onDirtyChange,
+}: {
+  pageId: string;
+  className?: string;
+  /** Unsaved tracking IDs — lets the landing editor guard navigation. */
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const utils = trpc.useUtils();
   const query = trpc.landingPages.tracking.useQuery({ id: pageId }, { refetchOnWindowFocus: false });
   const save = trpc.landingPages.setTracking.useMutation({
@@ -124,6 +133,11 @@ export function TrackingSettings({ pageId, className }: { pageId: string; classN
       tiktok.trim() !== (d.tiktok.pixelId ?? "") ||
       tiktokOn !== d.tiktok.enabled);
   const onCount = d ? [d.enabled, d.google.enabled, d.tiktok.enabled].filter(Boolean).length : 0;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   return (
     <div className={cn("space-y-4 rounded-lg border border-stroke/10 bg-surface p-4", className)} id="tracking">

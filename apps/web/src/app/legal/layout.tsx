@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { getBrandingSync } from "@ecom/branding";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * Wrapper for the legal pages (/legal/privacy, /legal/terms). Plain
@@ -40,7 +42,7 @@ export default function LegalLayout({ children }: { children: ReactNode }) {
             </Link>
             <Link
               href="/login"
-              className="rounded-md bg-brand px-3 py-1.5 text-white hover:bg-brand-hover"
+              className={cn(buttonVariants({ variant: "brand", size: "sm" }), "h-auto px-3 py-1.5")}
             >
               Sign in
             </Link>

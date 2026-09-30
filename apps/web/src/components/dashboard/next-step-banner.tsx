@@ -4,6 +4,8 @@ import Link from "next/link";
 import { ArrowRight, PackagePlus, Plug, Sparkles, Truck } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent } from "@/components/ui/card";
+import { buttonVariants } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /**
  * State-aware "next step" prompt rendered at the top of the dashboard.
@@ -123,7 +125,7 @@ export function NextStepBanner() {
         </div>
         <Link
           href={step.href}
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-brand px-3 text-xs font-medium text-white transition-colors hover:bg-brand-hover"
+          className={cn(buttonVariants({ variant: "brand", size: "sm" }), "shrink-0 gap-1.5 rounded-lg px-3 text-xs")}
         >
           {step.cta}
           <ArrowRight className="h-3.5 w-3.5" aria-hidden />

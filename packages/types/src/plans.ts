@@ -122,7 +122,9 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
   },
   scale: {
     tier: "scale",
-    name: "Scale",
+    // Displayed as "Pro"; the tier id stays `scale` (stored on merchants,
+    // subscriptions and payment records, and used in URLs like ?plan=scale).
+    name: "Pro",
     tagline: "High-volume operations with a full call-center workflow.",
     priceBDT: 5999,
     priceUSD: 59,

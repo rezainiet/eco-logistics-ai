@@ -256,7 +256,7 @@ export function WorkspaceSection() {
           <Button
             type="submit"
             disabled={!canSubmit}
-            className="bg-brand text-white hover:bg-brand-hover sm:w-auto"
+            variant="brand" className="sm:w-auto"
           >
             {mutation.isLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

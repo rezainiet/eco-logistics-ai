@@ -2,7 +2,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { trpc } from "@/lib/trpc";
-import { hexToHsl, readableFg } from "./branding";
+import { brandStyleVars } from "./branding";
 
 /**
  * Reads `merchants.getProfile().branding` and injects the merchant's accent
@@ -14,11 +14,10 @@ import { hexToHsl, readableFg } from "./branding";
  * single wrapping `<div>`, the entire dashboard re-themes at once with no
  * per-component edits.
  *
- * - `--brand`: the merchant's hex converted to "H S% L%"
- * - `--brand-hover`: same colour, lightness reduced by ~6
- * - `--brand-active`: lightness reduced by ~12
- * - `--brand-fg`: black or white based on luminance, so contrast holds even
- *   when a merchant picks a very pale accent
+ * The four values come from `brandStyleVars` (shared @ecom/branding
+ * derivation): `--brand-fg` is whichever of black/white contrasts better,
+ * and hover/active shift lightness away from that label colour, so every
+ * state stays ≥ WCAG AA for any accent.
  *
  * Falls through silently when the query is loading or the merchant hasn't
  * picked a brand yet — the global token from `globals.css` stays in effect.
@@ -33,22 +32,9 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
   });
   const hex = profile.data?.branding?.primaryColor;
 
-  const styleVars = useMemo<React.CSSProperties | undefined>(() => {
-    if (!hex) return undefined;
-    const hsl = hexToHsl(hex);
-    if (!hsl) return undefined;
-    const hover = `${hsl.h} ${hsl.s}% ${Math.max(0, hsl.l - 6)}%`;
-    const active = `${hsl.h} ${hsl.s}% ${Math.max(0, hsl.l - 12)}%`;
-    const fg = readableFg(hex);
-    return {
-      // CSS custom properties on a wrapping div cascade down to every child
-      // that consumes them via hsl(var(--brand)) etc.
-      ["--brand" as never]: `${hsl.h} ${hsl.s}% ${hsl.l}%`,
-      ["--brand-hover" as never]: hover,
-      ["--brand-active" as never]: active,
-      ["--brand-fg" as never]: fg === "white" ? "0 0% 100%" : "0 0% 0%",
-    } as React.CSSProperties;
-  }, [hex]);
+  // CSS custom properties on a wrapping div cascade down to every child
+  // that consumes them via hsl(var(--brand)) etc.
+  const styleVars = useMemo(() => brandStyleVars(hex) as React.CSSProperties | undefined, [hex]);
 
   // Always render the wrapper so the children's tree shape doesn't change
   // between "no branding" and "branding loaded". The style attribute is just

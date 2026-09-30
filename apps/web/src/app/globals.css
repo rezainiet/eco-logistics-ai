@@ -77,6 +77,28 @@
     --border: 220 13% 85% / 0.14;
 
     --radius: 0.5rem;
+
+    /* Mobile bottom navigation (<md). Anything anchored to the bottom of the
+     * viewport on phones offsets by --app-bottom-inset so the fixed nav (and
+     * the iOS home-indicator area) never covers it. Consumed through the
+     * Tailwind spacing tokens `mobile-nav`, `app-bottom-inset` and
+     * `above-mobile-nav` — don't hard-code the nav height elsewhere. */
+    --mobile-nav-row: 3.5rem; /* tap-row height of the nav items */
+    --mobile-nav-height: calc(var(--mobile-nav-row) + 1px); /* + the nav's 1px top border */
+    --app-bottom-inset: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px));
+    /* Height + gap of the viewport-fixed bottom dock (components/dashboard/
+     * bottom-dock.tsx), 0 when empty. Written at runtime by the dock. */
+    --bottom-dock-space: 0px;
+    /* Height + gap of the page's BottomActionBar, 0 when none. Written at runtime. */
+    --bottom-bar-space: 0px;
+  }
+
+  /* md+ shows the sidebar instead of the bottom nav (MobileBottomNav is
+   * md:hidden), so nothing needs to clear it. */
+  @media (min-width: 768px) {
+    :root {
+      --app-bottom-inset: 0px;
+    }
   }
 }
 

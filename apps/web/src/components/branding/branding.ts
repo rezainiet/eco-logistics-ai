@@ -2,6 +2,25 @@
  * Pure helpers for the merchant-branding feature. Kept framework-free so
  * both the BrandingProvider and the Settings → Branding tab can reuse them.
  */
+import { deriveBrandStates, readableFg as sharedReadableFg } from "@ecom/branding";
+
+/**
+ * The `--brand*` CSS variables for a merchant accent (rest / hover / active
+ * + label colour), from the shared accessible derivation. Used by the
+ * dashboard BrandingProvider and the Settings → Branding live preview, so
+ * both render exactly what the merchant will get. Undefined for bad input.
+ */
+export function brandStyleVars(hex: string | null | undefined): Record<string, string> | undefined {
+  const s = hex ? deriveBrandStates(hex) : null;
+  if (!s) return undefined;
+  const hsl = (c: { h: number; s: number; l: number }) => `${c.h} ${c.s}% ${c.l}%`;
+  return {
+    "--brand": hsl(s.brand),
+    "--brand-hover": hsl(s.hover),
+    "--brand-active": hsl(s.active),
+    "--brand-fg": s.fg === "#000000" ? "0 0% 0%" : "0 0% 100%",
+  };
+}
 
 export interface HSL {
   /** 0..360 */
@@ -64,13 +83,13 @@ export function relativeLuminance(r: number, g: number, b: number): number {
   return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b);
 }
 
-/** Pick the readable foreground for a given hex background (white or black). */
+/**
+ * Pick the readable foreground for a given hex background (white or black).
+ * Delegates to the shared @ecom/branding rule (higher WCAG contrast wins) so
+ * the dashboard override and the server-rendered defaults can't drift.
+ */
 export function readableFg(hex: string): "white" | "black" {
-  const rgb = hexToRgb(hex);
-  if (!rgb) return "white";
-  // Threshold ~0.5 works well on a dark UI; keep brand-fg white most of the
-  // time and only flip when the merchant picks a very pale accent.
-  return relativeLuminance(rgb[0], rgb[1], rgb[2]) > 0.6 ? "black" : "white";
+  return sharedReadableFg(hex) === "#000000" ? "black" : "white";
 }
 
 /**

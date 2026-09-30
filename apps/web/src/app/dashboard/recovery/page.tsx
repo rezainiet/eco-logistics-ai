@@ -29,13 +29,10 @@ import {
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
 import { formatNumber, formatRelative } from "@/lib/formatters";
+import { PLAN_NAME } from "@/lib/plan-pricing";
 
-const TIER_LABEL: Record<string, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
+// Plan names come from the catalogue (tier `scale` is shown as "Pro").
+const TIER_LABEL: Record<string, string> = PLAN_NAME;
 
 export default function RecoveryPage() {
   const ent = trpc.recovery.getEntitlements.useQuery();

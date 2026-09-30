@@ -5,25 +5,22 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Receipt, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { listPlans } from "@ecom/types/plans";
 
 /**
  * Plan label resolver. We accept the plan slug both as the lower-case key
  * and the human display name, falling back to a generic line if Stripe /
- * bKash hands us something we don't recognise. Keep this list in sync
- * with @ecom/types PLANS.
+ * bKash hands us something we don't recognise. Names come from PLANS.
  */
-const PLAN_LABEL: Record<string, string> = {
-  starter: "Starter",
-  growth: "Growth",
-  scale: "Scale",
-  enterprise: "Enterprise",
-};
+const PLAN_LABEL: Record<string, string> = Object.fromEntries(listPlans().map((p) => [p.tier, p.name]));
 
 function PaymentSuccessInner() {
   const params = useSearchParams();
   const planSlug = (params.get("plan") ?? "").toLowerCase();
   const planLabel = PLAN_LABEL[planSlug] ?? null;
-  const amount = params.get("amount"); // e.g. "4990"
+  // The amount actually charged, as reported by the payment provider — a
+  // receipt, so it is shown as-is and never replaced by a catalogue price.
+  const amount = params.get("amount"); // e.g. "2499"
   const currency = params.get("currency") ?? "BDT";
   const sessionId = params.get("session_id");
   const nextBilling = params.get("next_billing"); // ISO date
