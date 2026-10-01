@@ -17,8 +17,16 @@ import { captureAttribution, storedAttribution } from "@/lib/analytics/attributi
 import { emitCommerceEvent } from "@/lib/analytics/commerce-events";
 import { VariantPicker } from "./variant-picker";
 import {
+  consumeRecoveryToken,
+  endActivitySession,
+  forgetRecoveryToken,
+  reportActivity,
+  storedRecoveryToken,
+} from "@/lib/commerce/recovery";
+import {
   type CartLine,
   addToCart,
+  parseCart,
   lineKey,
   cartTotals,
   loadCart,
@@ -48,6 +56,36 @@ type Details = { name: string; phone: string; address: string; district: string;
 type Placed = { orderNumber: string; total: number; currency: string };
 
 const EMPTY: Details = { name: "", phone: "", address: "", district: "", email: "", notes: "", delivery: "" };
+
+/** Recovery-link messages (the rest of the copy comes from @ecom/landing). */
+const RECOVERY_TEXT = {
+  en: {
+    restored: "Welcome back — your cart is ready.",
+    partial: "Welcome back — some items are no longer available; the rest are in your cart.",
+    expired: "This cart link has expired, but you can still order below.",
+  },
+  bn: {
+    restored: "আবার স্বাগতম — আপনার কার্ট প্রস্তুত।",
+    partial: "আবার স্বাগতম — কিছু পণ্য আর পাওয়া যাচ্ছে না, বাকিগুলো কার্টে আছে।",
+    expired: "এই কার্ট লিংকের মেয়াদ শেষ হয়েছে, তবে নিচে থেকে অর্ডার করতে পারেন।",
+  },
+} as const;
+
+/** The line a cart change was about: which key moved, and by how much. */
+function changedLine(prev: CartLine[], next: CartLine[]): { line: CartLine; added: boolean } | null {
+  const before = new Map(prev.map((l) => [lineKey(l), l]));
+  const after = new Map(next.map((l) => [lineKey(l), l]));
+  for (const k of new Set([...before.keys(), ...after.keys()])) {
+    const a = before.get(k)?.quantity ?? 0;
+    const b = after.get(k)?.quantity ?? 0;
+    if (a === b) continue;
+    const base = (after.get(k) ?? before.get(k))!;
+    return { line: { ...base, quantity: Math.abs(b - a) }, added: b > a };
+  }
+  return null;
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i;
 
 function Icon({ d, className = "h-5 w-5" }: { d: string; className?: string }) {
   return (
@@ -108,6 +146,9 @@ export function LandingCommerce({
   const placingRef = useRef(false);
   const loaded = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  // Recovery-link token for this tab (attributes the order to the recovery email).
+  const recoveryRef = useRef<string | null>(null);
+  const identifiedRef = useRef<string>("");
   const lastFocus = useRef<HTMLElement | null>(null);
 
   // Where this visit came from (UTM / ad click / referrer) — first-party, sent with the order.
@@ -123,6 +164,65 @@ export function LandingCommerce({
   useEffect(() => {
     if (loaded.current) saveCart(slug, lines);
   }, [slug, lines]);
+
+  // Back from a recovery email: restore the saved cart (ids + quantities),
+  // checked against live stock like any stored cart. Nothing is ordered here.
+  useEffect(() => {
+    const rt = RECOVERY_TEXT[locale === "bn" ? "bn" : "en"];
+    const fresh = consumeRecoveryToken(slug);
+    recoveryRef.current = fresh ?? storedRecoveryToken(slug);
+    // The token leaves the URL on first read, so this runs once per link
+    // (also under a double-invoked effect); its answer is always applied.
+    if (!fresh) return;
+    void (async () => {
+      try {
+        const res = await fetch("/api/recover", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ locale, token: fresh }),
+        });
+        const body = (await res.json().catch(() => ({}))) as { ok?: boolean; lines?: unknown };
+        if (body.ok !== true) {
+          recoveryRef.current = null;
+          forgetRecoveryToken(slug);
+          setNotice(rt.expired);
+          // Say why (the notice lives in the cart panel); the page works as normal.
+          setStep("cart");
+          setOpen(true);
+          return;
+        }
+        const saved = parseCart(body.lines);
+        const restored = reconcileCart(saved, catalog);
+        if (restored.length > 0) {
+          linesRef.current = restored;
+          setLines(restored);
+          keyRef.current = null;
+        }
+        setNotice(restored.length === saved.length && saved.length > 0 ? rt.restored : rt.partial);
+        lastFocus.current = document.activeElement as HTMLElement | null;
+        setStep("cart");
+        setOpen(true);
+      } catch {
+        // Network failure: the page still works as a normal page.
+      }
+    })();
+    // Runs once per page: the token is consumed from the URL on first read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  // Contact typed into the checkout form → the session can be recovered.
+  useEffect(() => {
+    if (step !== "details") return;
+    const phone = normalizeBdMobile(details.phone) ? details.phone.trim() : "";
+    const email = EMAIL_SHAPE.test(details.email.trim()) ? details.email.trim() : "";
+    const sig = `${phone}|${email}`;
+    if ((!phone && !email) || sig === identifiedRef.current) return;
+    const timer = window.setTimeout(() => {
+      identifiedRef.current = sig;
+      reportActivity(slug, locale, "identify", linesRef.current, { phone: phone || undefined, email: email || undefined });
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [details.phone, details.email, step, slug, locale]);
 
   // Delivery areas with their charge — the published page's, refreshed if the
   // server reports they changed while the customer was checking out.
@@ -174,6 +274,7 @@ export function LandingCommerce({
         setNotice(null);
         keyRef.current = null;
         emitCommerceEvent({ type: "add_to_cart", line: { id: product.id, quantity: after - before, price: product.price }, name: product.name, currency: product.currency });
+        reportActivity(slug, locale, "add_to_cart", next, { item: { productId: product.id, quantity: after - before } });
       } else {
         setNotice(t.maxReached);
       }
@@ -181,7 +282,7 @@ export function LandingCommerce({
     };
     document.addEventListener("click", onClick);
     return () => document.removeEventListener("click", onClick);
-  }, [byId, openDrawer, t.maxReached]);
+  }, [byId, openDrawer, t.maxReached, slug, locale]);
 
   // Dialog behaviour: Escape closes, focus moves in, page behind does not scroll.
   useEffect(() => {
@@ -218,6 +319,7 @@ export function LandingCommerce({
         name: `${product.name} (${variant.label})`,
         currency: product.currency,
       });
+      reportActivity(slug, locale, "add_to_cart", next, { item: { productId: product.id, variantId: variant.id, quantity: after - before } });
     } else {
       setNotice(t.maxReached);
     }
@@ -225,6 +327,9 @@ export function LandingCommerce({
   };
 
   const changeLines = (next: CartLine[]) => {
+    const change = changedLine(linesRef.current, next);
+    linesRef.current = next;
+    if (change) reportActivity(slug, locale, change.added ? "add_to_cart" : "remove_from_cart", next, { item: change.line });
     setLines(next);
     keyRef.current = null; // a different cart is a different order attempt
     setNotice(null);
@@ -245,6 +350,7 @@ export function LandingCommerce({
   const goCheckout = () => {
     setError(null);
     setStep("details");
+    reportActivity(slug, locale, "checkout_start", linesRef.current);
     emitCommerceEvent({
       type: "initiate_checkout",
       lines: totals.lines.map((l) => ({ id: l.product.id, quantity: l.quantity, price: l.price })),
@@ -284,6 +390,7 @@ export function LandingCommerce({
           // What the customer was shown; the server charges its own value and refuses a stale one.
           deliveryCharge: delivery ? delivery.charge : null,
           attribution: storedAttribution(),
+          ...(recoveryRef.current ? { recoveryToken: recoveryRef.current } : {}),
         }),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -300,6 +407,12 @@ export function LandingCommerce({
           currency,
         });
         setPlaced({ orderNumber: String(body.orderNumber ?? ""), total: orderTotal, currency });
+        // The cart became an order: this session is no longer abandoned.
+        reportActivity(slug, locale, "checkout_submit", linesRef.current);
+        endActivitySession(slug);
+        recoveryRef.current = null;
+        forgetRecoveryToken(slug);
+        identifiedRef.current = "";
         setLines([]);
         setDetails((d) => ({ ...EMPTY, delivery: d.delivery }));
         keyRef.current = null;

@@ -21,6 +21,44 @@ export type RecoveryStatus = (typeof RECOVERY_STATUSES)[number];
 
 export const RECOVERY_CHANNELS = ["call", "sms", "email"] as const;
 
+/** Where the abandoned cart lived. Absent on rows created before this field (storefront SDK). */
+export const RECOVERY_SOURCES = ["storefront", "landing_page"] as const;
+
+/**
+ * Automatic recovery email lifecycle (Growth+, landing-page carts only — the
+ * only carts ConfirmX can restore):
+ *   queued    → waiting for the send delay
+ *   sending   → claimed by one sweep (lockedUntil guards a crashed worker)
+ *   sent      → delivered to the provider (task moves pending → contacted)
+ *   failed    → gave up (permanent error or retries exhausted)
+ *   suppressed→ recipient on the bounce/complaint suppression list
+ *   cancelled → not sent: the buyer ordered, the page went offline, the
+ *               merchant acted first, or the task expired
+ */
+export const RECOVERY_EMAIL_STATES = ["queued", "sending", "sent", "failed", "suppressed", "cancelled"] as const;
+export type RecoveryEmailState = (typeof RECOVERY_EMAIL_STATES)[number];
+
+const recoveryEmailSchema = new Schema(
+  {
+    state: { type: String, enum: RECOVERY_EMAIL_STATES, required: true },
+    attempts: { type: Number, default: 0 },
+    nextAttemptAt: { type: Date },
+    lockedUntil: { type: Date },
+    sentAt: { type: Date },
+    providerMessageId: { type: String, trim: true, maxlength: 120 },
+    lastError: { type: String, trim: true, maxlength: 300 },
+    cancelReason: { type: String, trim: true, maxlength: 60 },
+    /** Random per-task nonce the link token is derived from (never the token itself). */
+    tokenNonce: { type: String, trim: true, maxlength: 64 },
+    /** sha256 of the recovery link token — the link is matched by this hash. */
+    tokenHash: { type: String, trim: true, maxlength: 64 },
+    clickedAt: { type: Date },
+    clicks: { type: Number, default: 0 },
+    checkoutStartedAt: { type: Date },
+  },
+  { _id: false },
+);
+
 const recoveryTaskSchema = new Schema(
   {
     merchantId: { type: Schema.Types.ObjectId, ref: "Merchant", required: true, index: true },
@@ -52,6 +90,13 @@ const recoveryTaskSchema = new Schema(
     note: { type: String, trim: true, maxlength: 500 },
     /** Auto-expiry sweep marks rows older than the recovery window expired. */
     expiresAt: { type: Date },
+    source: { type: String, enum: RECOVERY_SOURCES },
+    /** Landing-page carts: the page and the host the buyer used (the link goes back there). */
+    landingPageId: { type: Schema.Types.ObjectId, ref: "LandingPage" },
+    landingHost: { type: String, trim: true, lowercase: true, maxlength: 253 },
+    landingLocale: { type: String, trim: true, maxlength: 8 },
+    /** Automatic recovery email (absent = merchant-assisted only). */
+    emailRecovery: { type: recoveryEmailSchema, default: undefined },
   },
   { timestamps: true },
 );

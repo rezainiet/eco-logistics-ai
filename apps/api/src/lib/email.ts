@@ -58,6 +58,13 @@ export interface EmailMessage {
   html: string;
   text?: string;
   tag?: string;
+  /**
+   * Provider-side idempotency key (Resend `Idempotency-Key`). A retried
+   * send with the same key and payload is answered from the provider's
+   * record instead of delivering a second email. Optional; existing
+   * callers are unchanged.
+   */
+  idempotencyKey?: string;
 }
 
 export interface EmailDeliveryResult {
@@ -91,6 +98,13 @@ function maskEmailForLog(addr: string): string {
  * blip here does NOT block sends — better to risk a single bounce than
  * to hold up every transactional flow on a transient lookup failure.
  */
+/** Whether `to` is on the bounce/complaint suppression list (null = not suppressed). */
+export async function emailSuppressionFor(
+  to: string,
+): Promise<{ reason: "bounce_hard" | "complaint" } | null> {
+  return lookupSuppression(to);
+}
+
 async function lookupSuppression(
   to: string,
 ): Promise<{ reason: "bounce_hard" | "complaint" } | null> {
@@ -209,6 +223,7 @@ export async function sendEmail(
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        ...(msg.idempotencyKey ? { "Idempotency-Key": msg.idempotencyKey } : {}),
       },
       body: JSON.stringify({
         from: fromAddress(opts.branding),
@@ -517,6 +532,54 @@ export function buildAdminAlertEmail(args: {
       "You're receiving this because alert delivery is enabled for your admin account. Update preferences in /admin/alerts.",
   });
   const text = `[${sevLabel}] ${args.kind}\n${args.message}\n\nAlerts: ${args.alertsUrl}`;
+  return { subject, html, text };
+}
+
+/**
+ * Abandoned-cart recovery email, sent on the merchant's behalf to a buyer
+ * who left items in a landing-page cart. Carries only what the buyer needs
+ * to finish: the store's name, what was in the cart, the total and the
+ * link back. No internal ids, no order data, no other personal data.
+ */
+export function buildCartRecoveryEmail(args: {
+  storeName: string;
+  items: Array<{ name: string; quantity: number; price: number }>;
+  currency: string;
+  recoveryUrl: string;
+  branding?: BrandingConfig;
+}): { subject: string; html: string; text: string } {
+  const base = resolveBranding(args.branding);
+  const store = args.storeName.trim().slice(0, 80) || "the store";
+  // The card is headed with the STORE's name; the platform appears only in the footer.
+  const b: BrandingConfig = {
+    ...base,
+    name: store,
+    email: { ...base.email, footer: `Sent on behalf of ${store} by ${base.name}` },
+  };
+  const money = (v: number) =>
+    `${args.currency === "BDT" ? "৳ " : `${args.currency} `}${Math.round(v).toLocaleString("en-US")}`;
+  const items = args.items.slice(0, 10);
+  const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
+  const rows = items
+    .map(
+      (i) =>
+        `<tr><td style="padding:6px 0;color:#0f172a">${escapeHtml(i.name.slice(0, 120))} <span style="color:#64748b">&times; ${i.quantity}</span></td><td style="padding:6px 0;text-align:right;color:#0f172a;white-space:nowrap">${money(i.price * i.quantity)}</td></tr>`,
+    )
+    .join("");
+  const subject = `You left something in your cart at ${store}`;
+  const html = renderLayout({
+    branding: b,
+    heading: "Your cart is still waiting",
+    body: `<p>You were close to ordering from <strong>${escapeHtml(store)}</strong>. We saved your cart so you can finish whenever you're ready.</p>
+    <table role="presentation" style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">${rows}
+    <tr><td style="padding:10px 0 0;border-top:1px solid #e5e7eb;font-weight:600">Total (before delivery)</td><td style="padding:10px 0 0;border-top:1px solid #e5e7eb;text-align:right;font-weight:600">${money(total)}</td></tr></table>
+    <p style="color:#64748b;font-size:13px">Prices and stock are confirmed again at checkout. Cash on delivery &mdash; nothing is charged now.</p>`,
+    cta: { label: "Complete your order", href: escapeHtml(args.recoveryUrl) },
+    footer:
+      "You're receiving this one-time reminder because you started an order and left your email. We won't send another reminder for this cart. If you didn't start an order, you can ignore this email.",
+  });
+  const lines = items.map((i) => `- ${i.name.slice(0, 120)} x ${i.quantity}: ${money(i.price * i.quantity)}`).join("\n");
+  const text = `You left something in your cart at ${store}.\n\n${lines}\nTotal (before delivery): ${money(total)}\n\nComplete your order: ${args.recoveryUrl}\n\nThis is a one-time reminder. Prices and stock are confirmed again at checkout.`;
   return { subject, html, text };
 }
 

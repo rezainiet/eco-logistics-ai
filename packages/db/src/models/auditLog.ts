@@ -88,6 +88,8 @@ export const AUDIT_ACTIONS = [
   // dedicated actions. Historical rows are left as they are.
   "recovery.tasks_created",
   "recovery.task_updated",
+  "recovery.email_sent",
+  "recovery.converted",
   // Funnel-event audit signals — written exactly once per merchant +
   // once per integration. Used by ops to measure activation drop-off
   // (signup → integration.connected → integration.first_event) without

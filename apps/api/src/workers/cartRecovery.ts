@@ -9,6 +9,8 @@ import {
 } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
+import { landingCartSnapshot } from "../lib/recovery/landing.js";
+import { sendDueRecoveryEmails, type RecoveryEmailSender } from "../lib/recovery/email.js";
 import {
   cartRecoveryEligible,
   cartRecoveryTiers,
@@ -62,6 +64,11 @@ export interface CartRecoveryJobResult {
   merchants: number;
   /** Merchants on a recovery-capable tier skipped for their subscription state. */
   ineligible: number;
+  /** Automatic recovery emails (landing-page carts) this tick. */
+  emailsSent: number;
+  emailsFailed: number;
+  emailsSuppressed: number;
+  emailsCancelled: number;
 }
 
 export interface CartRecoverySweepOptions {
@@ -69,6 +76,8 @@ export interface CartRecoverySweepOptions {
   now?: number;
   /** Override MAX_CREATE_PER_MERCHANT (tests). */
   maxCreatePerMerchant?: number;
+  /** Email transport override (tests). Defaults to the platform `sendEmail`. */
+  sendEmail?: RecoveryEmailSender;
 }
 
 interface CartScanRow {
@@ -127,6 +136,7 @@ export async function sweepCartRecovery(
   let alreadyTasked = 0;
   let merchants = 0;
   let ineligible = 0;
+  const emails = { sent: 0, failed: 0, suppressed: 0, cancelled: 0 };
   const newTasksByMerchant = new Map<string, number>();
 
   // Merchant by merchant, so every query is tenant-scoped and index-backed.
@@ -151,6 +161,12 @@ export async function sweepCartRecovery(
     created += r.created;
     alreadyTasked += r.alreadyTasked;
     if (r.created > 0) newTasksByMerchant.set(String(merchantId), r.created);
+    // Automatic recovery email for this (entitled) merchant's due tasks.
+    const e = await sendDueRecoveryEmails({ merchantId, now, send: opts.sendEmail });
+    emails.sent += e.sent;
+    emails.failed += e.failed;
+    emails.suppressed += e.suppressed;
+    emails.cancelled += e.cancelled;
   }
 
   // Notify each merchant — but only once per day-bucket so a busy storefront
@@ -199,6 +215,10 @@ export async function sweepCartRecovery(
     alreadyTasked,
     merchants,
     ineligible,
+    emailsSent: emails.sent,
+    emailsFailed: emails.failed,
+    emailsSuppressed: emails.suppressed,
+    emailsCancelled: emails.cancelled,
   };
 }
 
@@ -273,10 +293,19 @@ async function sweepMerchant(args: {
 
 /** Upsert one RecoveryTask; true only when this call created it. */
 async function createTask(merchantId: Types.ObjectId, session: CartScanRow): Promise<boolean> {
-  const { cartValue, topProducts } = await estimateCartFromEvents({
+  let { cartValue, topProducts } = await estimateCartFromEvents({
     merchantId,
     sessionId: session.sessionId,
   });
+  // A ConfirmX landing-page cart can be restored by a link, so it also gets
+  // the automatic recovery email (when the buyer left an email address).
+  // Its saved cart is exact, so it also gives the cart value and products.
+  const landing = await landingCartSnapshot(merchantId, session.sessionId);
+  const restorable = !!landing && landing.lines.length > 0;
+  if (restorable) {
+    cartValue = Math.round(landing!.lines.reduce((sum, l) => sum + l.price * l.quantity, 0));
+    topProducts = [...new Set(landing!.lines.map((l) => l.name).filter(Boolean))].slice(0, 5);
+  }
   try {
     // $setOnInsert so re-runs are idempotent and we never overwrite an
     // agent's contacted/dismissed state.
@@ -294,6 +323,15 @@ async function createTask(merchantId: Types.ObjectId, session: CartScanRow): Pro
           abandonedAt: session.lastSeenAt,
           status: "pending",
           expiresAt: new Date(session.lastSeenAt.getTime() + RECOVERY_WINDOW_MS),
+          source: restorable ? "landing_page" : "storefront",
+          ...(restorable
+            ? {
+                landingPageId: new Types.ObjectId(landing!.landing.pageId),
+                landingHost: landing!.landing.host,
+                landingLocale: landing!.landing.locale,
+                ...(session.email ? { emailRecovery: { state: "queued", attempts: 0 } } : {}),
+              }
+            : {}),
         },
       },
       { upsert: true },
@@ -311,9 +349,9 @@ export function registerCartRecoveryWorker() {
     QUEUE_NAMES.cartRecovery,
     async (job: Job<unknown>) => {
       const res = await sweepCartRecovery();
-      if (res.scanned > 0 || res.expired > 0) {
+      if (res.scanned > 0 || res.expired > 0 || res.emailsSent > 0 || res.emailsFailed > 0) {
         console.log(
-          `[cart-recovery] job=${job.id} merchants=${res.merchants} scanned=${res.scanned} created=${res.created} alreadyTasked=${res.alreadyTasked} expired=${res.expired}`,
+          `[cart-recovery] job=${job.id} merchants=${res.merchants} scanned=${res.scanned} created=${res.created} alreadyTasked=${res.alreadyTasked} expired=${res.expired} emailsSent=${res.emailsSent} emailsFailed=${res.emailsFailed}`,
         );
       }
       return res;

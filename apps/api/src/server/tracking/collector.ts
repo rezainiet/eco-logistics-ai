@@ -736,6 +736,86 @@ async function stitchExistingOrder(args: {
   });
 }
 
+/** One event built by the server itself (not by a browser SDK). */
+export interface ServerTrackingEvent {
+  sessionId: string;
+  type: TrackingEventType;
+  clientEventId: string;
+  occurredAt: Date;
+  url?: string;
+  path?: string;
+  properties: Record<string, unknown>;
+  phone?: string;
+  email?: string;
+}
+
+/**
+ * Store events that a ConfirmX server endpoint built from data it already
+ * validated (e.g. a hosted landing page's cart, checked against the page's
+ * live catalog). Same storage path as /track: idempotent on
+ * (merchantId, sessionId, clientEventId), session counters move only by
+ * newly stored events, and the abandoned-cart flag is derived the same way.
+ * The browser-facing guards of /track (key lookup, HMAC, rate limits) are
+ * the calling endpoint's job.
+ */
+export async function recordServerTrackingEvents(
+  merchantOid: Types.ObjectId,
+  events: ServerTrackingEvent[],
+  ctx: { ip?: string | null; userAgent?: string | null } = {},
+): Promise<PersistOutcome> {
+  const prepared: PreparedEvent[] = events.map((ev) => {
+    const sessionId = ev.sessionId.slice(0, 64);
+    const raw: IncomingEvent = {
+      type: ev.type,
+      clientEventId: ev.clientEventId,
+      sessionId,
+      url: ev.url,
+      path: ev.path,
+      properties: ev.properties,
+    };
+    return {
+      sessionId,
+      occurredAt: ev.occurredAt,
+      raw,
+      phone: ev.phone,
+      email: ev.email,
+      doc: {
+        _id: new Types.ObjectId(),
+        merchantId: merchantOid,
+        sessionId,
+        type: ev.type,
+        clientEventId: ev.clientEventId,
+        url: clamp(ev.url, 1000),
+        path: clamp(ev.path, 500),
+        properties: safeProps(ev.properties),
+        phone: ev.phone,
+        email: ev.email,
+        ip: ctx.ip ?? undefined,
+        userAgent: clamp(ctx.userAgent ?? undefined, 500),
+        occurredAt: ev.occurredAt,
+        receivedAt: new Date(),
+      },
+    };
+  });
+  const outcome = await persistTrackingEvents(prepared.map((p) => p.doc));
+  const stored = new Map<string, PreparedEvent[]>();
+  for (const p of prepared) {
+    if (!outcome.inserted.has(String(p.doc._id))) continue;
+    const list = stored.get(p.sessionId);
+    if (list) list.push(p);
+    else stored.set(p.sessionId, [p]);
+  }
+  for (const [sessionId, list] of stored) {
+    const identity = await updateSessionAggregate(merchantOid, sessionId, list);
+    if (identity.phone || identity.email) {
+      stitchExistingOrder({ merchantId: merchantOid, sessionId, phone: identity.phone, email: identity.email }).catch((err) =>
+        console.error("[tracker] back-stitch failed", err),
+      );
+    }
+  }
+  return outcome;
+}
+
 /**
  * Generate-on-read tracking key for the merchant. Idempotent.
  */

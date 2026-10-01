@@ -9,6 +9,7 @@ import { getPlan } from "../plans.js";
 import { reserveQuota } from "../usage.js";
 import { hashAddress } from "../../server/risk.js";
 import { resolvePublishedForOrder } from "../landing/resolve.js";
+import { linkRecoveredOrder, markRecoveryCheckoutStarted } from "../recovery/landing.js";
 
 /**
  * Order placement from a published landing page (cash on delivery).
@@ -51,6 +52,12 @@ export interface PlaceOrderInput {
    * price or stock decisions.
    */
   attribution?: unknown;
+  /**
+   * Cart-recovery link token, when the buyer came back through a recovery
+   * email. Attribution only: it never changes validation, price, stock or
+   * the order itself — an invalid or expired token is simply ignored.
+   */
+  recoveryToken?: string | null;
 }
 
 export interface PlaceOrderMeta {
@@ -183,6 +190,13 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
   const clientRequestId = `lp_${key}`;
   const existing = await Order.findOne({ merchantId, "source.clientRequestId": clientRequestId }).lean();
   if (existing) return { ok: true, ...placedFrom(existing, true) };
+
+  // Checkout submitted from a recovery link (recorded even if refused below).
+  if (input.recoveryToken) {
+    await markRecoveryCheckoutStarted({ host: input.host, locale: input.locale ?? null, token: input.recoveryToken }).catch((err) =>
+      console.error(JSON.stringify({ evt: "recovery.checkout_mark_failed", error: (err as Error).message?.slice(0, 200) })),
+    );
+  }
 
   const { fields, customer, email, notes } = validateCustomer(input.customer);
   if (fields.length) return fail({ code: "invalid_customer", fields });
@@ -411,5 +425,11 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
     },
   });
   await afterOrderCreated({ merchantId, order, risk, userId: String(merchantId) });
+  if (input.recoveryToken) {
+    // Recovered order → its recovery task. Never fails the order.
+    await linkRecoveredOrder({ host: input.host, locale: input.locale ?? null, token: input.recoveryToken, orderId: order._id, merchantId }).catch((err) =>
+      console.error(JSON.stringify({ evt: "recovery.link_failed", error: (err as Error).message?.slice(0, 200) })),
+    );
+  }
   return { ok: true, ...placedFrom(order, false) };
 }

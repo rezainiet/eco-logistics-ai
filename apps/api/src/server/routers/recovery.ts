@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   Order,
   RecoveryTask,
+  TrackingSession,
   RECOVERY_CHANNELS,
   RECOVERY_STATUSES,
 } from "@ecom/db";
@@ -97,7 +98,18 @@ export const recoveryRouter = router({
         .sort({ abandonedAt: -1 })
         .limit(input.limit)
         .lean();
-      return rows.map((r) => ({
+      // Recovered orders of THIS merchant, for the order number / status column.
+      const orderIds = rows.map((r) => r.recoveredOrderId).filter((id): id is Types.ObjectId => !!id);
+      const orders = orderIds.length
+        ? await Order.find({ _id: { $in: orderIds }, merchantId })
+            .select("orderNumber order.status order.total order.cod")
+            .lean()
+        : [];
+      const orderById = new Map(orders.map((o) => [String(o._id), o]));
+      return rows.map((r) => {
+        const o = r.recoveredOrderId ? orderById.get(String(r.recoveredOrderId)) : undefined;
+        const er = r.emailRecovery;
+        return {
         id: String(r._id),
         sessionId: r.sessionId,
         phone: r.phone ?? null,
@@ -112,7 +124,90 @@ export const recoveryRouter = router({
         recoveredAt: r.recoveredAt ?? null,
         note: r.note ?? null,
         expiresAt: r.expiresAt ?? null,
-      }));
+        source: r.source ?? "storefront",
+        emailStatus: er?.state ?? null,
+        emailSentAt: er?.sentAt ?? null,
+        emailError: er?.state === "failed" ? (er.lastError ?? null) : null,
+        emailCancelReason: er?.state === "cancelled" ? (er.cancelReason ?? null) : null,
+        clickedAt: er?.clickedAt ?? null,
+        clicks: er?.clicks ?? 0,
+        checkoutStartedAt: er?.checkoutStartedAt ?? null,
+        recoveredOrder: o
+          ? { number: o.orderNumber, status: o.order?.status ?? null, total: o.order?.total ?? o.order?.cod ?? 0 }
+          : null,
+        };
+      });
+    }),
+
+  /**
+   * The three questions the Recovery page answers first — how many buyers
+   * abandoned, how many came back, and how much revenue that produced —
+   * over the last `days` days (by abandonment time).
+   *
+   * Revenue follows the existing analytics rule: only DELIVERED orders count
+   * (`revenueDelivered` = order.cod of delivered orders). Placed-but-not-yet-
+   * delivered recovered orders are reported separately as order value; a
+   * click or a started checkout is never revenue.
+   */
+  summary: billableProcedure
+    .input(z.object({ days: z.number().int().min(1).max(90).default(30) }).default({ days: 30 }))
+    .query(async ({ ctx, input }) => {
+      assertBehaviorAnalytics(tierFromCtx(ctx));
+      const merchantId = merchantObjectId(ctx);
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+      const [abandonedCarts, taskAgg] = await Promise.all([
+        // Index {merchantId, abandonedCart, lastSeenAt}.
+        TrackingSession.countDocuments({ merchantId, abandonedCart: true, lastSeenAt: { $gte: since } }),
+        RecoveryTask.aggregate<{
+          _id: null;
+          tasks: number;
+          emailsSent: number;
+          clicked: number;
+          checkoutsStarted: number;
+          recovered: number;
+          orderIds: Types.ObjectId[];
+        }>([
+          { $match: { merchantId, abandonedAt: { $gte: since } } },
+          {
+            $group: {
+              _id: null,
+              tasks: { $sum: 1 },
+              emailsSent: { $sum: { $cond: [{ $eq: ["$emailRecovery.state", "sent"] }, 1, 0] } },
+              clicked: { $sum: { $cond: [{ $gt: ["$emailRecovery.clickedAt", null] }, 1, 0] } },
+              checkoutsStarted: { $sum: { $cond: [{ $gt: ["$emailRecovery.checkoutStartedAt", null] }, 1, 0] } },
+              recovered: { $sum: { $cond: [{ $eq: ["$status", "recovered"] }, 1, 0] } },
+              orderIds: { $push: "$recoveredOrderId" },
+            },
+          },
+        ]),
+      ]);
+      const t = taskAgg[0];
+      const orderIds = (t?.orderIds ?? []).filter(Boolean);
+      const orders = orderIds.length
+        ? await Order.find({ _id: { $in: orderIds }, merchantId }).select("order.status order.cod order.total").lean()
+        : [];
+      let recoveredRevenue = 0;
+      let recoveredOrderValue = 0;
+      for (const o of orders) {
+        recoveredOrderValue += o.order?.total ?? o.order?.cod ?? 0;
+        if (o.order?.status === "delivered") recoveredRevenue += o.order?.cod ?? 0;
+      }
+      const tasks = t?.tasks ?? 0;
+      const recovered = t?.recovered ?? 0;
+      return {
+        days: input.days,
+        abandonedCarts,
+        tasks,
+        emailsSent: t?.emailsSent ?? 0,
+        clicked: t?.clicked ?? 0,
+        checkoutsStarted: t?.checkoutsStarted ?? 0,
+        recovered,
+        recoveredOrders: orders.length,
+        recoveredOrderValue: Math.round(recoveredOrderValue),
+        recoveredRevenue: Math.round(recoveredRevenue),
+        /** Recovered ÷ carts that entered recovery (null until there is one). */
+        recoveryRate: tasks > 0 ? recovered / tasks : null,
+      };
     }),
 
   /** Counts per status — drives the dashboard summary cards. */
@@ -217,6 +312,11 @@ export const recoveryRouter = router({
       if (!updated) {
         throw new TRPCError({ code: "CONFLICT", message: "task changed — refresh and try again" });
       }
+      // The merchant acted first: a not-yet-sent automatic email is cancelled.
+      await RecoveryTask.updateOne(
+        { _id: updated._id, merchantId, "emailRecovery.state": { $in: ["queued", "failed"] } },
+        { $set: { "emailRecovery.state": "cancelled", "emailRecovery.cancelReason": "merchant_action" }, $unset: { "emailRecovery.nextAttemptAt": "" } },
+      );
 
       void writeAudit({
         merchantId,

@@ -82,6 +82,8 @@ type AuditAction =
   | "tracking.identified"
   | "recovery.tasks_created"
   | "recovery.task_updated"
+  | "recovery.email_sent"
+  | "recovery.converted"
   | "auth.signup"
   | "auth.reset_requested"
   | "auth.password_reset"

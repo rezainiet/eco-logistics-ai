@@ -7,6 +7,7 @@ import {
   Mail,
   MessageSquare,
   Phone,
+  ShoppingCart,
   Sparkles,
   XCircle,
 } from "lucide-react";
@@ -28,7 +29,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "@/components/ui/toast";
-import { formatNumber, formatRelative } from "@/lib/formatters";
+import { formatBDT, formatNumber, formatRelative } from "@/lib/formatters";
+import { formatRecoveryRate, recoveryStage } from "@/lib/recovery/lifecycle";
 import { PLAN_NAME } from "@/lib/plan-pricing";
 
 // Plan names come from the catalogue (tier `scale` is shown as "Pro").
@@ -40,20 +42,19 @@ export default function RecoveryPage() {
   const interval = useVisibilityInterval(30_000);
 
   const list = trpc.recovery.list.useQuery(
-    { status: "pending", limit: 100 },
+    { limit: 100 },
     { enabled, retry: false, refetchInterval: interval },
   );
-  const counts = trpc.recovery.counts.useQuery(undefined, {
-    enabled,
-    retry: false,
-    refetchInterval: interval,
-  });
+  const summary = trpc.recovery.summary.useQuery(
+    { days: 30 },
+    { enabled, retry: false, refetchInterval: interval },
+  );
   const utils = trpc.useUtils();
 
   const update = trpc.recovery.update.useMutation({
     onSuccess: () => {
       void utils.recovery.list.invalidate();
-      void utils.recovery.counts.invalidate();
+      void utils.recovery.summary.invalidate();
     },
     onError: (err) => toast.error(err.message),
   });
@@ -62,116 +63,137 @@ export default function RecoveryPage() {
     return <RecoveryUpsell tier={ent.data.tier} next={ent.data.recommendedUpgradeTier} />;
   }
 
+  const s = summary.data;
+  const awaitingDelivery = Math.max(0, (s?.recoveredOrderValue ?? 0) - (s?.recoveredRevenue ?? 0));
+
   return (
     <div className="space-y-6">
       <PageHeader
         eyebrow="Outreach"
         title="Cart recovery"
-        description="Identified buyers who added items to cart but didn't check out. Reach them while their intent is hot."
+        description="Buyers who left items in their cart. Landing-page carts get one automatic reminder email with a link back to their saved cart; you can also reach out yourself."
       />
 
-      <KpiGrid ariaLabel="Recovery metrics">
+      <KpiGrid ariaLabel="Recovery results, last 30 days">
         <StatCard
-          label="Pending"
-          value={formatNumber(counts.data?.pending.count)}
-          icon={LifeBuoy}
+          label="Abandoned carts"
+          value={formatNumber(s?.abandonedCarts)}
+          icon={ShoppingCart}
           tone="warning"
-          loading={counts.isLoading}
-          footer={`BDT ${formatNumber(counts.data?.pending.cartValue)} in cart`}
+          loading={summary.isLoading}
+          footer={`${formatNumber(s?.tasks)} reachable · last 30 days`}
         />
         <StatCard
-          label="Contacted"
-          value={formatNumber(counts.data?.contacted.count)}
-          icon={Phone}
-          tone="info"
-          loading={counts.isLoading}
-        />
-        <StatCard
-          label="Recovered"
-          value={formatNumber(counts.data?.recovered.count)}
+          label="Recovered orders"
+          value={formatNumber(s?.recovered)}
           icon={CheckCircle2}
           tone="success"
-          loading={counts.isLoading}
-          footer={`BDT ${formatNumber(counts.data?.recoveredValue)} recovered`}
+          loading={summary.isLoading}
+          footer={`Recovery rate ${formatRecoveryRate(s?.recoveryRate)}`}
         />
         <StatCard
-          label="Pipeline value"
-          value={`BDT ${formatNumber(counts.data?.pipelineValue)}`}
+          label="Recovered revenue"
+          value={formatBDT(s?.recoveredRevenue)}
           icon={Sparkles}
           tone="brand"
-          loading={counts.isLoading}
-          footer="Pending + contacted carts"
+          loading={summary.isLoading}
+          footer={awaitingDelivery > 0 ? `+ ${formatBDT(awaitingDelivery)} awaiting delivery` : "Delivered orders only"}
+        />
+        <StatCard
+          label="Reminder emails"
+          value={formatNumber(s?.emailsSent)}
+          icon={Mail}
+          tone="info"
+          loading={summary.isLoading}
+          footer={`${formatNumber(s?.clicked)} clicked · ${formatNumber(s?.checkoutsStarted)} checked out`}
         />
       </KpiGrid>
 
       <Card>
         <CardHeader>
-          <CardTitle>Pending outreach</CardTitle>
+          <CardTitle>Recovery queue</CardTitle>
           <CardDescription>
-            Stitched-identity sessions abandoned with items in cart. Mark
-            contacted as you reach out — recovered orders auto-link by phone.
+            Newest first. Revenue counts once a recovered order is delivered.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {list.isLoading ? (
             <div className="text-fg-subtle">Loading…</div>
+          ) : list.isError ? (
+            <div className="text-sm text-danger">Couldn&apos;t load the recovery queue. It will retry automatically.</div>
           ) : (list.data ?? []).length === 0 ? (
             <EmptyState
               icon={LifeBuoy}
               tone="success"
               title="No carts to recover right now"
-              description="When a known buyer adds to cart but doesn't check out, they'll show up here so you can win the COD order back with one SMS. An empty list means nothing is slipping away — we'll surface recoverable carts the moment they appear."
+              description="When a buyer adds items, leaves their phone or email, and doesn't check out, they'll show up here. Landing-page carts with an email get one automatic reminder."
               variant="inset"
             />
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Identity</TableHead>
+                  <TableHead>Customer</TableHead>
                   <TableHead>Cart</TableHead>
-                  <TableHead>Top products</TableHead>
                   <TableHead>Abandoned</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Order</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(list.data ?? []).map((task) => (
-                  <TableRow key={task.id}>
-                    <TableCell>
-                      <div className="text-sm font-medium text-fg">{task.phone ?? task.email}</div>
-                      <div className="text-2xs text-fg-faint font-mono">{task.sessionId.slice(0, 12)}…</div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="text-sm font-semibold text-fg">
-                        BDT {formatNumber(task.cartValue)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        {(task.topProducts ?? []).slice(0, 3).map((p) => (
-                          <Badge key={p} variant="outline" className="bg-info-subtle text-info">
-                            {p}
-                          </Badge>
-                        ))}
-                        {(task.topProducts ?? []).length === 0 ? (
-                          <span className="text-2xs text-fg-faint">—</span>
+                {(list.data ?? []).map((task) => {
+                  const stage = recoveryStage(task);
+                  const open = task.status === "pending" || task.status === "contacted";
+                  return (
+                    <TableRow key={task.id}>
+                      <TableCell>
+                        <div className="text-sm font-medium text-fg">{task.email ?? task.phone}</div>
+                        {task.email && task.phone ? <div className="text-2xs text-fg-faint">{task.phone}</div> : null}
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm font-semibold text-fg">{formatBDT(task.cartValue)}</div>
+                        <div className="max-w-[16rem] truncate text-2xs text-fg-faint" title={(task.topProducts ?? []).join(", ")}>
+                          {(task.topProducts ?? []).slice(0, 3).join(", ") || "—"}
+                        </div>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-fg-subtle">
+                        {formatRelative(task.abandonedAt)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={stage.tone} title={task.emailError ?? undefined}>
+                          {stage.label}
+                        </Badge>
+                        {task.emailSentAt && task.status !== "recovered" ? (
+                          <div className="mt-1 text-2xs text-fg-faint">Emailed {formatRelative(task.emailSentAt)}</div>
                         ) : null}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-xs text-fg-subtle">
-                      {formatRelative(task.abandonedAt)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <RecoveryActions
-                        id={task.id}
-                        hasPhone={!!task.phone}
-                        hasEmail={!!task.email}
-                        pending={update.isPending}
-                        onAction={(payload) => update.mutate(payload)}
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        {task.recoveredOrder ? (
+                          <div>
+                            <div className="font-medium text-fg">#{task.recoveredOrder.number}</div>
+                            <div className="text-2xs text-fg-faint">
+                              {formatBDT(task.recoveredOrder.total)} · {task.recoveredOrder.status ?? "—"}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-fg-faint">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {open ? (
+                          <RecoveryActions
+                            id={task.id}
+                            hasPhone={!!task.phone}
+                            hasEmail={!!task.email}
+                            pending={update.isPending}
+                            onAction={(payload) => update.mutate(payload)}
+                          />
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           )}

@@ -55,6 +55,7 @@ landingOrdersRouter.post("/", orderLimiter, async (req, res) => {
         deliveryOptionId: typeof body.deliveryOptionId === "string" ? body.deliveryOptionId.slice(0, 80) : null,
         deliveryCharge: typeof body.deliveryCharge === "number" ? body.deliveryCharge : null,
         attribution: body.attribution,
+        recoveryToken: typeof body.recoveryToken === "string" ? body.recoveryToken.slice(0, 64) : null,
       },
       { ip: customerIp(req), userAgent: req.header("user-agent") ?? null },
     );

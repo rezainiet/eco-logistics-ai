@@ -33,6 +33,7 @@ import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
 import { mountTrackingCollector } from "./server/tracking/collector.js";
 import { webhookLimiter } from "./middleware/rateLimit.js";
 import { landingOrdersRouter } from "./server/landing-orders.js";
+import { landingActivityRouter, landingRecoverRouter } from "./server/landing-recovery.js";
 import { customDomainsInternalRouter } from "./server/custom-domains-internal.js";
 import { registerTrackingSyncWorker, scheduleTrackingSync } from "./workers/trackingSync.js";
 import { registerRiskRecomputeWorker } from "./workers/riskRecompute.js";
@@ -477,6 +478,10 @@ async function main() {
   app.use("/api/landing-assets", landingAssetRouter);
   // Landing-page checkout (public, rate-limited, idempotent).
   app.use("/api/landing/orders", landingOrdersRouter);
+  // Landing-page cart recovery (public, rate-limited, host-scoped): cart
+  // activity for abandonment, and recovery-link cart restore.
+  app.use("/api/landing/activity", landingActivityRouter);
+  app.use("/api/landing/recover", landingRecoverRouter);
   // Custom-domain server helper (loopback + bearer token only; 404 otherwise).
   app.use("/internal/custom-domains", customDomainsInternalRouter);
 

@@ -80,6 +80,8 @@ export async function POST(req: Request): Promise<Response> {
     deliveryCharge: typeof body.deliveryCharge === "number" ? body.deliveryCharge : null,
     // Marketing attribution: analytics metadata only (the API re-validates it).
     attribution: sanitizeAttribution(body.attribution),
+    // Cart-recovery link token (attribution only; the API ignores a bad one).
+    ...(typeof body.recoveryToken === "string" ? { recoveryToken: body.recoveryToken.slice(0, 64) } : {}),
   };
   const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
   const ua = req.headers.get("user-agent");
