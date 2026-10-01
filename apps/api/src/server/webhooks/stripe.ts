@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { Merchant, Payment } from "@ecom/db";
 import { env } from "../../env.js";
 import { verifyStripeWebhook } from "../../lib/stripe.js";
+import { readRawWebhookBody } from "./raw-body.js";
 import { invalidateSubscriptionCache } from "../trpc.js";
 import { writeAudit } from "../../lib/audit.js";
 import { getPlan, isPlanTier, PLAN_TIERS, type PlanTier } from "../../lib/plans.js";
@@ -112,8 +113,12 @@ stripeWebhookRouter.post(
       // Hard refuse rather than silently accept unsigned traffic.
       return res.status(503).json({ ok: false, error: "stripe_webhook_disabled" });
     }
-    const rawBuf = req.body as Buffer;
-    const rawString = rawBuf.toString("utf8");
+    const body = readRawWebhookBody(req);
+    if (!body.ok) {
+      console.error("[stripe] webhook_misconfigured: body was parsed before the webhook router");
+      return res.status(500).json({ ok: false, error: body.error });
+    }
+    const rawString = body.raw;
 
     const verdict = verifyStripeWebhook({
       rawBody: rawString,

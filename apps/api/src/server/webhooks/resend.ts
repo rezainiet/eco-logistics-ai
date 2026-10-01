@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import express, { type Request, type Response } from "express";
 import { EmailEvent, EmailSuppression } from "@ecom/db";
 import { env } from "../../env.js";
+import { readRawWebhookBody } from "./raw-body.js";
 
 /**
  * Resend webhook receiver.
@@ -315,8 +316,12 @@ resendWebhookRouter.post(
       return res.status(503).json({ ok: false, error: "resend_webhook_disabled" });
     }
 
-    const rawBuf = req.body as Buffer;
-    const rawString = rawBuf.toString("utf8");
+    const body = readRawWebhookBody(req);
+    if (!body.ok) {
+      console.error(JSON.stringify({ evt: "email.webhook.misconfigured", reason: "body_parsed_before_router" }));
+      return res.status(500).json({ ok: false, error: body.error });
+    }
+    const rawString = body.raw;
 
     const svixId = req.header("svix-id") ?? undefined;
     const svixTimestamp = req.header("svix-timestamp") ?? undefined;

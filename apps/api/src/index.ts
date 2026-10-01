@@ -390,6 +390,15 @@ async function main() {
   // parser — these are signed over raw bytes with the platform secret
   // and are a hard gate for App Store / Public Distribution review.
   app.use("/api/webhooks/shopify/gdpr", webhookLimiter, shopifyGdprWebhookRouter);
+  // Stripe webhook — verifyStripeWebhook signs over the raw bytes, so the
+  // router (with its own `express.raw`) MUST mount before the global JSON
+  // parser. Mounted after it, every signed `application/json` event arrived
+  // already parsed and failed verification (401 signature_mismatch).
+  app.use("/api/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
+  // Resend transactional-email event ingestion. Svix-signed over the raw
+  // bytes (same rule as Stripe), idempotent on `svix-id`, persists
+  // `EmailEvent` rows and drives the `EmailSuppression` list.
+  app.use("/api/webhooks/resend", webhookLimiter, resendWebhookRouter);
   app.use(express.json({ limit: "1mb" }));
 
   // Liveness — process is up and the event loop is responsive. Cheap
@@ -448,13 +457,9 @@ async function main() {
   });
   app.use("/auth", authRouter);
   app.use("/admin", adminRouter);
-  // Stripe webhook MUST mount before any JSON parser — verifyStripeWebhook
-  // signs over raw bytes, so `express.raw` lives inside the router.
-  app.use("/api/webhooks/stripe", webhookLimiter, stripeWebhookRouter);
-  // Resend transactional-email event ingestion. Svix-signed payloads,
-  // idempotent on `svix-id`, persists `EmailEvent` rows and drives the
-  // `EmailSuppression` list.
-  app.use("/api/webhooks/resend", webhookLimiter, resendWebhookRouter);
+  // Twilio signs the parsed form params (not raw bytes) and the router
+  // parses `application/x-www-form-urlencoded` itself, which the global
+  // JSON parser never touches — so it can sit after express.json.
   app.use("/api/webhooks/twilio", webhookLimiter, twilioWebhookRouter);
   // Shopify OAuth completion handler — install URLs from
   // `integrations.connect({provider:"shopify"})` redirect here. GET-only,
