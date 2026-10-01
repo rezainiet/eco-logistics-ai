@@ -26,6 +26,26 @@ import type { PlanTier } from "../../lib/plans.js";
  * this router is the queue + state-machine, not a new comms pipe.
  */
 
+type RecoveryStatusValue = (typeof RECOVERY_STATUSES)[number];
+type RecoveryUpdateStatus = "contacted" | "recovered" | "dismissed";
+
+/**
+ * Allowed status changes (audit CR-6), using only the existing statuses:
+ *   pending   → contacted | recovered | dismissed
+ *   contacted → contacted (another attempt) | recovered | dismissed
+ *   recovered, dismissed, expired → terminal
+ * Keyed by the TARGET status: which current statuses may move to it.
+ */
+export const RECOVERY_TRANSITIONS: Readonly<Record<RecoveryUpdateStatus, readonly RecoveryStatusValue[]>> = {
+  contacted: ["pending", "contacted"],
+  recovered: ["pending", "contacted"],
+  dismissed: ["pending", "contacted"],
+};
+
+export function canTransitionRecovery(from: RecoveryStatusValue, to: RecoveryUpdateStatus): boolean {
+  return RECOVERY_TRANSITIONS[to].includes(from);
+}
+
 function tierFromCtx(ctx: { subscription?: SubscriptionSnapshot | null | undefined }): PlanTier {
   return (ctx.subscription?.tier ?? "starter") as PlanTier;
 }
@@ -135,59 +155,90 @@ export const recoveryRouter = router({
         throw new TRPCError({ code: "BAD_REQUEST", message: "invalid id" });
       }
       const merchantId = merchantObjectId(ctx);
-      const task = await RecoveryTask.findOne({
-        _id: new Types.ObjectId(input.id),
-        merchantId,
-      });
+      const taskId = new Types.ObjectId(input.id);
+      const task = await RecoveryTask.findOne({ _id: taskId, merchantId })
+        .select("status phone abandonedAt")
+        .lean();
       if (!task) throw new TRPCError({ code: "NOT_FOUND", message: "task not found" });
 
+      const from = task.status as RecoveryStatusValue;
+      if (!canTransitionRecovery(from, input.status)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `cannot mark a ${from} task as ${input.status}`,
+        });
+      }
+
+      // An explicitly linked order must belong to this merchant.
+      let recoveredOrderId: Types.ObjectId | undefined;
+      if (input.status === "recovered" && input.recoveredOrderId !== undefined) {
+        if (!Types.ObjectId.isValid(input.recoveredOrderId)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "invalid order id" });
+        }
+        const owned = await Order.exists({ _id: new Types.ObjectId(input.recoveredOrderId), merchantId });
+        if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+        recoveredOrderId = owned._id as Types.ObjectId;
+      } else if (input.status === "recovered" && task.phone) {
+        // Best-effort: link the most recent order from the same buyer (this merchant only).
+        const variants = phoneLookupVariants(task.phone);
+        const recent = await Order.findOne({
+          merchantId,
+          "customer.phone": variants.length > 1 ? { $in: variants } : task.phone,
+          createdAt: { $gte: task.abandonedAt },
+        })
+          .sort({ createdAt: -1 })
+          .select("_id")
+          .lean();
+        if (recent) recoveredOrderId = recent._id as Types.ObjectId;
+      }
+
       const now = new Date();
-      task.status = input.status;
-      if (input.note !== undefined) task.note = input.note;
+      const set: Record<string, unknown> = { status: input.status };
+      if (input.note !== undefined) set.note = input.note;
       if (input.status === "contacted") {
-        task.lastChannel = input.channel;
-        task.contactedAt = now;
-        task.contactedBy = merchantId;
+        set.lastChannel = input.channel;
+        set.contactedAt = now;
+        // The authenticated principal IS the merchant account (ctx.user.id);
+        // there is no per-staff identity in the session to record here.
+        set.contactedBy = merchantId;
       }
       if (input.status === "recovered") {
-        task.recoveredAt = now;
-        if (input.recoveredOrderId && Types.ObjectId.isValid(input.recoveredOrderId)) {
-          task.recoveredOrderId = new Types.ObjectId(input.recoveredOrderId);
-        } else if (task.phone) {
-          // Best-effort: link the most recent order from the same buyer.
-          const variants = phoneLookupVariants(task.phone);
-          const recent = await Order.findOne({
-            merchantId,
-            "customer.phone":
-              variants.length > 1 ? { $in: variants } : task.phone,
-            createdAt: { $gte: task.abandonedAt },
-          })
-            .sort({ createdAt: -1 })
-            .select("_id")
-            .lean();
-          if (recent) task.recoveredOrderId = recent._id;
-        }
+        set.recoveredAt = now;
+        if (recoveredOrderId) set.recoveredOrderId = recoveredOrderId;
       }
-      await task.save();
+
+      // Conditional on the status we validated against, so two concurrent
+      // clicks can't both pass the transition check.
+      const updated = await RecoveryTask.findOneAndUpdate(
+        { _id: taskId, merchantId, status: from },
+        { $set: set },
+        { new: true },
+      ).lean();
+      if (!updated) {
+        throw new TRPCError({ code: "CONFLICT", message: "task changed — refresh and try again" });
+      }
 
       void writeAudit({
         merchantId,
         actorId: merchantId,
-        action: "tracking.identified",
+        actorEmail: ctx.user.email,
+        actorType: ctx.user.role === "admin" ? "admin" : "merchant",
+        action: "recovery.task_updated",
         subjectType: "session",
-        subjectId: task._id,
+        subjectId: updated._id,
         meta: {
           kind: "recovery_update",
+          fromStatus: from,
           newStatus: input.status,
           channel: input.channel ?? null,
-          recoveredOrderId: task.recoveredOrderId ? String(task.recoveredOrderId) : null,
+          recoveredOrderId: updated.recoveredOrderId ? String(updated.recoveredOrderId) : null,
         },
       });
 
       return {
-        id: String(task._id),
-        status: task.status,
-        recoveredOrderId: task.recoveredOrderId ? String(task.recoveredOrderId) : null,
+        id: String(updated._id),
+        status: updated.status,
+        recoveredOrderId: updated.recoveredOrderId ? String(updated.recoveredOrderId) : null,
       };
     }),
 });

@@ -13,6 +13,7 @@ import {
 } from "recharts";
 import {
   Activity,
+  AlertTriangle,
   Download,
   Eye,
   Flame,
@@ -37,6 +38,7 @@ import {
   CHART_TOOLTIP_STYLE,
 } from "@/components/charts/chart-style";
 import { EmptyState } from "@/components/ui/empty-state";
+import { BehaviorLoadError, failedSections } from "@/components/analytics/behavior-load-error";
 import { PageHeader } from "@/components/ui/page-header";
 import { StatCard } from "@/components/ui/stat-card";
 import {
@@ -114,6 +116,21 @@ export default function BehaviorAnalyticsPage() {
   }
 
   const o = overview.data;
+  // A failed query must read as "unavailable", never as zero traffic.
+  const failed = failedSections([
+    { label: "Overview", isError: overview.isError },
+    { label: "Funnel", isError: funnel.isError },
+    { label: "Top products", isError: top.isError },
+    { label: "Repeat visitors", isError: repeat.isError },
+    { label: "High-intent sessions", isError: canAdvanced && intent.isError },
+    { label: "Suspicious sessions", isError: canAdvanced && suspicious.isError },
+  ]);
+  const retryFailed = () => {
+    for (const q of [overview, funnel, top, repeat, ...(canAdvanced ? [intent, suspicious] : [])]) {
+      if (q.isError) void q.refetch();
+    }
+  };
+  const UNAVAILABLE = "—";
   const funnelData = (funnel.data ?? []).map((s) => ({
     name: s.stage.replace(/_/g, " "),
     sessions: s.sessions,
@@ -157,39 +174,45 @@ export default function BehaviorAnalyticsPage() {
         }
       />
 
+      <BehaviorLoadError failed={failed} onRetry={retryFailed} />
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Sessions"
-          value={formatNumber(o?.sessions)}
+          value={overview.isError ? UNAVAILABLE : formatNumber(o?.sessions)}
           icon={Activity}
           tone="brand"
           loading={overview.isLoading}
-          footer={`${formatNumber(o?.pageViews)} page views`}
+          footer={overview.isError ? "Couldn't load" : `${formatNumber(o?.pageViews)} page views`}
         />
         <StatCard
           label="Conversion"
-          value={formatPercent((o?.conversionRate ?? 0) * 100)}
+          value={overview.isError ? UNAVAILABLE : formatPercent((o?.conversionRate ?? 0) * 100)}
           icon={Sparkles}
           tone="success"
           loading={overview.isLoading}
-          footer={`${formatNumber(o?.converted)} checkouts`}
+          footer={overview.isError ? "Couldn't load" : `${formatNumber(o?.converted)} checkouts`}
         />
         <StatCard
           label="Cart abandonment"
-          value={formatPercent((o?.abandonRate ?? 0) * 100)}
+          value={overview.isError ? UNAVAILABLE : formatPercent((o?.abandonRate ?? 0) * 100)}
           icon={ShoppingCart}
           tone="warning"
           invertDelta
           loading={overview.isLoading}
-          footer={`${formatNumber(o?.abandoned)} sessions abandoned`}
+          footer={overview.isError ? "Couldn't load" : `${formatNumber(o?.abandoned)} sessions abandoned`}
         />
         <StatCard
           label="Repeat visitors"
-          value={formatPercent((repeat.data?.share ?? 0) * 100)}
+          value={repeat.isError ? UNAVAILABLE : formatPercent((repeat.data?.share ?? 0) * 100)}
           icon={Users}
           tone="info"
           loading={repeat.isLoading}
-          footer={`${formatNumber(repeat.data?.repeat)} of ${formatNumber(repeat.data?.total)} visitors`}
+          footer={
+            repeat.isError
+              ? "Couldn't load"
+              : `${formatNumber(repeat.data?.repeat)} of ${formatNumber(repeat.data?.total)} visitors`
+          }
         />
       </div>
 
@@ -200,7 +223,9 @@ export default function BehaviorAnalyticsPage() {
           description="Sessions reaching each step of the storefront flow."
         >
           <div className="h-72">
-            {funnelData.length === 0 ? (
+            {funnel.isError ? (
+              <EmptyState icon={AlertTriangle} tone="danger" title="Couldn't load the funnel" description="Retry from the banner above." />
+            ) : funnelData.length === 0 ? (
               <EmptyState
                 icon={Eye}
                 title="No data yet"
@@ -238,6 +263,8 @@ export default function BehaviorAnalyticsPage() {
           <CardContent>
             {top.isLoading ? (
               <div className="text-fg-subtle">Loading…</div>
+            ) : top.isError ? (
+              <p className="text-xs text-danger">Couldn&apos;t load top products.</p>
             ) : (top.data ?? []).length === 0 ? (
               <p className="text-xs text-fg-faint">No product views yet.</p>
             ) : (
@@ -283,6 +310,8 @@ export default function BehaviorAnalyticsPage() {
             <AdvancedTableLock tier={ent?.tier ?? "growth"} next={ent?.recommendedUpgradeTier ?? "scale"} />
           ) : intent.isLoading ? (
             <div className="text-fg-subtle">Loading…</div>
+          ) : intent.isError ? (
+            <EmptyState icon={AlertTriangle} tone="danger" title="Couldn't load high-intent sessions" description="Retry from the banner above." variant="inset" />
           ) : (intent.data ?? []).length === 0 ? (
             <EmptyState
               icon={Flame}
@@ -365,6 +394,8 @@ export default function BehaviorAnalyticsPage() {
             <AdvancedTableLock tier={ent?.tier ?? "growth"} next={ent?.recommendedUpgradeTier ?? "scale"} />
           ) : suspicious.isLoading ? (
             <div className="text-fg-subtle">Loading…</div>
+          ) : suspicious.isError ? (
+            <EmptyState icon={AlertTriangle} tone="danger" title="Couldn't load suspicious sessions" description="Retry from the banner above." variant="inset" />
           ) : (suspicious.data ?? []).length === 0 ? (
             <EmptyState
               icon={ShieldAlert}

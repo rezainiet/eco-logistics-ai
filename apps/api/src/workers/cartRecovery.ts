@@ -1,6 +1,7 @@
 import type { Job } from "bullmq";
 import { Types } from "mongoose";
 import {
+  Merchant,
   RecoveryTask,
   TrackingEvent,
   TrackingSession,
@@ -25,10 +26,23 @@ import { writeAudit } from "../lib/audit.js";
  * estimate + top product names so the merchant's outreach script writes
  * itself. A first-task notification fires once per merchant per day so the
  * inbox isn't flooded.
+ *
+ * Scan strategy (audit CR-2): the sweep used to take the newest 200
+ * candidates across ALL merchants, already-tasked sessions included — once
+ * 200 newer sessions existed, older untasked ones were never reached, and
+ * the merchant-less query fit none of the merchant-prefixed indexes. Now it
+ * walks merchant by merchant on the `{merchantId, abandonedCart, lastSeenAt}`
+ * index, oldest first, drops sessions that already have a task BEFORE they
+ * count toward anything, and caps only task CREATIONS per merchant per tick.
+ * Every tick therefore makes progress through the untasked backlog (FIFO),
+ * so no eligible session can be starved.
  */
 
 const REPEAT_JOB_NAME = "cart-recovery:sweep";
-const SCAN_BATCH = 200;
+/** Candidates fetched per page (one RecoveryTask lookup per page). */
+const PAGE_SIZE = 200;
+/** Upper bound on NEW tasks per merchant per tick (bounds write volume). */
+const MAX_CREATE_PER_MERCHANT = 500;
 const DEFAULT_INTERVAL_MS = 5 * 60_000; // 5 minutes
 const MIN_AGE_MS = 30 * 60_000; // 30 minutes after last_seen
 const RECOVERY_WINDOW_MS = 7 * 24 * 60_000 * 60; // 7 days
@@ -37,6 +51,16 @@ export interface CartRecoveryJobResult {
   scanned: number;
   created: number;
   expired: number;
+  /** Candidates skipped because a RecoveryTask already exists for them. */
+  alreadyTasked: number;
+  merchants: number;
+}
+
+export interface CartRecoverySweepOptions {
+  /** Clock override (tests). */
+  now?: number;
+  /** Override MAX_CREATE_PER_MERCHANT (tests). */
+  maxCreatePerMerchant?: number;
 }
 
 interface CartScanRow {
@@ -75,70 +99,37 @@ async function estimateCartFromEvents(args: {
   return { cartValue: Math.round(cartValue), topProducts: [...productNames] };
 }
 
-export async function sweepCartRecovery(): Promise<CartRecoveryJobResult> {
-  const now = Date.now();
+export async function sweepCartRecovery(
+  opts: CartRecoverySweepOptions = {},
+): Promise<CartRecoveryJobResult> {
+  const now = opts.now ?? Date.now();
   const ageCutoff = new Date(now - MIN_AGE_MS);
   const windowFloor = new Date(now - RECOVERY_WINDOW_MS);
+  const createCap = opts.maxCreatePerMerchant ?? MAX_CREATE_PER_MERCHANT;
 
   // Expire stale pending tasks first — don't keep nagging the agent about
   // carts that abandoned a week ago.
   const expiredResult = await RecoveryTask.updateMany(
-    { status: "pending", expiresAt: { $lte: new Date() } },
+    { status: "pending", expiresAt: { $lte: new Date(now) } },
     { $set: { status: "expired" } },
   );
 
-  // Pull candidate sessions in one pass; the partial index on
-  // {merchantId, abandonedCart} keeps this cheap even at scale.
-  const candidates = (await TrackingSession.find({
-    abandonedCart: true,
-    converted: { $ne: true },
-    resolvedOrderId: { $exists: false },
-    lastSeenAt: { $gte: windowFloor, $lte: ageCutoff },
-    $or: [{ phone: { $exists: true, $ne: null } }, { email: { $exists: true, $ne: null } }],
-  })
-    .sort({ lastSeenAt: -1 })
-    .limit(SCAN_BATCH)
-    .select("_id sessionId merchantId phone email lastSeenAt addToCartCount checkoutSubmitCount resolvedOrderId")
-    .lean()) as Array<CartScanRow & { merchantId: Types.ObjectId }>;
-
+  let scanned = 0;
   let created = 0;
+  let alreadyTasked = 0;
+  let merchants = 0;
   const newTasksByMerchant = new Map<string, number>();
 
-  for (const session of candidates) {
-    if (!session.phone && !session.email) continue;
-    if (session.checkoutSubmitCount > 0) continue;
-
-    const { cartValue, topProducts } = await estimateCartFromEvents({
-      merchantId: session.merchantId,
-      sessionId: session.sessionId,
-    });
-
-    // Upsert with $setOnInsert so re-runs are idempotent and we never
-    // overwrite an agent's contacted/dismissed state.
-    const result = await RecoveryTask.updateOne(
-      { merchantId: session.merchantId, sessionId: session.sessionId },
-      {
-        $setOnInsert: {
-          merchantId: session.merchantId,
-          sessionId: session.sessionId,
-          trackingSessionId: session._id,
-          phone: session.phone ?? undefined,
-          email: session.email ?? undefined,
-          cartValue,
-          topProducts,
-          abandonedAt: session.lastSeenAt,
-          status: "pending",
-          expiresAt: new Date(session.lastSeenAt.getTime() + RECOVERY_WINDOW_MS),
-        },
-      },
-      { upsert: true },
-    );
-
-    if (result.upsertedCount && result.upsertedCount > 0) {
-      created += 1;
-      const key = String(session.merchantId);
-      newTasksByMerchant.set(key, (newTasksByMerchant.get(key) ?? 0) + 1);
-    }
+  // Merchant by merchant, so every query is tenant-scoped and index-backed.
+  const merchantCursor = Merchant.find({}).select("_id").lean().cursor();
+  for await (const m of merchantCursor) {
+    merchants += 1;
+    const merchantId = m._id as Types.ObjectId;
+    const r = await sweepMerchant({ merchantId, ageCutoff, windowFloor, createCap });
+    scanned += r.scanned;
+    created += r.created;
+    alreadyTasked += r.alreadyTasked;
+    if (r.created > 0) newTasksByMerchant.set(String(merchantId), r.created);
   }
 
   // Notify each merchant — but only once per day-bucket so a busy storefront
@@ -173,7 +164,7 @@ export async function sweepCartRecovery(): Promise<CartRecoveryJobResult> {
       merchantId,
       actorId: merchantId,
       actorType: "system",
-      action: "tracking.identified",
+      action: "recovery.tasks_created",
       subjectType: "merchant",
       subjectId: merchantId,
       meta: { kind: "cart_recovery_batch", count },
@@ -181,10 +172,116 @@ export async function sweepCartRecovery(): Promise<CartRecoveryJobResult> {
   }
 
   return {
-    scanned: candidates.length,
+    scanned,
     created,
     expired: expiredResult.modifiedCount ?? 0,
+    alreadyTasked,
+    merchants,
   };
+}
+
+/**
+ * One merchant's slice of the sweep. Oldest eligible session first; each
+ * page of candidates is checked against existing RecoveryTasks in one
+ * indexed lookup, and only untasked sessions are upserted (still guarded by
+ * the unique {merchantId, sessionId} index, so concurrent sweeps can't
+ * double-create).
+ */
+async function sweepMerchant(args: {
+  merchantId: Types.ObjectId;
+  ageCutoff: Date;
+  windowFloor: Date;
+  createCap: number;
+}): Promise<{ scanned: number; created: number; alreadyTasked: number }> {
+  const { merchantId, ageCutoff, windowFloor, createCap } = args;
+  let scanned = 0;
+  let created = 0;
+  let alreadyTasked = 0;
+
+  // Equality on merchantId + abandonedCart and a range on lastSeenAt match
+  // the {merchantId:1, abandonedCart:1, lastSeenAt:-1} index (scanned in
+  // reverse for oldest-first); the remaining predicates filter that range.
+  const cursor = TrackingSession.find({
+    merchantId,
+    abandonedCart: true,
+    lastSeenAt: { $gte: windowFloor, $lte: ageCutoff },
+    converted: { $ne: true },
+    resolvedOrderId: { $exists: false },
+    $or: [{ phone: { $exists: true, $ne: null } }, { email: { $exists: true, $ne: null } }],
+  })
+    .sort({ lastSeenAt: 1 })
+    .select("_id sessionId merchantId phone email lastSeenAt addToCartCount checkoutSubmitCount resolvedOrderId")
+    .lean()
+    .cursor({ batchSize: PAGE_SIZE });
+
+  let page: CartScanRow[] = [];
+  const flush = async (): Promise<boolean> => {
+    if (page.length === 0) return true;
+    const rows = page;
+    page = [];
+    scanned += rows.length;
+    const existing = await RecoveryTask.find({
+      merchantId,
+      sessionId: { $in: rows.map((r) => r.sessionId) },
+    })
+      .select("sessionId")
+      .lean();
+    const tasked = new Set(existing.map((t) => t.sessionId));
+    for (const row of rows) {
+      if (tasked.has(row.sessionId)) {
+        alreadyTasked += 1;
+        continue;
+      }
+      if (!row.phone && !row.email) continue;
+      if ((row.checkoutSubmitCount ?? 0) > 0) continue;
+      if (created >= createCap) return false; // budget spent — next tick continues from here
+      if (await createTask(merchantId, row)) created += 1;
+    }
+    return true;
+  };
+
+  for await (const row of cursor) {
+    page.push(row as CartScanRow);
+    if (page.length >= PAGE_SIZE && !(await flush())) break;
+  }
+  if (created < createCap) await flush();
+  await cursor.close();
+  return { scanned, created, alreadyTasked };
+}
+
+/** Upsert one RecoveryTask; true only when this call created it. */
+async function createTask(merchantId: Types.ObjectId, session: CartScanRow): Promise<boolean> {
+  const { cartValue, topProducts } = await estimateCartFromEvents({
+    merchantId,
+    sessionId: session.sessionId,
+  });
+  try {
+    // $setOnInsert so re-runs are idempotent and we never overwrite an
+    // agent's contacted/dismissed state.
+    const result = await RecoveryTask.updateOne(
+      { merchantId, sessionId: session.sessionId },
+      {
+        $setOnInsert: {
+          merchantId,
+          sessionId: session.sessionId,
+          trackingSessionId: session._id,
+          phone: session.phone ?? undefined,
+          email: session.email ?? undefined,
+          cartValue,
+          topProducts,
+          abandonedAt: session.lastSeenAt,
+          status: "pending",
+          expiresAt: new Date(session.lastSeenAt.getTime() + RECOVERY_WINDOW_MS),
+        },
+      },
+      { upsert: true },
+    );
+    return (result.upsertedCount ?? 0) > 0;
+  } catch (err) {
+    // A concurrent sweep won the upsert race on the unique index.
+    if ((err as { code?: number }).code === 11000) return false;
+    throw err;
+  }
 }
 
 export function registerCartRecoveryWorker() {
@@ -192,9 +289,9 @@ export function registerCartRecoveryWorker() {
     QUEUE_NAMES.cartRecovery,
     async (job: Job<unknown>) => {
       const res = await sweepCartRecovery();
-      if (res.scanned > 0) {
+      if (res.scanned > 0 || res.expired > 0) {
         console.log(
-          `[cart-recovery] job=${job.id} scanned=${res.scanned} created=${res.created} expired=${res.expired}`,
+          `[cart-recovery] job=${job.id} merchants=${res.merchants} scanned=${res.scanned} created=${res.created} alreadyTasked=${res.alreadyTasked} expired=${res.expired}`,
         );
       }
       return res;

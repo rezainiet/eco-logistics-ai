@@ -195,6 +195,50 @@ async function ensureFraudAccess(
   }
 }
 
+/**
+ * Review-queue cursor (audit OV-2). The queue is ordered by
+ * (fraud.riskScore DESC, _id DESC); the cursor must carry BOTH values of
+ * the last row, otherwise "_id < last" skips lower-scored orders with a
+ * newer _id. Encoded as opaque base64url JSON. A missing/null score sorts
+ * last in descending order, so it is carried as null.
+ */
+export interface ReviewCursor {
+  s: number | null;
+  id: string;
+}
+
+export function encodeReviewCursor(c: ReviewCursor): string {
+  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+
+export function decodeReviewCursor(raw: string): ReviewCursor | null {
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<ReviewCursor>;
+    const sOk = parsed.s === null || (typeof parsed.s === "number" && Number.isFinite(parsed.s));
+    if (!sOk || typeof parsed.id !== "string" || !Types.ObjectId.isValid(parsed.id)) return null;
+    return { s: parsed.s as number | null, id: parsed.id };
+  } catch {
+    return null;
+  }
+}
+
+/** Mongo filter for "strictly after `c`" in (riskScore DESC, _id DESC) order. */
+export function reviewCursorFilter(c: ReviewCursor): Record<string, unknown> {
+  const id = new Types.ObjectId(c.id);
+  if (c.s === null) {
+    // Only score-less rows remain, ordered by _id DESC.
+    return { "fraud.riskScore": null, _id: { $lt: id } };
+  }
+  return {
+    $or: [
+      { "fraud.riskScore": { $lt: c.s } },
+      { "fraud.riskScore": c.s, _id: { $lt: id } },
+      // Score-less rows sort after every scored row.
+      { "fraud.riskScore": null },
+    ],
+  };
+}
+
 export const fraudRouter = router({
   /**
    * Queue of orders needing human verification. Default view merges
@@ -231,8 +275,18 @@ export const fraudRouter = router({
         merchantId,
         "fraud.reviewStatus": statusMatch,
       };
-      if (input.cursor && Types.ObjectId.isValid(input.cursor)) {
-        findQuery._id = { $lt: new Types.ObjectId(input.cursor) };
+      if (input.cursor) {
+        let cursor = decodeReviewCursor(input.cursor);
+        if (!cursor && Types.ObjectId.isValid(input.cursor)) {
+          // Legacy cursor (bare _id from an older client): recover the
+          // score of that row — this merchant's rows only.
+          const prev = await Order.findOne({ _id: new Types.ObjectId(input.cursor), merchantId })
+            .select("fraud.riskScore")
+            .lean<{ fraud?: { riskScore?: number | null } }>();
+          if (prev) cursor = { s: prev.fraud?.riskScore ?? null, id: input.cursor };
+        }
+        if (!cursor) throw new TRPCError({ code: "BAD_REQUEST", message: "invalid cursor" });
+        Object.assign(findQuery, reviewCursorFilter(cursor));
       }
 
       const items = await Order.find(findQuery)
@@ -243,7 +297,10 @@ export const fraudRouter = router({
       const hasMore = items.length > input.limit;
       const page = hasMore ? items.slice(0, -1) : items;
       const last = page[page.length - 1];
-      const nextCursor = hasMore && last ? String(last._id) : null;
+      const nextCursor =
+        hasMore && last
+          ? encodeReviewCursor({ s: last.fraud?.riskScore ?? null, id: String(last._id) })
+          : null;
 
       const total = await Order.countDocuments({
         merchantId,
@@ -332,6 +389,9 @@ export const fraudRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
+      // Same plan gate as the rest of the verification surface (audit OV-1):
+      // the detail includes the cross-merchant network-risk read.
+      await ensureFraudAccess(merchantId, ctx.user.role);
       const _id = parseObjectId(input.id);
       const order = await Order.findOne({ _id, merchantId }).lean<FraudDoc>();
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });

@@ -48,6 +48,8 @@ export const trackingRouter = express.Router();
 const MAX_BATCH = 50;
 const MAX_PROPERTY_BYTES = 8 * 1024;
 const MAX_SESSION_EVENT_COUNT = 5000;
+/** Documented definition: a session with ≥2 add_to_cart events and no checkout. */
+export const ABANDONED_CART_MIN_ADDS = 2;
 
 const keyCache = new LRUCache<
   string,
@@ -342,171 +344,119 @@ trackingRouter.post(
         }
       }
 
-      // ---- Persistence (existing logic, fed from validated events) -------
+      // ---- Persistence ----------------------------------------------------
+      // Every event gets its own _id up front so we can tell, exactly, which
+      // of THIS request's events were newly stored (vs. duplicate retries of
+      // an earlier request, vs. genuine failures). Session counters are then
+      // built ONLY from newly stored events, grouped by their own session —
+      // a retried batch never inflates counters, and session B's events are
+      // never credited to session A.
       const ua = clamp(req.headers["user-agent"], 500);
-      const docs: Record<string, unknown>[] = [];
-      let identityPhone: string | undefined;
-      let identityEmail: string | undefined;
-      let firstAt: Date | null = null;
-      let lastAt: Date | null = null;
-
-      for (const ev of eventsToWrite) {
+      const prepared: PreparedEvent[] = eventsToWrite.map((ev) => {
         const raw = ev.raw as IncomingEvent;
-        const occurredAt = ev.occurredAt;
-        if (firstAt === null || occurredAt < firstAt) firstAt = occurredAt;
-        if (lastAt === null || occurredAt > lastAt) lastAt = occurredAt;
         const rawPhone = clamp(raw.phone, 32);
         const phone = rawPhone ? normalizePhoneOrRaw(rawPhone) ?? rawPhone : undefined;
         const email = clamp(raw.email, 200)?.toLowerCase();
-        if (phone) identityPhone = phone;
-        if (email) identityEmail = email;
-
-        docs.push({
-          merchantId: merchantOid,
-          sessionId: ev.sessionId.slice(0, 64),
-          anonId: clamp(raw.anonId, 64),
-          type: ev.type,
-          clientEventId: ev.clientEventId,
-          url: clamp(raw.url, 1000),
-          path: clamp(raw.path, 500),
-          referrer: clamp(raw.referrer, 1000),
-          campaign: raw.campaign
-            ? {
-                source: clamp(raw.campaign.source, 80),
-                medium: clamp(raw.campaign.medium, 80),
-                name: clamp(raw.campaign.name, 200),
-                term: clamp(raw.campaign.term, 120),
-                content: clamp(raw.campaign.content, 200),
-              }
-            : undefined,
-          device: raw.device
-            ? {
-                type: clamp(raw.device.type, 30),
-                os: clamp(raw.device.os, 60),
-                browser: clamp(raw.device.browser, 60),
-                viewport: clamp(raw.device.viewport, 40),
-                language: clamp(raw.device.language, 20),
-              }
-            : undefined,
-          properties: safeProps(raw.properties),
+        const sessionId = ev.sessionId.slice(0, 64);
+        return {
+          sessionId,
+          occurredAt: ev.occurredAt,
+          raw,
           phone,
           email,
-          ip,
-          userAgent: ua,
-          occurredAt,
-          receivedAt: new Date(),
-        });
+          doc: {
+            _id: new Types.ObjectId(),
+            merchantId: merchantOid,
+            sessionId,
+            anonId: clamp(raw.anonId, 64),
+            type: ev.type,
+            clientEventId: ev.clientEventId,
+            url: clamp(raw.url, 1000),
+            path: clamp(raw.path, 500),
+            referrer: clamp(raw.referrer, 1000),
+            campaign: raw.campaign
+              ? {
+                  source: clamp(raw.campaign.source, 80),
+                  medium: clamp(raw.campaign.medium, 80),
+                  name: clamp(raw.campaign.name, 200),
+                  term: clamp(raw.campaign.term, 120),
+                  content: clamp(raw.campaign.content, 200),
+                }
+              : undefined,
+            device: raw.device
+              ? {
+                  type: clamp(raw.device.type, 30),
+                  os: clamp(raw.device.os, 60),
+                  browser: clamp(raw.device.browser, 60),
+                  viewport: clamp(raw.device.viewport, 40),
+                  language: clamp(raw.device.language, 20),
+                }
+              : undefined,
+            properties: safeProps(raw.properties),
+            phone,
+            email,
+            ip,
+            userAgent: ua,
+            occurredAt: ev.occurredAt,
+            receivedAt: new Date(),
+          },
+        };
+      });
+
+      let outcome: PersistOutcome;
+      try {
+        outcome = await persistTrackingEvents(prepared.map((p) => p.doc));
+      } catch (err) {
+        // Could not even determine what was stored (e.g. DB unreachable).
+        // Nothing is counted; the SDK retries and idempotency absorbs it.
+        console.error("[tracker] insert failed", (err as Error).message);
+        return res.status(500).json({ ok: false, error: "persist_failed" });
       }
 
-      try {
-        await TrackingEvent.insertMany(docs, { ordered: false });
-      } catch (err: unknown) {
-        const e = err as { code?: number };
-        // Duplicate clientEventIds (retries) hit our unique index — that's the
-        // happy path for idempotency. Anything else we log and continue.
-        if (e?.code !== 11000) {
-          console.error("[tracker] insert failed", (err as Error).message);
+      // Group the newly stored events by THEIR session, in request order.
+      const stored = new Map<string, PreparedEvent[]>();
+      for (const p of prepared) {
+        if (!outcome.inserted.has(String(p.doc._id))) continue;
+        const list = stored.get(p.sessionId);
+        if (list) list.push(p);
+        else stored.set(p.sessionId, [p]);
+      }
+
+      for (const [sessionId, list] of stored) {
+        const cacheKey = `${merchantId}:${sessionId}`;
+        sessionCountCache.set(cacheKey, (sessionCountCache.get(cacheKey) ?? 0) + list.length);
+        const identity = await updateSessionAggregate(merchantOid, sessionId, list);
+        if (identity.phone || identity.email) {
+          stitchExistingOrder({
+            merchantId: merchantOid,
+            sessionId,
+            phone: identity.phone,
+            email: identity.email,
+          }).catch((err) => console.error("[tracker] back-stitch failed", err));
         }
       }
 
-      // Bump the session-count cache for each contributing session.
-      for (const [sid, count] of perSession) {
-        const k = `${merchantId}:${sid}`;
-        sessionCountCache.set(k, (sessionCountCache.get(k) ?? 0) + count);
-      }
-
-      // Update the session aggregate. One upsert per session.
-      const session = events[0] as IncomingEvent | undefined;
-      if (session && firstAt && lastAt) {
-        const repeatVisitor =
-          (events as IncomingEvent[]).some((e) => e?.repeatVisitor) || false;
-        const landingPath = clamp(session.path, 500);
-        const referrer = clamp(session.referrer, 1000);
-        const campaign = session.campaign
-          ? {
-              source: clamp(session.campaign.source, 80),
-              medium: clamp(session.campaign.medium, 80),
-              name: clamp(session.campaign.name, 200),
-            }
-          : undefined;
-        const device = session.device
-          ? {
-              type: clamp(session.device.type, 30),
-              os: clamp(session.device.os, 60),
-              browser: clamp(session.device.browser, 60),
-            }
-          : undefined;
-
-        const counts = countEvents(events as IncomingEvent[]);
-        const update: Record<string, unknown> = {
-          $setOnInsert: {
-            merchantId: merchantOid,
-            sessionId: session.sessionId.slice(0, 64),
-            firstSeenAt: firstAt,
-            landingPath,
-            referrer,
-            campaign,
-            device,
-            anonId: clamp(session.anonId, 64),
-          },
-          $inc: {
-            pageViews: counts.page_view,
-            productViews: counts.product_view,
-            addToCartCount: counts.add_to_cart,
-            checkoutStartCount: counts.checkout_start,
-            checkoutSubmitCount: counts.checkout_submit,
-            clickCount: counts.click,
-          },
-          $max: {
-            lastSeenAt: lastAt,
-            maxScrollDepth: counts.maxScroll,
-          },
-          $set: {
-            repeatVisitor,
-            ...(identityPhone ? { phone: identityPhone } : {}),
-            ...(identityEmail
-              ? { email: identityEmail, customerHash: emailHash(identityEmail) }
-              : {}),
-            ...(counts.checkout_submit > 0 ? { converted: true } : {}),
-            ...(counts.add_to_cart >= 2 && counts.checkout_submit === 0
-              ? { abandonedCart: true }
-              : {}),
-          },
-        };
-
-        await TrackingSession.updateOne(
-          { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
-          update,
-          { upsert: true },
+      recordAccepted(merchantId, outcome.inserted.size);
+      const accepted = outcome.inserted.size + outcome.duplicates;
+      if (outcome.failed > 0) {
+        // Partial (or total) storage failure. Whatever WAS stored is counted
+        // above; the failed events are not. Answer non-2xx so the SDK retries
+        // the batch — the stored events then come back as duplicates and are
+        // not counted twice.
+        console.error(
+          `[tracker] insert failed merchant=${merchantId} failed=${outcome.failed} stored=${outcome.inserted.size}`,
         );
-
-        await TrackingSession.updateOne(
-          { merchantId: merchantOid, sessionId: session.sessionId.slice(0, 64) },
-          [
-            {
-              $set: {
-                durationMs: {
-                  $max: [0, { $subtract: ["$lastSeenAt", "$firstSeenAt"] }],
-                },
-              },
-            },
-          ],
-        );
+        return res.status(500).json({
+          ok: false,
+          error: "persist_failed",
+          accepted,
+          failed: outcome.failed,
+        });
       }
-
-      if ((identityPhone || identityEmail) && session?.sessionId) {
-        stitchExistingOrder({
-          merchantId: merchantOid,
-          sessionId: session.sessionId,
-          phone: identityPhone,
-          email: identityEmail,
-        }).catch((err) => console.error("[tracker] back-stitch failed", err));
-      }
-
-      recordAccepted(merchantId, eventsToWrite.length);
       return res.json({
         ok: true,
-        accepted: docs.length,
+        accepted,
+        duplicates: outcome.duplicates,
         dropped: dedupe.duplicates,
       });
     } finally {
@@ -532,6 +482,150 @@ interface EventCounts {
   checkout_submit: number;
   click: number;
   maxScroll: number;
+}
+
+interface PreparedEvent {
+  sessionId: string;
+  occurredAt: Date;
+  raw: IncomingEvent;
+  phone?: string;
+  email?: string;
+  doc: Record<string, unknown> & { _id: Types.ObjectId };
+}
+
+export interface PersistOutcome {
+  /** _ids (as strings) of this request's events that were newly stored. */
+  inserted: Set<string>;
+  /** Events rejected as already stored (same merchant + session + clientEventId). */
+  duplicates: number;
+  /** Events neither stored nor duplicates — a genuine failure. */
+  failed: number;
+}
+
+const isDuplicateKey = (e: { code?: number; err?: { code?: number } } | undefined) =>
+  (e?.code ?? e?.err?.code) === 11000;
+
+/**
+ * Insert a batch of tracking events (unordered) and report exactly which of
+ * them were newly stored. The unique (merchantId, sessionId, clientEventId)
+ * index turns retries into duplicate-key errors; anything else is a failure.
+ * On error we read back our own pre-assigned _ids rather than trusting the
+ * shape of the bulk-write error. Throws only when the outcome can't be
+ * determined at all.
+ */
+export async function persistTrackingEvents(
+  docs: Array<Record<string, unknown> & { _id: Types.ObjectId }>,
+): Promise<PersistOutcome> {
+  if (docs.length === 0) return { inserted: new Set(), duplicates: 0, failed: 0 };
+  try {
+    const res = await TrackingEvent.insertMany(docs, { ordered: false });
+    // Unordered insertMany resolves with the docs that passed validation and
+    // were written; any doc missing here failed validation.
+    const inserted = new Set(res.map((d) => String(d._id)));
+    return { inserted, duplicates: 0, failed: docs.length - inserted.size };
+  } catch (err) {
+    const e = err as { code?: number; writeErrors?: Array<{ code?: number; err?: { code?: number } }> };
+    const landed = await TrackingEvent.find({ _id: { $in: docs.map((d) => d._id) } })
+      .select("_id")
+      .lean();
+    const inserted = new Set(landed.map((d) => String(d._id)));
+    const notStored = docs.length - inserted.size;
+    const writeErrors = e.writeErrors ?? [];
+    const duplicates = Math.min(
+      notStored,
+      writeErrors.length > 0
+        ? writeErrors.filter(isDuplicateKey).length
+        : isDuplicateKey(e)
+          ? notStored
+          : 0,
+    );
+    return { inserted, duplicates, failed: notStored - duplicates };
+  }
+}
+
+/**
+ * Fold one session's NEWLY stored events into its TrackingSession row.
+ * Counters only ever move by events that were actually inserted; the
+ * abandoned-cart flag is then derived from the session's cumulative
+ * counters ("≥2 add_to_cart without a checkout"), not from one request.
+ */
+async function updateSessionAggregate(
+  merchantOid: Types.ObjectId,
+  sessionId: string,
+  events: PreparedEvent[],
+): Promise<{ phone?: string; email?: string }> {
+  const first = events[0]!.raw;
+  let firstAt = events[0]!.occurredAt;
+  let lastAt = events[0]!.occurredAt;
+  let phone: string | undefined;
+  let email: string | undefined;
+  for (const e of events) {
+    if (e.occurredAt < firstAt) firstAt = e.occurredAt;
+    if (e.occurredAt > lastAt) lastAt = e.occurredAt;
+    if (e.phone) phone = e.phone;
+    if (e.email) email = e.email;
+  }
+  const counts = countEvents(events.map((e) => e.raw));
+  const repeatVisitor = events.some((e) => e.raw?.repeatVisitor) || false;
+  await TrackingSession.updateOne(
+    { merchantId: merchantOid, sessionId },
+    {
+      $setOnInsert: {
+        merchantId: merchantOid,
+        sessionId,
+        firstSeenAt: firstAt,
+        landingPath: clamp(first.path, 500),
+        referrer: clamp(first.referrer, 1000),
+        campaign: first.campaign
+          ? {
+              source: clamp(first.campaign.source, 80),
+              medium: clamp(first.campaign.medium, 80),
+              name: clamp(first.campaign.name, 200),
+            }
+          : undefined,
+        device: first.device
+          ? {
+              type: clamp(first.device.type, 30),
+              os: clamp(first.device.os, 60),
+              browser: clamp(first.device.browser, 60),
+            }
+          : undefined,
+        anonId: clamp(first.anonId, 64),
+      },
+      $inc: {
+        pageViews: counts.page_view,
+        productViews: counts.product_view,
+        addToCartCount: counts.add_to_cart,
+        checkoutStartCount: counts.checkout_start,
+        checkoutSubmitCount: counts.checkout_submit,
+        clickCount: counts.click,
+      },
+      $max: { lastSeenAt: lastAt, maxScrollDepth: counts.maxScroll },
+      $set: {
+        repeatVisitor,
+        ...(phone ? { phone } : {}),
+        ...(email ? { email, customerHash: emailHash(email) } : {}),
+        ...(counts.checkout_submit > 0 ? { converted: true } : {}),
+      },
+    },
+    { upsert: true },
+  );
+  // Derived fields, computed from the CUMULATIVE row (after this request's
+  // increments and any concurrent ones that landed before it).
+  await TrackingSession.updateOne({ merchantId: merchantOid, sessionId }, [
+    {
+      $set: {
+        durationMs: { $max: [0, { $subtract: ["$lastSeenAt", "$firstSeenAt"] }] },
+        abandonedCart: {
+          $and: [
+            { $gte: [{ $ifNull: ["$addToCartCount", 0] }, ABANDONED_CART_MIN_ADDS] },
+            { $eq: [{ $ifNull: ["$checkoutSubmitCount", 0] }, 0] },
+          ],
+        },
+      },
+    },
+  ]);
+  return { phone, email };
 }
 
 function countEvents(events: IncomingEvent[]): EventCounts {

@@ -83,6 +83,11 @@ export const AUDIT_ACTIONS = [
   "integration.secret_revealed",
   "integration.shopify_oauth",
   "tracking.identified",
+  // Cart recovery. Older rows recorded these under "tracking.identified"
+  // (meta.kind "cart_recovery_batch" / "recovery_update"); new rows use the
+  // dedicated actions. Historical rows are left as they are.
+  "recovery.tasks_created",
+  "recovery.task_updated",
   // Funnel-event audit signals — written exactly once per merchant +
   // once per integration. Used by ops to measure activation drop-off
   // (signup → integration.connected → integration.first_event) without

@@ -80,6 +80,8 @@ type AuditAction =
   | "merchant.gdpr_redact_customer"
   | "pii.read"
   | "tracking.identified"
+  | "recovery.tasks_created"
+  | "recovery.task_updated"
   | "auth.signup"
   | "auth.reset_requested"
   | "auth.password_reset"

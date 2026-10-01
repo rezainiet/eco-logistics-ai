@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { trpc } from "@/lib/trpc";
+import { flattenQueuePages, nextQueueCursor } from "@/lib/fraud/review-queue";
+import { QueueLoadMore } from "@/components/fraud/queue-load-more";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -177,11 +179,16 @@ export default function FraudReviewPage() {
   const [lastRejected, setLastRejected] = useState<LastRejected | null>(null);
   const utils = trpc.useUtils();
 
-  const queue = trpc.fraud.listPendingReviews.useQuery({
-    filter,
-    cursor: null,
-    limit: 50,
-  });
+  // Paged by the API's compound (riskScore, _id) cursor — "Load more"
+  // continues exactly where the previous page ended (audit OV-2).
+  const queue = trpc.fraud.listPendingReviews.useInfiniteQuery(
+    { filter, limit: 50 },
+    { getNextPageParam: nextQueueCursor },
+  );
+  const queuePages = flattenQueuePages(queue.data?.pages);
+  // A failed "Load more" keeps the rows already shown; only a failed FIRST
+  // page replaces the list with the error state.
+  const nextPageFailed = queue.isError && !!queue.data;
   const detail = trpc.fraud.getReviewOrder.useQuery(
     { id: selectedId ?? "" },
     { enabled: !!selectedId },
@@ -191,9 +198,9 @@ export default function FraudReviewPage() {
 
   useEffect(() => {
     if (selectedId) return;
-    const first = queue.data?.items[0];
+    const first = queuePages.items[0];
     if (first) setSelectedId(first.id);
-  }, [selectedId, queue.data]);
+  }, [selectedId, queuePages.items]);
 
   useEffect(() => {
     setNotes("");
@@ -294,8 +301,8 @@ export default function FraudReviewPage() {
     onError: (err) => toast.error("Call failed", humanizeError(err)),
   });
 
-  const items: QueueItem[] = (queue.data?.items ?? []) as QueueItem[];
-  const total = queue.data?.total ?? 0;
+  const items: QueueItem[] = queuePages.items as QueueItem[];
+  const total = queuePages.total;
   const today = stats.data?.today ?? { risky: 0, verified: 0, rejected: 0, codSaved: 0 };
 
   // Plan-gate: order verification is on Growth and above. The API
@@ -398,7 +405,7 @@ export default function FraudReviewPage() {
             </Select>
           </CardHeader>
           <CardContent className="p-0">
-            {queue.isError ? (
+            {queue.isError && !queue.data ? (
               <EmptyState
                 icon={AlertTriangle}
                 title="Could not load review queue"
@@ -521,6 +528,16 @@ export default function FraudReviewPage() {
                 })}
               </ul>
             )}
+            {items.length > 0 ? (
+              <QueueLoadMore
+                shown={items.length}
+                total={total}
+                hasMore={!!queue.hasNextPage}
+                loading={queue.isFetchingNextPage}
+                failed={nextPageFailed}
+                onLoadMore={() => void queue.fetchNextPage()}
+              />
+            ) : null}
           </CardContent>
         </Card>
 
