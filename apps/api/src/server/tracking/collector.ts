@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import express, { type Request, type Response } from "express";
+import cors from "cors";
 import { Types } from "mongoose";
 import { LRUCache } from "lru-cache";
 import {
@@ -44,6 +45,27 @@ import {
  * events, lower-cased + size-capped.
  */
 export const trackingRouter = express.Router();
+
+/**
+ * Mount the collector on the app. MUST be called BEFORE the global CORS
+ * middleware and any global body parser:
+ *   - body: the collector verifies the optional HMAC over the exact raw
+ *     bytes, so it reads the body itself with `express.raw` and parses the
+ *     JSON exactly once. A global JSON parser running first consumes the
+ *     stream and every SDK batch (sent as `application/json`) is lost.
+ *   - CORS: storefronts on ANY origin post here (they prove ownership with
+ *     the merchant's public tracking key, no cookies). A global, dashboard-
+ *     only CORS policy running first answers the SDK's preflight with the
+ *     wrong origin and browsers block every batch.
+ * `tests/tracking-json-recovery-e2e.test.ts` pins this ordering in index.ts.
+ */
+export function mountTrackingCollector(app: express.Express): void {
+  app.use(
+    "/track",
+    cors({ origin: true, credentials: false, methods: ["POST", "OPTIONS"] }),
+    trackingRouter,
+  );
+}
 
 const MAX_BATCH = 50;
 const MAX_PROPERTY_BYTES = 8 * 1024;
@@ -189,6 +211,18 @@ trackingRouter.post(
     }
 
     try {
+      if (
+        !Buffer.isBuffer(req.body) &&
+        req.body &&
+        typeof req.body === "object" &&
+        Object.keys(req.body as object).length > 0
+      ) {
+        // A body parser ran before the collector and consumed the stream:
+        // the raw bytes the HMAC covers are gone. This is a server wiring
+        // fault (see mountTrackingCollector), not a bad client request.
+        console.error("[tracker] collector_misconfigured: body was parsed before /track");
+        return res.status(500).json({ ok: false, error: "collector_misconfigured" });
+      }
       const rawBody = Buffer.isBuffer(req.body)
         ? (req.body as Buffer).toString("utf8")
         : "";

@@ -8,6 +8,7 @@ import { Types } from "mongoose";
 import { Merchant } from "@ecom/db";
 import { env } from "../env.js";
 import { sessionExists } from "../lib/sessionStore.js";
+import { subscriptionAccessDenial } from "../lib/entitlements.js";
 
 export interface AuthUser {
   id: string;
@@ -287,44 +288,14 @@ export const billableProcedure = protectedProcedure.use(async ({ ctx, next }) =>
     throw new TRPCError({ code: "UNAUTHORIZED", message: "merchant not found" });
   }
 
-  if (sub.status === "active") {
-    // If a paid period has lapsed, treat as past_due — Billing page drives recovery.
-    if (sub.currentPeriodEnd && sub.currentPeriodEnd.getTime() <= Date.now()) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "subscription_past_due",
-      });
-    }
-    return next({ ctx: { ...ctx, subscription: sub } });
+  // Shared with the background workers (lib/entitlements.ts):
+  //   active → until currentPeriodEnd; past_due → until the grace period
+  //   closes; trial → until trialEndsAt; suspended/paused/cancelled → blocked.
+  const denial = subscriptionAccessDenial(sub);
+  if (denial) {
+    throw new TRPCError({ code: "FORBIDDEN", message: denial });
   }
-
-  // past_due is a soft state — let the merchant keep working until the grace
-  // period closes. The billing UI shows a loud banner with the recovery CTA.
-  if (sub.status === "past_due") {
-    if (sub.gracePeriodEndsAt && sub.gracePeriodEndsAt.getTime() <= Date.now()) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "subscription_grace_expired",
-      });
-    }
-    return next({ ctx: { ...ctx, subscription: sub } });
-  }
-
-  if (sub.status === "trial") {
-    if (!sub.trialEndsAt || sub.trialEndsAt.getTime() > Date.now()) {
-      return next({ ctx: { ...ctx, subscription: sub } });
-    }
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "trial_expired",
-    });
-  }
-
-  // suspended / paused / cancelled all hard-block billable work.
-  throw new TRPCError({
-    code: "FORBIDDEN",
-    message: `subscription_${sub.status}`,
-  });
+  return next({ ctx: { ...ctx, subscription: sub } });
 });
 
 /**

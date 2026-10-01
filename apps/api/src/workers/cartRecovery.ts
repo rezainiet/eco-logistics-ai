@@ -9,6 +9,11 @@ import {
 } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
+import {
+  cartRecoveryEligible,
+  cartRecoveryTiers,
+  type SubscriptionAccessInput,
+} from "../lib/entitlements.js";
 
 /**
  * Abandoned-cart recovery worker.
@@ -53,7 +58,10 @@ export interface CartRecoveryJobResult {
   expired: number;
   /** Candidates skipped because a RecoveryTask already exists for them. */
   alreadyTasked: number;
+  /** Merchants swept (entitled to Cart Recovery). */
   merchants: number;
+  /** Merchants on a recovery-capable tier skipped for their subscription state. */
+  ineligible: number;
 }
 
 export interface CartRecoverySweepOptions {
@@ -118,11 +126,24 @@ export async function sweepCartRecovery(
   let created = 0;
   let alreadyTasked = 0;
   let merchants = 0;
+  let ineligible = 0;
   const newTasksByMerchant = new Map<string, number>();
 
   // Merchant by merchant, so every query is tenant-scoped and index-backed.
-  const merchantCursor = Merchant.find({}).select("_id").lean().cursor();
+  // Only merchants entitled to Cart Recovery (canonical entitlement: the
+  // plan's behaviorAnalytics feature + a billable subscription — the same
+  // access the recovery API grants). Tracking events from other merchants
+  // are still collected; they just never become recovery tasks.
+  const merchantCursor = Merchant.find({ "subscription.tier": { $in: cartRecoveryTiers() } })
+    .select("_id subscription")
+    .lean()
+    .cursor();
   for await (const m of merchantCursor) {
+    const sub = (m as { subscription?: SubscriptionAccessInput }).subscription;
+    if (!sub || !cartRecoveryEligible(sub, now)) {
+      ineligible += 1;
+      continue;
+    }
     merchants += 1;
     const merchantId = m._id as Types.ObjectId;
     const r = await sweepMerchant({ merchantId, ageCutoff, windowFloor, createCap });
@@ -177,6 +198,7 @@ export async function sweepCartRecovery(
     expired: expiredResult.modifiedCount ?? 0,
     alreadyTasked,
     merchants,
+    ineligible,
   };
 }
 

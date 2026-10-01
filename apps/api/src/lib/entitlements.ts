@@ -114,6 +114,60 @@ export async function assertIntegrationCapacity(
   }
 }
 
+/** The subscription fields the access rules read. */
+export interface SubscriptionAccessInput {
+  status: string;
+  tier?: PlanTier | string | null;
+  trialEndsAt?: Date | null;
+  currentPeriodEnd?: Date | null;
+  gracePeriodEndsAt?: Date | null;
+}
+
+/**
+ * The billable-access rule — the single source `billableProcedure` and the
+ * background workers both use. Returns null when billable work is allowed,
+ * otherwise the denial reason (the same message the API returns):
+ *   active    → allowed until currentPeriodEnd (then subscription_past_due)
+ *   past_due  → allowed until gracePeriodEndsAt (then subscription_grace_expired)
+ *   trial     → allowed until trialEndsAt (then trial_expired)
+ *   anything else (suspended / paused / cancelled) → subscription_<status>
+ */
+export function subscriptionAccessDenial(
+  sub: SubscriptionAccessInput,
+  now: number = Date.now(),
+): string | null {
+  if (sub.status === "active") {
+    return sub.currentPeriodEnd && sub.currentPeriodEnd.getTime() <= now ? "subscription_past_due" : null;
+  }
+  if (sub.status === "past_due") {
+    return sub.gracePeriodEndsAt && sub.gracePeriodEndsAt.getTime() <= now ? "subscription_grace_expired" : null;
+  }
+  if (sub.status === "trial") {
+    return !sub.trialEndsAt || sub.trialEndsAt.getTime() > now ? null : "trial_expired";
+  }
+  return `subscription_${sub.status}`;
+}
+
+/**
+ * Plan tiers that include Cart Recovery. Cart Recovery has no flag of its
+ * own: the recovery API is gated by `assertBehaviorAnalytics`, so the same
+ * `behaviorAnalytics` feature (Growth+) decides it here too.
+ */
+export function cartRecoveryTiers(): PlanTier[] {
+  return PLAN_TIERS.filter((t) => getPlan(t).features.behaviorAnalytics);
+}
+
+/**
+ * May the system create Cart Recovery tasks for this merchant right now?
+ * Exactly the access the recovery API grants: a plan with the feature AND a
+ * subscription in a billable state. (Tracking/analytics COLLECTION is a
+ * separate question — the collector stores events for any merchant with a
+ * tracking key; this only governs recovery-task creation.)
+ */
+export function cartRecoveryEligible(sub: SubscriptionAccessInput, now: number = Date.now()): boolean {
+  return getPlan(sub.tier ?? "starter").features.behaviorAnalytics && subscriptionAccessDenial(sub, now) === null;
+}
+
 export function assertBehaviorAnalytics(tier: PlanTier): void {
   if (!getPlan(tier).features.behaviorAnalytics) {
     throw blocked("behavior_analytics_locked");

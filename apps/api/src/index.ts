@@ -30,7 +30,7 @@ import { resendWebhookRouter } from "./server/webhooks/resend.js";
 import { courierWebhookRouter } from "./server/webhooks/courier.js";
 import { smsInboundWebhookRouter } from "./server/webhooks/sms-inbound.js";
 import { smsDlrWebhookRouter } from "./server/webhooks/sms-dlr.js";
-import { trackingRouter as trackingCollectorRouter } from "./server/tracking/collector.js";
+import { mountTrackingCollector } from "./server/tracking/collector.js";
 import { webhookLimiter } from "./middleware/rateLimit.js";
 import { landingOrdersRouter } from "./server/landing-orders.js";
 import { customDomainsInternalRouter } from "./server/custom-domains-internal.js";
@@ -364,6 +364,15 @@ async function main() {
     );
   }
   app.use(helmet());
+  // Behavior tracker collector (storefront SDK). Mounted BEFORE the global
+  // CORS and JSON middleware, with its own:
+  //   - CORS: any storefront origin, no credentials (it authenticates by the
+  //     public tracking key). Behind the global CORS, the dashboard-only
+  //     policy answered the SDK's preflight and browsers blocked every batch.
+  //   - body handling: it reads the raw body itself (optional HMAC over the
+  //     exact bytes). Behind the global JSON parser, every `application/json`
+  //     batch arrived consumed and was rejected as invalid_json.
+  mountTrackingCollector(app);
   app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
   // Courier webhooks must mount BEFORE the global JSON parser so HMAC
   // verification sees the raw, unmutated request body. Per-IP rate limit
@@ -465,14 +474,6 @@ async function main() {
   app.use("/api/landing/orders", landingOrdersRouter);
   // Custom-domain server helper (loopback + bearer token only; 404 otherwise).
   app.use("/internal/custom-domains", customDomainsInternalRouter);
-  // Behavior tracker collector. CORS is wide-open so storefronts on any
-  // origin can post events; they prove ownership via the merchant's
-  // public tracking key.
-  app.use(
-    "/track",
-    cors({ origin: true, credentials: false, methods: ["POST", "OPTIONS"] }),
-    trackingCollectorRouter,
-  );
 
   // /trpc is the data plane — order create, webhook callback ingest, dashboard
   // reads, all live here. There is NO global IP limiter on it: a single
