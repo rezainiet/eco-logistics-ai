@@ -3,9 +3,10 @@ import type { SystemTemplateDef } from "./templates.js";
 
 /**
  * Bangladesh e-commerce landing templates. Bangla-first (default locale
- * bn) with complete English copy. Landing pages only: products, prices and
- * payment methods are displayed content — buttons lead to the merchant's
- * order channel (WhatsApp by default), never to a ConfirmX checkout.
+ * bn) with complete English copy. In the two shop templates the sample
+ * products, prices and payment methods are displayed content and the order
+ * section leads to the merchant's order channel (WhatsApp by default). BD
+ * Single Product is built around the page's linked product and its checkout.
  */
 
 type Bi = { en: unknown; bn: unknown };
@@ -14,6 +15,8 @@ const bi = (en: unknown, bn: unknown): Bi => ({ en, bn });
 interface SectionPlan {
   id: string;
   type: string;
+  /** Section type version; 1 unless stated (e.g. theme@2 for scroll animation). */
+  version?: number;
   label?: string;
   /** Locked (not merchant-editable) values. */
   locked?: Record<string, unknown>;
@@ -46,7 +49,7 @@ function build(plans: SectionPlan[]): TemplateSpec {
     sections.push({
       id: plan.id,
       type: plan.type,
-      typeVersion: 1,
+      typeVersion: plan.version ?? 1,
       ...(plan.label ? { label: plan.label } : {}),
       ...(Object.keys(fields).length ? { fields } : {}),
     });
@@ -529,4 +532,327 @@ const premiumBrand: SystemTemplateDef = {
   ]),
 };
 
-export const COMMERCE_TEMPLATES: ReadonlyArray<SystemTemplateDef> = [modernShop, premiumBrand];
+// ─── BD Single Product ──────────────────────────────────────────────────────
+
+/**
+ * One product, sold COD to mobile visitors from a Facebook ad. Unlike the
+ * shops above it sells through the page's own checkout: the Product
+ * spotlight shows the page's featured linked product live (name, price,
+ * discount, stock, options) with Buy now, and the mobile order bar points
+ * at it. No section holds a copy of the product, its price or a delivery
+ * fee: the offer banner's price fields are locked empty, and delivery
+ * charges come from the checkout. Reviews start as bracketed prompts to
+ * replace with real ones — never invented customers or ratings.
+ */
+const toSpotlight = (en: string, bnLabel: string) => biCta(en, bnLabel, "spotlight");
+
+const reviewPrompt = (enQuote: string, bnQuote: string) => ({
+  en: { quote: enQuote, name: "[Customer name]", role: "[District]", avatar: null, rating: "0" },
+  bn: { quote: bnQuote, name: "[কাস্টমারের নাম]", role: "[জেলা]", avatar: null, rating: "0" },
+});
+
+const singleProduct: SystemTemplateDef = {
+  key: "bd-single-product",
+  name: "BD Single Product",
+  description:
+    "A focused cash-on-delivery page for one product, built for mobile visitors from Facebook ads: live price, discount, stock and options with an Order now button that opens checkout, plus trust, how-to-order, FAQ, delivery and a mobile order bar.",
+  category: "ecommerce",
+  spec: build([
+    {
+      id: "theme",
+      type: "theme",
+      version: 2,
+      fields: {
+        primary: "#0f766e",
+        onPrimary: "#ffffff",
+        accent: "#fbbf24",
+        background: "#ffffff",
+        surface: "#f0fdfa",
+        text: "#0f172a",
+        muted: "#475569",
+        font: "bengali",
+        radius: "soft",
+        numerals: "auto",
+        motion: "subtle",
+      },
+    },
+    {
+      id: "seo",
+      type: "seo",
+      fields: {
+        title: bi("Order online with cash on delivery | Your Shop", "ক্যাশ অন ডেলিভারিতে অর্ডার করুন | আপনার শপ"),
+        description: bi(
+          "Order in a minute and pay when the product reaches you. Home delivery across Bangladesh.",
+          "এক মিনিটে অর্ডার করুন, পণ্য হাতে পেয়ে টাকা দিন। সারা বাংলাদেশে হোম ডেলিভারি।",
+        ),
+      },
+    },
+    {
+      id: "topbar",
+      type: "announcement",
+      label: "Offer bar",
+      locked: { style: "dark" },
+      fields: {
+        icon: "gift",
+        text: bi("Today's special offer · Cash on delivery across Bangladesh", "আজকের বিশেষ অফার · সারা বাংলাদেশে ক্যাশ অন ডেলিভারি"),
+      },
+    },
+    {
+      id: "hero",
+      type: "promoHero",
+      locked: { layout: "banner" },
+      fields: {
+        badge: bi("Special price for a limited time", "সীমিত সময়ের জন্য বিশেষ মূল্য"),
+        // Short on purpose: on a phone the product should start on the first screen.
+        headline: bi("Quality you'll love, every day", "প্রতিদিনের প্রয়োজনের সেরা সমাধান"),
+        subheadline: bi("Order in a minute and pay when it reaches your door.", "এক মিনিটে অর্ডার করুন, পণ্য হাতে পেয়ে টাকা দিন।"),
+        primaryCta: toSpotlight("Order now", "এখনই অর্ডার করুন"),
+        // No second button by default (an empty label renders nothing); merchants can add one.
+        secondaryCta: noAction(""),
+        note: bi("Cash on delivery · No advance payment", "ক্যাশ অন ডেলিভারি · কোনো অগ্রিম পেমেন্ট নেই"),
+      },
+    },
+    {
+      id: "spotlight",
+      type: "productSpotlight",
+      fields: {
+        eyebrow: bi("Special offer", "বিশেষ অফার"),
+        tagline: bi(
+          "Order in a minute — you pay only when the product reaches you.",
+          "এক মিনিটে অর্ডার করুন — টাকা দেবেন পণ্য হাতে পাওয়ার পর।",
+        ),
+        highlights: bi(
+          [
+            { icon: "cash", text: "Cash on delivery" },
+            { icon: "truck", text: "Home delivery across Bangladesh" },
+            { icon: "phone", text: "Order confirmed by phone" },
+          ],
+          [
+            { icon: "cash", text: "ক্যাশ অন ডেলিভারি" },
+            { icon: "truck", text: "সারা বাংলাদেশে হোম ডেলিভারি" },
+            { icon: "phone", text: "ফোনে অর্ডার কনফার্মেশন" },
+          ],
+        ),
+        ctaLabel: bi("Order now", "এখনই অর্ডার করুন"),
+        note: bi("No advance payment — pay when you receive it", "কোনো অগ্রিম টাকা লাগবে না — পণ্য হাতে পেয়ে টাকা দিন"),
+        showDescription: true,
+        layout: "imageLeft",
+      },
+    },
+    {
+      id: "benefits",
+      type: "benefits",
+      locked: { imageSide: "right" },
+      fields: {
+        heading: bi("Why you'll love it", "কেন এটি আপনার জন্য সেরা"),
+        items: bi(
+          [
+            { title: "Premium quality", text: "Made with carefully chosen materials." },
+            { title: "Easy to use", text: "Ready to use from the day it arrives." },
+            { title: "A product you can trust", text: "Exactly what you see on this page." },
+            { title: "Fast delivery", text: "Packed and sent soon after your order is confirmed." },
+          ],
+          [
+            { title: "প্রিমিয়াম মান", text: "যত্ন করে বাছাই করা উপকরণে তৈরি।" },
+            { title: "সহজ ব্যবহার", text: "হাতে পাওয়ার দিন থেকেই ব্যবহার করতে পারবেন।" },
+            { title: "নির্ভরযোগ্য পণ্য", text: "এই পেজে যা দেখছেন, ঠিক তা-ই পাবেন।" },
+            { title: "দ্রুত ডেলিভারি", text: "অর্ডার কনফার্ম হওয়ার পরই প্যাক করে পাঠানো হয়।" },
+          ],
+        ),
+        cta: toSpotlight("Order now", "এখনই অর্ডার করুন"),
+      },
+    },
+    {
+      id: "trust",
+      type: "trustFeatures",
+      locked: { style: "cards" },
+      fields: {
+        heading: bi("Shop with confidence", "নিশ্চিন্তে কেনাকাটা করুন"),
+        items: bi(
+          [
+            { icon: "cash", title: "Cash on delivery", text: "Pay only when the product arrives" },
+            { icon: "phone", title: "Phone confirmation", text: "We call to confirm your order before dispatch" },
+            { icon: "truck", title: "Home delivery", text: "Delivered to your door by courier" },
+            { icon: "chat", title: "Easy to reach", text: "Call or message us with any question" },
+          ],
+          [
+            { icon: "cash", title: "ক্যাশ অন ডেলিভারি", text: "পণ্য হাতে পেয়ে টাকা দিন" },
+            { icon: "phone", title: "ফোনে কনফার্মেশন", text: "পাঠানোর আগে ফোন করে অর্ডার কনফার্ম করা হয়" },
+            { icon: "truck", title: "হোম ডেলিভারি", text: "কুরিয়ারের মাধ্যমে আপনার দরজায়" },
+            { icon: "chat", title: "সহজ যোগাযোগ", text: "যেকোনো প্রশ্নে কল বা মেসেজ করুন" },
+          ],
+        ),
+      },
+    },
+    {
+      id: "how",
+      type: "features",
+      label: "How to order",
+      locked: { columns: "3", style: "cards" },
+      fields: {
+        heading: bi("How to order", "কীভাবে অর্ডার করবেন"),
+        intro: bi("Three simple steps — no account and no advance payment.", "মাত্র ৩টি ধাপ — কোনো অ্যাকাউন্ট বা অগ্রিম পেমেন্ট লাগবে না।"),
+        items: bi(
+          [
+            { icon: "bag", title: "1. Choose your product", text: "Pick the size, colour or option you want." },
+            { icon: "cart", title: "2. Tap Order now", text: "The order form opens straight away." },
+            { icon: "cash", title: "3. Confirm — pay on delivery", text: "Enter your name, phone and address. Pay when it arrives." },
+          ],
+          [
+            { icon: "bag", title: "১. পণ্য বেছে নিন", text: "আপনার পছন্দের সাইজ, রং বা অপশন বেছে নিন।" },
+            { icon: "cart", title: "২. ‘এখনই অর্ডার করুন’ চাপুন", text: "সাথে সাথে অর্ডার ফর্ম খুলে যাবে।" },
+            { icon: "cash", title: "৩. কনফার্ম করুন — টাকা ডেলিভারিতে", text: "নাম, ফোন নম্বর ও ঠিকানা দিন। পণ্য হাতে পেয়ে টাকা দিন।" },
+          ],
+        ),
+      },
+    },
+    {
+      id: "offer",
+      type: "offerBanner",
+      // The live price and discount are on the Product spotlight; a second,
+      // typed-in price here could disagree with it, so these stay empty.
+      locked: { style: "bold", price: null, oldPrice: null },
+      fields: {
+        badge: bi("Special offer", "বিশেষ অফার"),
+        heading: bi("Order today at the special price", "আজই অর্ডার করুন বিশেষ মূল্যে"),
+        text: bi(
+          "The offer price is shown with the product above. Order while the offer is on.",
+          "অফার মূল্য উপরে পণ্যের সাথে দেখানো আছে। অফার চলাকালীন অর্ডার করে নিন।",
+        ),
+        deadline: "",
+        cta: toSpotlight("Order now", "এখনই অর্ডার করুন"),
+      },
+    },
+    {
+      id: "reviews",
+      type: "testimonials",
+      fields: {
+        heading: bi("What customers say", "কাস্টমারদের মতামত"),
+        items: (() => {
+          const r = [
+            reviewPrompt(
+              "[Replace with a real review from one of your customers — what they bought and what they liked.]",
+              "[এখানে আপনার একজন কাস্টমারের আসল মতামত লিখুন — কী কিনেছেন, কী ভালো লেগেছে।]",
+            ),
+            reviewPrompt(
+              "[Add another real customer review, for example about delivery or quality.]",
+              "[আরেকজন কাস্টমারের আসল মতামত যোগ করুন — যেমন ডেলিভারি বা পণ্যের মান নিয়ে।]",
+            ),
+            reviewPrompt(
+              "[Add a third real review, or remove this one.]",
+              "[তৃতীয় একটি আসল মতামত যোগ করুন, অথবা এটি মুছে দিন।]",
+            ),
+          ];
+          return bi(r.map((x) => x.en), r.map((x) => x.bn));
+        })(),
+      },
+    },
+    {
+      id: "faq",
+      type: "faq",
+      fields: {
+        heading: bi("Frequently asked questions", "সাধারণ জিজ্ঞাসা"),
+        items: bi(
+          [
+            {
+              question: "How can I order?",
+              answer:
+                "Tap “Order now”, choose your option if the product has any, then enter your name, phone number and address and confirm. You may get a call to confirm the order.",
+            },
+            {
+              question: "Is cash on delivery available?",
+              answer: "Yes. You pay for the product and the delivery charge in cash when it is delivered.",
+            },
+            {
+              question: "How long does delivery take?",
+              answer:
+                "It depends on your area — see the delivery information below. The delivery charge for your area is shown before you confirm your order.",
+            },
+            {
+              question: "Can I choose a different size, colour or option?",
+              answer: "Yes. If the product comes in options, choose the one you want before ordering. Options that are out of stock can't be selected.",
+            },
+            {
+              question: "What if I receive a damaged or wrong product?",
+              answer: "Contact us as soon as possible with photos of the product, and we will help you according to our return policy.",
+            },
+          ],
+          [
+            {
+              question: "কীভাবে অর্ডার করব?",
+              answer:
+                "“এখনই অর্ডার করুন” চাপুন, পণ্যের অপশন থাকলে পছন্দেরটি বেছে নিন, তারপর আপনার নাম, ফোন নম্বর ও ঠিকানা দিয়ে কনফার্ম করুন। অর্ডার কনফার্ম করতে আপনাকে ফোন করা হতে পারে।",
+            },
+            {
+              question: "ক্যাশ অন ডেলিভারি আছে কি?",
+              answer: "হ্যাঁ। পণ্য হাতে পাওয়ার সময় পণ্যের দাম ও ডেলিভারি চার্জ নগদে পরিশোধ করবেন।",
+            },
+            {
+              question: "ডেলিভারি পেতে কতদিন লাগবে?",
+              answer: "এটি আপনার এলাকার উপর নির্ভর করে — নিচের ডেলিভারি তথ্য দেখুন। অর্ডার কনফার্ম করার আগেই আপনার এলাকার ডেলিভারি চার্জ দেখানো হবে।",
+            },
+            {
+              question: "অন্য সাইজ, রং বা অপশন বেছে নেওয়া যাবে?",
+              answer: "হ্যাঁ। পণ্যের অপশন থাকলে অর্ডারের আগে পছন্দেরটি বেছে নিন। স্টকে নেই এমন অপশন বেছে নেওয়া যাবে না।",
+            },
+            {
+              question: "পণ্য ভাঙা বা ভুল পেলে কী করব?",
+              answer: "যত দ্রুত সম্ভব পণ্যের ছবিসহ আমাদের সাথে যোগাযোগ করুন — আমাদের রিটার্ন নীতি অনুযায়ী আমরা সাহায্য করব।",
+            },
+          ],
+        ),
+      },
+    },
+    {
+      id: "delivery",
+      type: "deliveryInfo",
+      fields: {
+        heading: bi("Delivery information", "ডেলিভারি তথ্য"),
+        intro: bi(
+          "We deliver across Bangladesh. The times below are typical and can vary by area.",
+          "আমরা সারা বাংলাদেশে ডেলিভারি দিই। নিচের সময়গুলো সাধারণত প্রযোজ্য, এলাকাভেদে কম-বেশি হতে পারে।",
+        ),
+        // No charges here: the checkout shows the live charge for the customer's area.
+        zones: bi(
+          [
+            { area: "Inside Dhaka", time: "1–2 days", charge: null },
+            { area: "Outside Dhaka", time: "2–5 days", charge: null },
+          ],
+          [
+            { area: "ঢাকার ভিতরে", time: "১–২ দিন", charge: null },
+            { area: "ঢাকার বাইরে", time: "২–৫ দিন", charge: null },
+          ],
+        ),
+        paymentHeading: bi("Payment", "পেমেন্ট"),
+        payments: [{ method: "cod" }],
+        note: bi(
+          "The delivery charge for your area is shown at checkout, before you confirm your order.",
+          "আপনার এলাকার ডেলিভারি চার্জ অর্ডার কনফার্ম করার আগেই চেকআউটে দেখানো হবে।",
+        ),
+      },
+    },
+    {
+      id: "orderbar",
+      type: "mobileActionBar",
+      fields: {
+        primaryCta: toSpotlight("Order now", "এখনই অর্ডার করুন"),
+        whatsappCta: bi(noAction("WhatsApp"), noAction("হোয়াটসঅ্যাপ")),
+        callCta: bi(noAction("Call"), noAction("কল করুন")),
+      },
+    },
+    {
+      id: "footer",
+      type: "shopFooter",
+      fields: {
+        brandName: bi("Your Shop", "আপনার শপ"),
+        tagline: bi("Quality products with cash on delivery across Bangladesh.", "মানসম্মত পণ্য, সারা বাংলাদেশে ক্যাশ অন ডেলিভারি।"),
+        // The footer always shows its Contact column; merchants add their phone and full address.
+        address: bi("Bangladesh", "বাংলাদেশ"),
+        payments: [{ method: "cod" }],
+        copyright: bi("© Your Shop. All rights reserved.", "© আপনার শপ। সর্বস্বত্ব সংরক্ষিত।"),
+      },
+    },
+  ]),
+};
+
+export const COMMERCE_TEMPLATES: ReadonlyArray<SystemTemplateDef> = [modernShop, premiumBrand, singleProduct];

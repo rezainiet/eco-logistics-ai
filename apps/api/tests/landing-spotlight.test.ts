@@ -154,7 +154,9 @@ describe("productSpotlight@1 definition", () => {
   });
 
   it("the five system templates are untouched: none uses the spotlight", () => {
-    for (const t of SYSTEM_TEMPLATES) expect(t.spec.sections.some((x) => x.type === "productSpotlight")).toBe(false);
+    const five = SYSTEM_TEMPLATES.filter((t) => t.key !== "bd-single-product");
+    expect(five).toHaveLength(5);
+    for (const t of five) expect(t.spec.sections.some((x) => x.type === "productSpotlight")).toBe(false);
   });
 
   it("the spotlight is the featured product, else the first linked one; nothing when none is linked", () => {

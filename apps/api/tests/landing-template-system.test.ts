@@ -227,7 +227,7 @@ describe("rendering", () => {
     const s = spec(key);
     const html = render(s, defaultContent(s));
     const hero = defaultContent(s).hero!.headline as string;
-    expect(html).toContain(hero.replace(/&/g, "&amp;"));
+    expect(html).toContain(hero.replace(/&/g, "&amp;").replace(/'/g, "&#x27;"));
     expect(html).not.toMatch(/<script/i);
     for (const section of effectiveSections(s).filter((x) => x.visual)) {
       expect(html).toContain(`id="${section.id}"`);

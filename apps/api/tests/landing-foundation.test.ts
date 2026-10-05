@@ -60,8 +60,9 @@ describe("existing templates and pages are unchanged", () => {
   const KEYS = ["bd-modern-shop", "bd-premium-brand", "launch", "showcase", "local-service"];
 
   it("the five system templates are valid, stay on theme@1 and have no order bar", () => {
-    expect(SYSTEM_TEMPLATES.map((t) => t.key).sort()).toEqual([...KEYS].sort());
-    for (const t of SYSTEM_TEMPLATES) {
+    // BD Single Product (theme@2 + order bar) was added after them; see landing-single-product.test.ts.
+    expect(SYSTEM_TEMPLATES.map((t) => t.key).sort()).toEqual([...KEYS, "bd-single-product"].sort());
+    for (const t of SYSTEM_TEMPLATES.filter((x) => KEYS.includes(x.key))) {
       expect(parseTemplateSpec(t.spec).ok).toBe(true);
       expect(t.spec.sections.find((s) => s.type === "theme")?.typeVersion).toBe(1);
       expect(hasMobileActionBar(t.spec)).toBe(false);

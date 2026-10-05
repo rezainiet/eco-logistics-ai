@@ -61,8 +61,8 @@ describe("landing pages", () => {
   describe("system template seeding", () => {
     it("is idempotent and versions only on spec change", async () => {
       const first = await ensureSystemTemplates();
-      expect(first.created).toBe(5);
-      expect(first.versioned).toBe(5);
+      expect(first.created).toBe(6);
+      expect(first.versioned).toBe(6);
       const again = await ensureSystemTemplates();
       expect(again).toEqual({ created: 0, versioned: 0 });
 
@@ -81,7 +81,7 @@ describe("landing pages", () => {
   describe("merchant lifecycle", () => {
     it("lets a merchant create multiple pages from different templates", async () => {
       const { caller, templates } = await setup();
-      expect(templates.map((t) => t.key)).toEqual(["bd-modern-shop", "bd-premium-brand", "launch", "showcase", "local-service"]);
+      expect(templates.map((t) => t.key)).toEqual(["bd-modern-shop", "bd-premium-brand", "bd-single-product", "launch", "showcase", "local-service"]);
       for (const t of templates) {
         await caller.landingPages.create({ templateId: t.id, name: `Page ${t.key}` });
       }

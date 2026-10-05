@@ -19,7 +19,8 @@ packages/landing          one template system, shared by every surface
   src/format.ts           BDT / number formatting (৳, Bangla digits, lakh grouping)
   src/preview.ts          editor ↔ preview-frame message protocol
   src/templates*.ts       system templates: BD Modern Shop, BD Premium Brand,
-                          Launch, Showcase, Local Business (+ Bangla copy)
+                          BD Single Product, Launch, Showcase, Local Business
+                          (+ Bangla copy)
   src/edit-target.ts      click-to-edit: element path → schema field (editor preview)
   src/analytics.ts        Meta Pixel event catalogue + Pixel ID validation (docs/landing-analytics.md)
   src/react/*             trusted section components, ProductCard, LandingRenderer
@@ -111,8 +112,8 @@ editor (landing-editor.tsx)         resolveEditTarget(spec, locale, path)  ← s
   open the wrong language's field.
 
 **Scroll animation (opt-in):** `theme@2` is `theme@1` plus `motion` (`none` / `subtle` /
-`lively`, default `none`). Templates and pages on `theme@1` (all current system templates)
-never see the setting and render exactly as before. With motion on, the renderer only adds
+`lively`, default `none`). Templates and pages on `theme@1` (every system template except
+BD Single Product) never see the setting and render exactly as before. With motion on, the renderer only adds
 markers (`data-lp-motion` on the root, `data-lp-reveal` on sections other than the header,
 announcement and order bar); the server HTML hides nothing. apps/sites' `lib/motion.ts`
 (bundled, no library, CSP `'self'`) then holds back only the sections that start below the
@@ -152,6 +153,20 @@ step — the same transition as the cart's own "Order now", with the same `check
 `initiate_checkout` events. The order is placed by the existing `/api/checkout` →
 `placeLandingOrder`, which re-checks the product, variant, price and stock on the server.
 Several spotlights on one page show the same product.
+
+**BD Single Product (`bd-single-product`):** the built-in template for selling one product to
+mobile visitors from Facebook ads with cash on delivery — a composition of existing section
+types, no new section or checkout. theme@2 (`motion: subtle`); offer bar (`announcement`) →
+banner hero (`promoHero`) → `productSpotlight` → `benefits` → `trustFeatures` → how to order
+(`features`, 3 steps) → `offerBanner` → `testimonials` → `faq` → `deliveryInfo` →
+`mobileActionBar` → `shopFooter`. The hero, benefits and offer buttons scroll to the spotlight;
+the order bar's button points at it, so on phones it is Buy now. The product, its price,
+discount, stock and options are only ever the live spotlight: the offer banner's price fields
+are locked empty, delivery zones carry no fee (the checkout shows the live charge), and
+payment is COD. Reviews start as bracketed prompts with no stars, to be replaced with real
+customer reviews — the template never invents customers or ratings. Its defaults pass
+publish validation as they are; the spotlight (and the bar's Buy now) appears once a product
+is linked — star it on the Products tab when the page links several.
 
 **Prices:** `price` fields hold numbers; `formatBDT` renders `৳ ১,২৯০` (bn) or
 `৳ 1,290` (en), switchable per page (`theme.numerals`: auto / 123 / ১২৩). Discount %
