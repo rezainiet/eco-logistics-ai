@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { type CatalogProduct, commerceStrings, formatMoney, optionValueAvailable, spotlightProduct } from "../commerce.js";
 import { ctaHref } from "../cta.js";
 import { productKey } from "../analytics.js";
 import type { CtaValue } from "../fields.js";
@@ -636,6 +637,191 @@ function ShopFooter({ values: v, env }: SectionProps) {
 }
 
 /**
+ * Product spotlight — one catalog product, large. Everything about the
+ * product (which one, name, price, old price, stock, options, image,
+ * description) is the live catalog entry the page links; the section only
+ * holds the merchant's words around it. Buttons carry `data-lp-cart-buy`:
+ * the page's existing cart (apps/sites landing-commerce.tsx) adds the
+ * product — through its variant picker when it has options — and opens the
+ * existing checkout. Price, stock and the variant are re-checked by the
+ * server when the order is placed.
+ */
+function ProductSpotlight({ values: v, env }: SectionProps) {
+  const ctx = ctxOf(env);
+  const t = commerceStrings(ctx.locale);
+  const product = spotlightProduct(env.catalog);
+  if (!product) {
+    // Nothing to sell yet: the merchant sees how to fix it; visitors see nothing.
+    return env.editable ? (
+      <Container className="py-10">
+        <p
+          className="rounded-[var(--lp-radius)] border-2 border-dashed border-current px-6 py-10 text-center text-sm text-[color:var(--lp-muted)]"
+          data-lp-spotlight-empty=""
+        >
+          {t.spotlightEmpty}
+        </p>
+      </Container>
+    ) : null;
+  }
+  const money = (n: number) => formatMoney(n, product.currency, { locale: ctx.locale, numerals: env.numerals });
+  const { price, old } = spotlightPrice(product);
+  const eyebrow = S.str(v.eyebrow);
+  const tagline = S.str(v.tagline);
+  const note = S.str(v.note);
+  const label = S.str(v.ctaLabel).trim() || product.ctaText || t.orderNow;
+  const highlights = S.arr(v.highlights).filter((h) => S.str(h.text));
+  const image = product.imageAssetId ? { assetId: product.imageAssetId, alt: product.name } : null;
+  const low = product.available && product.stockStatus === "low_stock";
+  return (
+    <Container className="py-10 sm:py-16">
+      <div className="grid items-start gap-6 md:grid-cols-2 md:gap-12" data-lp-spotlight={product.id}>
+        <div className={cx("relative", S.str(v.layout) === "imageRight" && "md:order-2")}>
+          <LandingImage
+            value={image}
+            env={env}
+            placeholder="soft"
+            icon="bag"
+            className={cx("aspect-square w-full rounded-[var(--lp-radius)] shadow-sm ring-1 ring-black/5", !product.available && "opacity-60")}
+          />
+          {product.badge ? (
+            <span className="absolute left-3 top-3 rounded-full bg-[var(--lp-primary)] px-3 py-1 text-xs font-semibold text-[color:var(--lp-on-primary)] shadow-sm">
+              {product.badge}
+            </span>
+          ) : null}
+          {product.available ? <DiscountBadge price={price} oldPrice={old} ctx={ctx} className="absolute right-3 top-3 px-3 py-1.5 text-sm shadow-sm" /> : null}
+        </div>
+
+        <div className="flex min-w-0 flex-col gap-4">
+          {eyebrow ? (
+            <p className={cx(TYPE.eyebrow, "text-[color:var(--lp-primary)]")} {...ed(env, "eyebrow")}>
+              {eyebrow}
+            </p>
+          ) : null}
+          <h2 className={cx("break-words text-2xl sm:text-3xl lg:text-4xl", TYPE.display)}>{product.name}</h2>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-lp-spotlight-price="">
+            <span className="whitespace-nowrap text-3xl font-bold text-[color:var(--lp-primary)] sm:text-4xl">
+              {product.priceFrom ? `${t.fromPrice} ` : ""}
+              {money(price)}
+            </span>
+            {old !== null ? <span className="whitespace-nowrap text-lg text-[color:var(--lp-muted)] line-through">{money(old)}</span> : null}
+          </div>
+
+          <p
+            className={cx(
+              "inline-flex items-center gap-2 text-sm font-semibold",
+              !product.available ? "text-[#b91c1c]" : low ? "text-[#b45309]" : "text-[#15803d]",
+            )}
+            data-lp-stock={!product.available ? "out" : low ? "low" : "in"}
+          >
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-current" />
+            {!product.available ? t.outOfStock : low ? t.lowStock : t.inStock}
+          </p>
+
+          {tagline ? (
+            <p className="text-base leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]" {...ed(env, "tagline")}>
+              {tagline}
+            </p>
+          ) : null}
+
+          {(product.options ?? []).map((o, i) => (
+            <fieldset key={i} className="min-w-0 space-y-2">
+              <legend className="text-sm font-semibold">{o.name}</legend>
+              <div className="flex flex-wrap gap-2">
+                {o.values.map((value) => {
+                  const ok = product.available && optionValueAvailable(product, i, value);
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      data-lp-cart-buy={product.id}
+                      data-lp-buy-option={String(i)}
+                      data-lp-buy-value={value}
+                      disabled={!ok}
+                      className={cx(
+                        "inline-flex min-h-11 min-w-11 items-center justify-center rounded-full border px-4 text-sm font-medium transition-colors",
+                        ok
+                          ? "border-black/15 bg-[var(--lp-bg)] hover:border-[color:var(--lp-primary)] hover:text-[color:var(--lp-primary)]"
+                          : "cursor-not-allowed border-black/10 text-[color:var(--lp-muted)] line-through opacity-50",
+                      )}
+                    >
+                      {value}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          ))}
+
+          {highlights.length ? (
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {highlights.map((h, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm leading-[var(--lp-lh-snug)]" {...ed(env, "highlights", i)}>
+                  <Icon name={S.str(h.icon)} className="mt-0.5 h-4 w-4 shrink-0 text-[color:var(--lp-primary)]" />
+                  <span className="min-w-0 break-words">{S.str(h.text)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="space-y-2 pt-1">
+            {product.available ? (
+              <button
+                type="button"
+                data-lp-cart-buy={product.id}
+                className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-[var(--lp-radius)] bg-[var(--lp-primary)] px-6 py-3 text-center text-lg font-bold leading-[var(--lp-lh-snug)] text-[color:var(--lp-on-primary)] shadow-md transition-opacity hover:opacity-90 md:w-auto md:min-w-[18rem]"
+                {...ed(env, "ctaLabel")}
+              >
+                <Icon name="bag" className="h-5 w-5 shrink-0" />
+                <span className="min-w-0 break-words">{label}</span>
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  className="inline-flex min-h-14 w-full cursor-not-allowed items-center justify-center rounded-[var(--lp-radius)] bg-black/10 px-6 py-3 text-lg font-semibold text-[color:var(--lp-muted)] md:w-auto md:min-w-[18rem]"
+                  {...ed(env, "ctaLabel")}
+                >
+                  {t.outOfStock}
+                </button>
+                <p className="text-sm text-[color:var(--lp-muted)]">{t.unavailable}</p>
+              </>
+            )}
+            {note ? (
+              <p className="flex items-start gap-2 text-sm text-[color:var(--lp-muted)]" {...ed(env, "note")}>
+                <Icon name="truck" className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0 break-words">{note}</span>
+              </p>
+            ) : null}
+          </div>
+
+          {v.showDescription === true && product.description ? (
+            <p className="whitespace-pre-line border-t border-black/10 pt-4 text-base leading-[var(--lp-lh-body)] text-[color:var(--lp-muted)]">
+              {product.description}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </Container>
+  );
+}
+
+/**
+ * The price a spotlight leads with: the product's (lowest) price, and the old
+ * price that belongs to it — the product's own compare-at price, or for a
+ * product with variants the compare-at price of its cheapest variant. Shown
+ * only when it is really higher.
+ */
+function spotlightPrice(product: CatalogProduct): { price: number; old: number | null } {
+  const cheapest = product.variants?.length ? [...product.variants].sort((a, b) => a.price - b.price)[0]! : null;
+  const price = product.price;
+  const old = cheapest ? cheapest.compareAtPrice : product.compareAtPrice;
+  return { price, old: old !== null && old > price ? old : null };
+}
+
+/**
  * Mobile order bar — fixed to the bottom of phone screens, hidden from 768px
  * (md) up. One wide order button (thumb side) plus optional WhatsApp / call
  * icon buttons; every href comes from `ctaHref`, so only a validated
@@ -651,6 +837,12 @@ function MobileActionBar({ values: v, env }: SectionProps) {
   const { t } = ctxOf(env);
   const primary = S.cta(v.primaryCta);
   const primaryHref = primary ? ctaHref(primary.action) : null;
+  // Pointed at a Product spotlight whose product can be bought: the button
+  // also starts that product's Buy now (the page's cart handles it). Without
+  // JavaScript, or when the product cannot be bought, it just scrolls there.
+  const target = primary?.action.kind === "section" ? primary.action.sectionId : null;
+  const spot = target && env.sectionTypes?.[target] === "productSpotlight" ? spotlightProduct(env.catalog) : null;
+  const buyId = spot?.available ? spot.id : null;
   const side = (key: "whatsappCta" | "callCta", fallback: string) => {
     const value = (v[key] ?? null) as CtaValue | null;
     const target = value?.action ? ctaHref(value.action) : null;
@@ -707,7 +899,7 @@ function MobileActionBar({ values: v, env }: SectionProps) {
           )}
           {primary ? (
             primaryHref ? (
-              <a href={primaryHref.href} className={primaryCls} {...ed(env, "primaryCta")}>
+              <a href={primaryHref.href} className={primaryCls} {...(buyId ? { "data-lp-cart-buy": buyId } : {})} {...ed(env, "primaryCta")}>
                 <Icon name="bag" className="h-5 w-5 shrink-0" />
                 <span className="min-w-0 break-words">{primary.label}</span>
               </a>
@@ -745,5 +937,6 @@ export const COMMERCE_COMPONENTS: Readonly<Record<string, ComponentType<SectionP
   "trustFeatures@1": TrustFeatures,
   "deliveryInfo@1": DeliveryInfo,
   "shopFooter@1": ShopFooter,
+  "productSpotlight@1": ProductSpotlight,
   "mobileActionBar@1": MobileActionBar,
 };

@@ -124,10 +124,34 @@ never animates (no markers when `editable`, script not mounted); plain previews 
 **Mobile order bar (`mobileActionBar@1`):** fixed to the bottom of phone screens (hidden from
 768px): a wide order button plus optional WhatsApp and call icon buttons, with safe-area
 padding. Its `cta` fields declare `actions` — the order button may only scroll to a section of
-the page (no product buy-now yet), WhatsApp only opens a chat, call only dials — enforced on
-write by the field schema and offered that way in the editor. When a template has the bar, the
-page gets bottom padding on phones and the floating cart button sits above the bar
-(`apps/sites/src/lib/commerce/cart-button.ts`); without it both are unchanged.
+the page, WhatsApp only opens a chat, call only dials — enforced on write by the field schema
+and offered that way in the editor. When a template has the bar, the page gets bottom padding
+on phones and the floating cart button sits above the bar
+(`apps/sites/src/lib/commerce/cart-button.ts`); without it both are unchanged. Pointed at a
+Product spotlight whose product can be bought, the order button becomes Buy now for that
+product (it keeps `href="#<section>"`, so it still scrolls without JavaScript).
+
+**Product spotlight (`productSpotlight@1`) and Buy now:** one product, large. The section
+stores only the merchant's words (eyebrow, supporting text, up to 4 highlights, button text,
+note, show-description toggle, image side) — never the product, its name, price or stock. The
+product is the page's first catalog entry (`spotlightProduct`: the product starred on the
+Products tab, else the first linked one), read live like every catalog product: name, image,
+price ("From" for variant products), old price and discount, stock (in / low / out) and option
+values, with values no available variant has shown disabled (`optionValueAvailable`). Button
+text falls back to the product's Products-tab button text, then "Order now". Without a linked
+product the public page shows nothing and the editor shows a how-to placeholder; a product that
+can't be bought shows a disabled "Out of stock" button and no Buy now.
+Buttons carry `data-lp-cart-buy="<productId>"` (option chips also `data-lp-buy-option` /
+`data-lp-buy-value`). apps/sites' existing delegated cart listener (`landing-commerce.tsx`)
+handles them before add-to-cart: only products of this page's catalog that are available; a
+product with options opens the existing variant picker (`initialPicks` pre-selects a clicked
+value with the first *available* variant having it; the choice stays explicit), a simple
+product is added at once. `buyNowLines` adds the item without ever doubling it (pressing Buy
+now twice checks out one, not two), then the existing checkout drawer opens at its details
+step — the same transition as the cart's own "Order now", with the same `checkout_start` /
+`initiate_checkout` events. The order is placed by the existing `/api/checkout` →
+`placeLandingOrder`, which re-checks the product, variant, price and stock on the server.
+Several spotlights on one page show the same product.
 
 **Prices:** `price` fields hold numbers; `formatBDT` renders `৳ ১,২৯০` (bn) or
 `৳ 1,290` (en), switchable per page (`theme.numerals`: auto / 123 / ১২৩). Discount %

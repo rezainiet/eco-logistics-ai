@@ -33,6 +33,12 @@ export interface RenderEnv {
    * Product grids set to "catalog" show these instead of their own cards.
    */
   catalog?: CatalogProduct[];
+  /**
+   * Set by the renderer: section id → section type, so a section can tell
+   * what another one is (the mobile order bar buys directly when it points
+   * at a Product spotlight).
+   */
+  sectionTypes?: Readonly<Record<string, string>>;
 }
 
 /** Attributes naming the schema field an element shows — empty unless editable. */

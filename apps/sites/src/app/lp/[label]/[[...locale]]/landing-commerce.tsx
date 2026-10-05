@@ -28,6 +28,7 @@ import {
 import {
   type CartLine,
   addToCart,
+  buyNowLines,
   parseCart,
   lineKey,
   cartTotals,
@@ -133,7 +134,8 @@ export function LandingCommerce({
   const assetUrl = (id: string | null) => (id ? `${assetBaseUrl.replace(/\/+$/, "")}/${id}` : null);
   const imageUrl = (p: CatalogProduct) => assetUrl(p.imageAssetId);
   // Product with variants whose picker is open (null = closed).
-  const [picking, setPicking] = useState<CatalogProduct | null>(null);
+  // "buy" = opened by Buy now: its button checks out instead of only adding.
+  const [picking, setPicking] = useState<{ product: CatalogProduct; mode: "add" | "buy"; initial?: { index: number; value: string } } | null>(null);
 
   const [lines, setLines] = useState<CartLine[]>([]);
   const [open, setOpen] = useState(false);
@@ -270,6 +272,23 @@ export function LandingCommerce({
   // "Add to cart" buttons in the page (delegated; the markup is server-rendered).
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
+      // Buy now (Product spotlight, or the mobile order bar pointed at one):
+      // the same cart, then straight to the existing checkout form.
+      const buy = (e.target instanceof Element ? e.target : null)?.closest<HTMLElement>("[data-lp-cart-buy]");
+      if (buy && buy.closest("[data-landing-root]")) {
+        e.preventDefault();
+        const product = byId.get(buy.dataset.lpCartBuy ?? "");
+        if (!product || !product.available) return;
+        if (product.variants?.length) {
+          // Options are chosen explicitly in the picker; a clicked option value starts it pre-selected.
+          const index = Number(buy.dataset.lpBuyOption);
+          const value = buy.dataset.lpBuyValue;
+          setPicking({ product, mode: "buy", ...(Number.isInteger(index) && index >= 0 && value ? { initial: { index, value } } : {}) });
+          return;
+        }
+        buyNowRef.current(product, null, 1);
+        return;
+      }
       const btn = (e.target instanceof Element ? e.target : null)?.closest<HTMLButtonElement>("button[data-lp-cart-add]");
       if (!btn || !btn.closest("[data-landing-root]")) return;
       e.preventDefault();
@@ -277,7 +296,7 @@ export function LandingCommerce({
       if (!product || !product.available) return;
       // A product with variants: the customer picks one first.
       if (product.variants?.length) {
-        setPicking(product);
+        setPicking({ product, mode: "add" });
         return;
       }
       const prev = linesRef.current;
@@ -363,17 +382,66 @@ export function LandingCommerce({
     return bad.size === 0;
   };
 
-  const goCheckout = () => {
-    setError(null);
-    setStep("details");
-    reportActivity(slug, locale, "checkout_start", linesRef.current);
+  /** Checkout started (the details step): reported once, for the cart being checked out. */
+  const startCheckout = (current: CartLine[]) => {
+    const sum = cartTotals(current, catalog);
+    reportActivity(slug, locale, "checkout_start", current);
     emitCommerceEvent({
       type: "initiate_checkout",
-      lines: totals.lines.map((l) => ({ id: l.product.id, quantity: l.quantity, price: l.price })),
-      value: totals.subtotal,
+      lines: sum.lines.map((l) => ({ id: l.product.id, quantity: l.quantity, price: l.price })),
+      value: sum.subtotal,
       currency: commerce.currency,
     });
   };
+
+  const goCheckout = () => {
+    setError(null);
+    setStep("details");
+    startCheckout(linesRef.current);
+  };
+
+  /**
+   * Buy now: put the item in this page's cart (never a second batch — see
+   * buyNowLines) and open the existing checkout at its details step, exactly
+   * where the cart's own "Order now" goes. Nothing else changes: the order is
+   * placed by the same form and re-checked by the server.
+   */
+  const buyNow = (product: CatalogProduct, variant: CatalogVariant | null, quantity: number) => {
+    const k = lineKey({ productId: product.id, variantId: variant?.id });
+    const prev = linesRef.current;
+    const next = buyNowLines(prev, product, quantity, variant);
+    setPicking(null);
+    const line = next.find((l) => lineKey(l) === k);
+    if (!line) {
+      // Could not be added (e.g. the cart is full): show the cart and why.
+      setNotice(t.maxReached);
+      openDrawer("cart");
+      return;
+    }
+    if (next !== prev) {
+      const before = prev.find((l) => lineKey(l) === k)?.quantity ?? 0;
+      linesRef.current = next;
+      setLines(next);
+      setNotice(null);
+      keyRef.current = null;
+      if (line.quantity > before) {
+        const added = line.quantity - before;
+        const price = variant?.price ?? product.price;
+        emitCommerceEvent({
+          type: "add_to_cart",
+          line: { id: product.id, quantity: added, price },
+          name: variant ? `${product.name} (${variant.label})` : product.name,
+          currency: product.currency,
+        });
+        reportActivity(slug, locale, "add_to_cart", next, { item: { productId: product.id, ...(variant ? { variantId: variant.id } : {}), quantity: added } });
+      }
+    }
+    openDrawer("details");
+    startCheckout(next);
+  };
+  // The delegated listener always calls the current render's buyNow.
+  const buyNowRef = useRef(buyNow);
+  buyNowRef.current = buyNow;
 
   const placeOrder = async () => {
     if (placingRef.current || totals.lines.length === 0) return;
@@ -795,12 +863,14 @@ export function LandingCommerce({
 
       {picking ? (
         <VariantPicker
-          product={picking}
+          product={picking.product}
           t={t}
           money={money}
           num={num}
           imageUrl={assetUrl}
-          onAdd={(variant, quantity) => addVariant(picking, variant, quantity)}
+          initial={picking.initial}
+          actionLabel={picking.mode === "buy" ? t.orderNow : undefined}
+          onAdd={(variant, quantity) => (picking.mode === "buy" ? buyNow(picking.product, variant, quantity) : addVariant(picking.product, variant, quantity))}
           onClose={() => setPicking(null)}
         />
       ) : null}

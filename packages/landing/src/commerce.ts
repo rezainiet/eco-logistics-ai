@@ -175,6 +175,20 @@ function parseVariants(p: Record<string, unknown>): Pick<CatalogProduct, "option
   return variants.length ? { options, variants, priceFrom: p.priceFrom === true } : {};
 }
 
+/**
+ * The product a Product spotlight shows: the page's first linked product,
+ * which is its featured one when the merchant starred one (the catalog is
+ * featured-first, in the merchant's order). Null when the page links none.
+ */
+export function spotlightProduct(catalog: ReadonlyArray<CatalogProduct> | undefined | null): CatalogProduct | null {
+  return catalog?.[0] ?? null;
+}
+
+/** Can `value` of option `index` still lead to an available variant? Drives disabled option values. */
+export function optionValueAvailable(product: Pick<CatalogProduct, "variants">, index: number, value: string): boolean {
+  return (product.variants ?? []).some((v) => v.available && v.optionValues[index] === value);
+}
+
 /** The variant a customer picked, by option values (exact match). */
 export function findVariant(product: Pick<CatalogProduct, "variants">, values: ReadonlyArray<string>): CatalogVariant | undefined {
   return (product.variants ?? []).find((v) => v.optionValues.length === values.length && v.optionValues.every((x, i) => x === values[i]));
@@ -226,6 +240,8 @@ export interface CommerceStrings {
   chooseValue: (option: string) => string;
   /** "From ৳450" when variant prices differ. */
   fromPrice: string;
+  /** Editor preview only: a Product spotlight on a page that links no product yet. */
+  spotlightEmpty: string;
   orderNow: string;
   inStock: string;
   lowStock: string;
@@ -288,6 +304,7 @@ const en: CommerceStrings = {
   chooseOptions: "Choose options",
   chooseValue: (option) => `Select ${option}`,
   fromPrice: "From",
+  spotlightEmpty: "Link a product on the Products tab — it shows here with its live price, stock and options.",
   orderNow: "Order now",
   inStock: "In stock",
   lowStock: "Low stock",
@@ -350,6 +367,7 @@ const bn: CommerceStrings = {
   chooseOptions: "অপশন বেছে নিন",
   chooseValue: (option) => `${option} বেছে নিন`,
   fromPrice: "শুরু",
+  spotlightEmpty: "Products ট্যাবে একটি পণ্য যোগ করুন — এখানে তার লাইভ দাম, স্টক ও অপশন দেখাবে।",
   orderNow: "অর্ডার করুন",
   inStock: "স্টকে আছে",
   lowStock: "স্টক কম",

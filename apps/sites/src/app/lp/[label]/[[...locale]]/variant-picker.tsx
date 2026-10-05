@@ -18,6 +18,8 @@ export function VariantPicker({
   imageUrl,
   onAdd,
   onClose,
+  initial,
+  actionLabel,
 }: {
   product: CatalogProduct;
   t: CommerceStrings;
@@ -26,12 +28,16 @@ export function VariantPicker({
   imageUrl: (assetId: string | null) => string | null;
   onAdd: (variant: CatalogVariant, quantity: number) => void;
   onClose: () => void;
+  /** Start with this option value picked (an option chip the customer clicked). */
+  initial?: { index: number; value: string };
+  /** Main button text (Buy now: "Order now"); default "Add to cart". */
+  actionLabel?: string;
 }) {
   const options = product.options ?? [];
   const variants = product.variants ?? [];
   // Start on the first available variant (or nothing picked).
   const first = variants.find((v) => v.available);
-  const [picked, setPicked] = useState<Array<string | null>>(() => options.map((_, i) => first?.optionValues[i] ?? null));
+  const [picked, setPicked] = useState<Array<string | null>>(() => initialPicks(product, initial) ?? options.map((_, i) => first?.optionValues[i] ?? null));
   const [qty, setQty] = useState(1);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -153,10 +159,27 @@ export function VariantPicker({
             className="inline-flex min-h-12 flex-1 items-center justify-center rounded-[var(--lp-radius)] bg-[var(--lp-primary)] px-5 py-3 text-base font-semibold text-[color:var(--lp-on-primary)] shadow-sm transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             data-lp-variant-add=""
           >
-            {t.addToCart}
+            {actionLabel ?? t.addToCart}
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * Picks to start from when the customer clicked one option value: that value,
+ * plus the rest of the first available variant that has it (so the picker
+ * opens on something they can buy). Null when the value is not on offer —
+ * the picker then starts as usual. Never picks an unavailable variant.
+ */
+export function initialPicks(
+  product: Pick<CatalogProduct, "options" | "variants">,
+  initial: { index: number; value: string } | undefined,
+): Array<string | null> | null {
+  const options = product.options ?? [];
+  if (!initial || !options[initial.index]?.values.includes(initial.value)) return null;
+  const match = (product.variants ?? []).find((v) => v.available && v.optionValues[initial.index] === initial.value);
+  if (!match) return null;
+  return options.map((_, i) => match.optionValues[i] ?? null);
 }

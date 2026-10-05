@@ -342,6 +342,44 @@ export const COMMERCE_SECTIONS: SectionTypeDef[] = [
     ],
   },
   {
+    type: "productSpotlight",
+    version: 1,
+    label: "Product spotlight",
+    description:
+      "One product, large: live price, discount, stock and options, with an Order now button that opens checkout. Shows the page's featured product on the Products tab (or its first product).",
+    visual: true,
+    // Presentation only. Which product, its name, price, stock, options and
+    // image always come live from the catalog (the page's linked products).
+    fields: [
+      { key: "eyebrow", type: "text", label: "Small label above the name", maxLength: 40, help: "e.g. Best seller, New arrival" },
+      { key: "tagline", type: "textarea", label: "Supporting text", maxLength: 300 },
+      {
+        key: "highlights",
+        type: "repeater",
+        label: "Highlights",
+        itemLabel: "Highlight",
+        maxItems: 4,
+        itemFields: [
+          { key: "icon", type: "select", label: "Icon", options: ICON_OPTIONS, default: "check" },
+          { key: "text", type: "text", label: "Text", maxLength: 80, required: true },
+        ],
+      },
+      { key: "ctaLabel", type: "text", label: "Order button text", maxLength: 40, required: true, default: "Order now" },
+      { key: "note", type: "text", label: "Small note under the button", maxLength: 120, help: "e.g. Cash on delivery · Delivery in 2–3 days" },
+      { key: "showDescription", type: "toggle", label: "Show the product description", default: false },
+      {
+        key: "layout",
+        type: "select",
+        label: "Image side on computers",
+        options: [
+          { value: "imageLeft", label: "Image on the left" },
+          { value: "imageRight", label: "Image on the right" },
+        ],
+        default: "imageLeft",
+      },
+    ],
+  },
+  {
     type: "mobileActionBar",
     version: 1,
     label: "Mobile order bar",
@@ -352,7 +390,7 @@ export const COMMERCE_SECTIONS: SectionTypeDef[] = [
         key: "primaryCta",
         type: "cta",
         label: "Order button",
-        help: "Scrolls to a section of this page — usually your products or order form.",
+        help: "Scrolls to a section of this page. Pointed at a Product spotlight, it opens checkout for that product straight away.",
         required: true,
         actions: ["section"],
         default: { label: "Order now", action: { kind: "none" } },

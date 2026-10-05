@@ -122,7 +122,12 @@ export function LandingRenderer({ spec, content, env, locale = "en", className }
   const resolved: PageContent = resolveContent(spec, content, locale);
   const sections = effectiveSections(spec, locale);
   const theme = resolved[sections.find((s) => s.type === "theme")?.id ?? ""];
-  const sectionEnv: RenderEnv = { ...env, locale, numerals: numeralMode(theme) };
+  const sectionEnv: RenderEnv = {
+    ...env,
+    locale,
+    numerals: numeralMode(theme),
+    sectionTypes: Object.fromEntries(sections.map((s) => [s.id, s.type])),
+  };
   // Scroll reveal (theme@2 "subtle" / "lively"): only markers — the server
   // HTML hides nothing; apps/sites' motion script animates sections that
   // start below the fold, unless the visitor prefers reduced motion. Never

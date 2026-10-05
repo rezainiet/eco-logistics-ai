@@ -83,6 +83,8 @@ export {
   commerceStrings,
   deliveryOptions,
   findVariant,
+  optionValueAvailable,
+  spotlightProduct,
   formatMoney,
   normalizeBdMobile,
   parseCatalog,

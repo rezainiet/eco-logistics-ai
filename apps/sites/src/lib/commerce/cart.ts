@@ -80,6 +80,22 @@ export function setQuantity(lines: CartLine[], product: CatalogProduct, quantity
   return lines.map((l) => (lineKey(l) === key ? { ...l, quantity: q } : l));
 }
 
+/**
+ * Buy now: make sure the cart holds `quantity` of this product (or variant)
+ * without adding a second batch — pressing Buy now twice, or after adding
+ * the same item to the cart, checks out what the customer chose instead of
+ * doubling it. Other lines stay as they are. Same caps as `addToCart`;
+ * returns the lines unchanged when the item cannot be bought.
+ */
+export function buyNowLines(lines: CartLine[], product: CatalogProduct, quantity = 1, variant: CatalogVariant | null = null): CartLine[] {
+  if (product.variants?.length && !variant) return lines; // a variant must be chosen
+  if (maxFor(product, variant) < 1) return lines;
+  const key = lineKey({ productId: product.id, variantId: variant?.id });
+  const existing = lines.find((l) => lineKey(l) === key);
+  if (!existing) return addToCart(lines, product, quantity, variant);
+  return existing.quantity >= quantity ? lines : setQuantity(lines, product, quantity, variant);
+}
+
 export function removeFromCart(lines: CartLine[], key: string): CartLine[] {
   return lines.filter((l) => lineKey(l) !== key);
 }
