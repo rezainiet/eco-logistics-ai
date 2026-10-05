@@ -28,7 +28,7 @@ export interface DispatchNotificationInput {
   title: string;
   body?: string;
   link?: string;
-  subjectType?: "order" | "merchant" | "integration";
+  subjectType?: "order" | "merchant" | "integration" | "product";
   subjectId?: Types.ObjectId;
   meta?: Record<string, unknown>;
   /** Pass to enable in-app row dedupe. Re-using the same key collapses to one row. */

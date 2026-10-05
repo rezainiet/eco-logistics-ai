@@ -1,5 +1,6 @@
 import mongoose, { type ClientSession, Types } from "mongoose";
 import { InventoryMovement, type InventoryMovementType, Order, Product } from "@ecom/db";
+import { alertStockLevels, notifyOrderStockIssue, type StockChange } from "./inventory-alerts.js";
 
 /**
  * Inventory — the only code that changes `Product.inventory`.
@@ -23,6 +24,10 @@ import { InventoryMovement, type InventoryMovementType, Order, Product } from "@
  * Products with variants keep stock per variant: the same guards and ledger
  * apply to the one variant (`variantId`), updated in place inside the
  * product document.
+ *
+ * Every committed change is handed to lib/inventory-alerts.ts AFTER its
+ * transaction commits (low / out-of-stock alerts); a rolled-back attempt
+ * never alerts. Stock movements never touch the finance ledger.
  */
 
 export type InventoryErrorCode = "insufficient_stock" | "product_not_found" | "below_reserved" | "invalid_quantity";
@@ -54,7 +59,26 @@ interface Delta {
   requireActive?: boolean;
 }
 
-async function applyDelta(d: Delta, session: ClientSession) {
+/**
+ * Applies one delta; when `changes` is given, appends what it did to stock
+ * availability (exact before/after from the atomic update) for the
+ * post-commit alerts.
+ */
+async function applyDelta(d: Delta, session: ClientSession, changes?: StockChange[]) {
+  const after = await applyDeltaOnly(d, session);
+  const movement = await recordMovement(d, after, session);
+  changes?.push({
+    productId: d.productId,
+    ...(d.variantId ? { variantId: d.variantId } : {}),
+    availableBefore: after.onHand - d.onHandDelta - (after.reserved - d.reservedDelta),
+    availableAfter: after.onHand - after.reserved,
+    movementId: movement._id,
+    at: movement.createdAt,
+  });
+  return after;
+}
+
+async function applyDeltaOnly(d: Delta, session: ClientSession) {
   if (d.variantId) return applyVariantDelta(d as Delta & { variantId: Types.ObjectId }, session);
   const onHand = { $add: ["$inventory.onHand", d.onHandDelta] };
   const reserved = { $add: ["$inventory.reserved", d.reservedDelta] };
@@ -75,7 +99,6 @@ async function applyDelta(d: Delta, session: ClientSession) {
     if (!exists) throw new InventoryError("product_not_found", String(d.productId));
     throw new InventoryError(d.reservedDelta > 0 ? "insufficient_stock" : "below_reserved", String(d.productId));
   }
-  await recordMovement(d, updated.inventory, session);
   return updated.inventory;
 }
 
@@ -111,12 +134,11 @@ async function applyVariantDelta(d: Delta & { variantId: Types.ObjectId }, sessi
     if (!exists) throw new InventoryError("product_not_found", String(d.productId));
     throw new InventoryError(d.reservedDelta > 0 ? "insufficient_stock" : "below_reserved", String(d.productId));
   }
-  await recordMovement(d, after, session);
   return after;
 }
 
 async function recordMovement(d: Delta, after: { onHand: number; reserved: number }, session: ClientSession) {
-  await InventoryMovement.create(
+  const [row] = await InventoryMovement.create(
     [
       {
         merchantId: d.merchantId,
@@ -136,6 +158,7 @@ async function recordMovement(d: Delta, after: { onHand: number; reserved: numbe
     ],
     { session },
   );
+  return row!;
 }
 
 /** Runs `fn` in a transaction (retried by the driver on transient conflicts). */
@@ -172,8 +195,9 @@ export async function adjustStock(input: {
     throw new InventoryError("invalid_quantity");
   }
   if (input.type !== "MANUAL_ADJUSTMENT" && input.delta < 0) throw new InventoryError("invalid_quantity");
-  return inTransaction((session) =>
-    applyDelta(
+  const { inventory, changes } = await inTransaction(async (session) => {
+    const changes: StockChange[] = [];
+    const inventory = await applyDelta(
       {
         merchantId: input.merchantId,
         productId: input.productId,
@@ -186,8 +210,48 @@ export async function adjustStock(input: {
         actorType: input.actorId ? "merchant" : "system",
       },
       session,
-    ),
-  );
+      changes,
+    );
+    return { inventory, changes };
+  });
+  await alertStockLevels(input.merchantId, changes);
+  // New units: orders kept while short of this product get their stock now.
+  if (input.delta > 0) await reserveWaitingOrders(input.merchantId, input.productId);
+  return inventory;
+}
+
+/** Most orders retried per restock (oldest first); the rest wait for the next one. */
+const WAITING_RETRY_LIMIT = 25;
+
+/**
+ * After a restock: open orders that were kept without stock (inventory
+ * released with an "insufficient_stock" note) and hold this product try to
+ * reserve again, oldest first, through the normal reconcile path — so each
+ * reservation is the same guarded, idempotent move as any other. An order
+ * that still does not fit keeps its note.
+ */
+export async function reserveWaitingOrders(merchantId: Types.ObjectId, productId: Types.ObjectId): Promise<number> {
+  let reserved = 0;
+  try {
+    const waiting = await Order.find({
+      merchantId,
+      "items.productId": productId,
+      "inventory.state": "released",
+      "inventory.note": { $regex: /^insufficient_stock/ },
+      "order.status": { $nin: [...CLOSED_FOR_STOCK] },
+    })
+      .sort({ createdAt: 1, _id: 1 })
+      .limit(WAITING_RETRY_LIMIT)
+      .select("_id")
+      .lean();
+    for (const o of waiting) {
+      const r = await reconcileOrderInventory(o._id);
+      if (r.changed && r.to === "reserved") reserved += 1;
+    }
+  } catch (err) {
+    console.error(JSON.stringify({ evt: "inventory.waiting_retry_failed", productId: String(productId), error: (err as Error).message?.slice(0, 200) }));
+  }
+  return reserved;
 }
 
 type OrderLine = { productId?: unknown; variantId?: unknown; quantity: number };
@@ -224,12 +288,16 @@ const movementKey = (orderId: Types.ObjectId, cycle: number, type: InventoryMove
  * one that inserts the order). Throws InventoryError("insufficient_stock")
  * naming the product when any line cannot be covered — the caller's
  * transaction then aborts, so nothing is half-reserved.
+ *
+ * Returns the stock changes; the caller passes them to `alertStockLevels`
+ * once its transaction has committed.
  */
 export async function reserveOrderStock(
   session: ClientSession,
   args: { merchantId: Types.ObjectId; orderId: Types.ObjectId; items: ReadonlyArray<OrderLine>; cycle?: number },
-): Promise<void> {
+): Promise<StockChange[]> {
   const cycle = args.cycle ?? 1;
+  const changes: StockChange[] = [];
   for (const line of stockLines(args.items)) {
     await applyDelta(
       {
@@ -245,17 +313,109 @@ export async function reserveOrderStock(
         actorType: "customer",
       },
       session,
+      changes,
     );
   }
+  return changes;
 }
 
 type InventoryState = "reserved" | "released" | "fulfilled";
+
+/** Statuses whose order holds no reservation (released, or consumed by delivery). */
+const CLOSED_FOR_STOCK = ["cancelled", "rto", "delivered"] as const;
 
 /** Where an order's stock should be, given its status. */
 export function targetInventoryState(status: string): InventoryState {
   if (status === "cancelled" || status === "rto") return "released";
   if (status === "delivered") return "fulfilled";
   return "reserved";
+}
+
+export interface ReserveNewOrderResult {
+  /** True when this call reserved the order's stock. */
+  reserved: boolean;
+  /** Set when stock was short: the order was kept, its inventory released with this note. */
+  note?: string;
+}
+
+/**
+ * First reservation for an order created OUTSIDE a landing page (dashboard,
+ * CSV, Shopify, WooCommerce, custom API) — called right after the order is
+ * committed, for lines the catalogue link resolved (lib/commerce/catalog-link.ts).
+ *
+ * Unlike a landing checkout, a short stock never rejects the order (it was
+ * already placed elsewhere): the order is kept, its inventory is recorded
+ * as released with an "insufficient_stock:<productId>" note, the merchant
+ * is notified, and a later restock reserves it (`reserveWaitingOrders`).
+ *
+ * Idempotent and race-safe: the order's inventory is claimed with a
+ * compare-and-set (only an order with no inventory yet, still open) in the
+ * same transaction as the guarded stock updates and their unique movement
+ * keys, so a retry, replay or concurrent call can never reserve twice, and
+ * an order cancelled meanwhile is never reserved. No-op for orders without
+ * catalogue lines.
+ */
+export async function reserveNewOrderStock(orderId: Types.ObjectId | string): Promise<ReserveNewOrderResult> {
+  const id = new Types.ObjectId(String(orderId));
+  const order = await Order.findById(id).select("merchantId items order.status inventory").lean();
+  if (!order || order.inventory) return { reserved: false };
+  const lines = stockLines(order.items as OrderLine[]);
+  if (lines.length === 0 || targetInventoryState(order.order.status) !== "reserved") return { reserved: false };
+  const merchantId = order.merchantId as Types.ObjectId;
+  try {
+    const changes = await inTransaction(async (session) => {
+      const local: StockChange[] = [];
+      const claim = await Order.updateOne(
+        { _id: id, merchantId, inventory: { $exists: false }, "order.status": { $nin: [...CLOSED_FOR_STOCK] } },
+        { $set: { inventory: { state: "reserved", cycle: 1, reservedAt: new Date() } } },
+        { session },
+      );
+      if (claim.modifiedCount !== 1) throw new Superseded();
+      for (const line of lines) {
+        await applyDelta(
+          {
+            merchantId,
+            productId: line.productId,
+            ...(line.variantId ? { variantId: line.variantId } : {}),
+            onHandDelta: 0,
+            reservedDelta: line.quantity,
+            type: "ORDER_RESERVED",
+            orderId: id,
+            key: movementKey(id, 1, "ORDER_RESERVED", line),
+            actorType: "system",
+          },
+          session,
+          local,
+        );
+      }
+      return local;
+    });
+    await alertStockLevels(merchantId, changes);
+    return { reserved: true };
+  } catch (err) {
+    if (err instanceof Superseded) return { reserved: false };
+    if ((err as { code?: number })?.code === 11000) return { reserved: false };
+    if (!(err instanceof InventoryError)) throw err;
+    // Short (or the product is gone): keep the order, say why, tell the merchant.
+    const note = `${err.code}${err.productId ? `:${err.productId}` : ""}`;
+    const kept = await Order.updateOne(
+      { _id: id, merchantId, inventory: { $exists: false } },
+      { $set: { inventory: { state: "released", cycle: 1, note } } },
+    );
+    if (kept.modifiedCount === 1) await notifyOrderStockIssue({ merchantId, orderId: id, cycle: 1, target: "reserved", note });
+    return { reserved: false, note };
+  }
+}
+
+/** Fire-safe wrapper for order-creation paths: stock never fails an order. */
+export async function reserveNewOrdersStock(orderIds: ReadonlyArray<Types.ObjectId | string>): Promise<void> {
+  for (const id of orderIds) {
+    try {
+      await reserveNewOrderStock(id);
+    } catch (err) {
+      console.error(JSON.stringify({ evt: "inventory.reserve_new_failed", orderId: String(id), error: (err as Error).message?.slice(0, 200) }));
+    }
+  }
 }
 
 export interface ReconcileResult {
@@ -297,8 +457,10 @@ export async function reconcileOrderInventory(
   const now = new Date();
   const stamp = to === "reserved" ? "reservedAt" : to === "released" ? "releasedAt" : "fulfilledAt";
 
+  let changes: StockChange[] = [];
   try {
-    await inTransaction(async (session) => {
+    changes = await inTransaction(async (session) => {
+      const local: StockChange[] = [];
       const cas = await Order.updateOne(
         { _id: id, merchantId, "inventory.state": from, "inventory.cycle": cycle },
         { $set: { "inventory.state": to, "inventory.cycle": nextCycle, [`inventory.${stamp}`]: now }, $unset: { "inventory.note": "" } },
@@ -312,6 +474,7 @@ export async function reconcileOrderInventory(
           await applyDelta(
             { ...base, onHandDelta: 0, reservedDelta: -line.quantity, type, key: movementKey(id, cycle, "ORDER_CANCELLED", line) },
             session,
+            local,
           );
         } else if (to === "fulfilled") {
           // From "reserved": the reservation becomes a shipment. From
@@ -325,6 +488,7 @@ export async function reconcileOrderInventory(
               key: movementKey(id, cycle, "ORDER_FULFILLED", line),
             },
             session,
+            local,
           );
         } else {
           await applyDelta(
@@ -336,9 +500,11 @@ export async function reconcileOrderInventory(
               key: movementKey(id, nextCycle, "ORDER_RESERVED", line),
             },
             session,
+            local,
           );
         }
       }
+      return local;
     });
   } catch (err) {
     if (err instanceof Superseded) return { changed: false, from };
@@ -347,11 +513,13 @@ export async function reconcileOrderInventory(
       // and record why, for the merchant.
       const note = `${err.code}${err.productId ? `:${err.productId}` : ""}`;
       await Order.updateOne({ _id: id, "inventory.state": from }, { $set: { "inventory.note": note } });
+      if (to !== "released") await notifyOrderStockIssue({ merchantId, orderId: id, cycle, target: to, note });
       return { changed: false, from, note };
     }
     if ((err as { code?: number })?.code === 11000) return { changed: false, from };
     throw err;
   }
+  await alertStockLevels(merchantId, changes);
   return { changed: true, from, to };
 }
 

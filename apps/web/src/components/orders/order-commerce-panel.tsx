@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Boxes, ExternalLink, Loader2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
+import { stockNoteCopy } from "@/lib/orders/stock-note";
 import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,7 +66,7 @@ const STATUS_LABEL: Record<string, string> = {
   rto: "Mark returned (RTO)",
 };
 
-const STOCK_LABEL: Record<string, { label: string; variant: "info" | "secondary" | "success" }> = {
+const STOCK_LABEL: Record<string, { label: string; variant: "info" | "secondary" | "success" | "warning" }> = {
   reserved: { label: "Stock reserved", variant: "info" },
   released: { label: "Stock released", variant: "secondary" },
   fulfilled: { label: "Stock shipped", variant: "success" },
@@ -105,7 +106,9 @@ export function OrderCommercePanel({
   const c = order.commerce;
   if (!c) return null;
   const money = (v: number) => formatMoney(v, c.currency);
-  const stock = c.inventory ? STOCK_LABEL[c.inventory.state] : null;
+  // A note means the stock could not be moved (kept order short of stock, or units not deducted).
+  const stockIssue = stockNoteCopy(c.inventory?.note, order.status);
+  const stock = stockIssue ? { label: stockIssue.label, variant: "warning" as const } : c.inventory ? STOCK_LABEL[c.inventory.state] : null;
   const actions = (order.nextStatuses ?? []).filter((s) => s !== order.status);
 
   return (
@@ -203,11 +206,7 @@ export function OrderCommercePanel({
         {c.customerNote ? <div className="mt-1 rounded bg-surface px-2 py-1 text-fg-muted">“{c.customerNote}”</div> : null}
       </div>
 
-      {c.inventory?.note ? (
-        <p className="rounded bg-warning-subtle px-2 py-1 text-xs text-warning">
-          Stock could not be re-reserved after restoring this order (not enough stock). Restock the product, then update the order.
-        </p>
-      ) : null}
+      {stockIssue ? <p className="rounded bg-warning-subtle px-2 py-1 text-xs text-warning">{stockIssue.detail}</p> : null}
 
       {actions.length ? (
         <div className="flex flex-wrap gap-2 border-t border-stroke/8 pt-3">

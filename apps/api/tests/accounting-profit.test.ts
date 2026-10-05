@@ -159,7 +159,11 @@ describe("order cost snapshot (dashboard & integration orders)", () => {
       { name: "Free text", quantity: 1, price: 10 },
     ]);
     expect(await unitCosts(o.id)).toEqual([400, 150, 120, undefined, undefined, undefined, undefined]);
-    expect((await Order.findById(o.id).lean())!.items[0]!.productId).toBeUndefined(); // no product link is invented
+    // Stock automation links lines by the same unambiguous-SKU rule; the cost
+    // snapshot above is unaffected, and no link is invented for the others.
+    const linked = (await Order.findById(o.id).lean())!.items.map((i) => (i.productId ? String(i.productId) : undefined));
+    expect(linked[0]).toBe(String(shirt._id));
+    expect(linked.slice(3)).toEqual([undefined, String((await Product.findOne({ sku: "NOCOST" }).lean())!._id), undefined, undefined]);
 
     // A later cost change applies to new orders only.
     await Product.updateOne({ _id: shirt._id }, { $set: { costPrice: 999 } });

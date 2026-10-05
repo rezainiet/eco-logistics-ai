@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Archive, Boxes, Loader2, Package, Pencil, Plus, Search } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
@@ -29,6 +30,35 @@ export function ProductsList() {
   const [stockId, setStockId] = useState<string | null>(null);
   const [archiveId, setArchiveId] = useState<string | null>(null);
   const list = trpc.products.list.useQuery({ stock, search: search.trim() || undefined });
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const deepLinked = useRef<string | null>(null);
+
+  // ?stock=<productId> (low / out-of-stock notifications) opens that
+  // product's stock dialog, clearing any filter that hides it.
+  useEffect(() => {
+    const id = searchParams?.get("stock");
+    if (!id || !/^[a-f0-9]{24}$/.test(id) || deepLinked.current === id || !list.data) return;
+    if (list.data.items.some((p) => p.id === id)) {
+      deepLinked.current = id;
+      setStockId(id);
+    } else if (stock !== "all" || search) {
+      setStock("all");
+      setSearch("");
+    } else {
+      deepLinked.current = id;
+      toast.info("Product not found", "It may have been archived.");
+    }
+  }, [searchParams, list.data, stock, search]);
+
+  const closeStock = () => {
+    setStockId(null);
+    if (searchParams?.get("stock")) {
+      deepLinked.current = null;
+      router.replace(pathname ?? "/dashboard/products", { scroll: false });
+    }
+  };
   const archive = trpc.products.archive.useMutation({
     onSuccess: () => {
       toast.success("Product archived", "It is hidden from your landing pages and can no longer be ordered.");
@@ -204,7 +234,7 @@ export function ProductsList() {
       )}
 
       <ProductFormDialog open={formOpen} onOpenChange={setFormOpen} product={editId ? editing : null} />
-      <StockDialog product={stockProduct} onOpenChange={(o) => !o && setStockId(null)} />
+      <StockDialog product={stockProduct} onOpenChange={(o) => !o && closeStock()} />
       <ConfirmDialog
         open={!!archiveId}
         onOpenChange={(o) => !o && setArchiveId(null)}

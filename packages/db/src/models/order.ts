@@ -46,7 +46,11 @@ const itemSchema = new Schema(
     quantity: { type: Number, required: true, min: 1 },
     /** Unit price at order time (a snapshot — later product edits never change it). */
     price: { type: Number, required: true, min: 0 },
-    /** Catalog product this line was bought from (landing-page orders). */
+    /**
+     * Catalog product this line was bought from: set by landing-page orders,
+     * and for other sources when the line's SKU matches exactly one product
+     * or variant (apps/api/src/lib/commerce/catalog-link.ts). Drives stock.
+     */
     productId: { type: Schema.Types.ObjectId, ref: "Product" },
     imageAssetId: { type: Schema.Types.ObjectId },
     /**

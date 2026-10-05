@@ -59,7 +59,7 @@ export function OperationalBanner() {
         title={`Courier booking failed for ${courierFailures.length} order${courierFailures.length === 1 ? "" : "s"}`}
         body="Your courier connection may need re-authorization. Open Settings → Couriers and reconnect, then re-try the affected orders."
         ctaLabel="Open courier settings"
-        ctaHref="/dashboard/settings?tab=couriers"
+        ctaHref="/dashboard/settings/couriers"
       />
     );
   }

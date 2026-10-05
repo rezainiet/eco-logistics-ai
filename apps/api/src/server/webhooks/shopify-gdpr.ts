@@ -1,5 +1,5 @@
 import express, { type Request, type Response } from "express";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Integration } from "@ecom/db";
 import { Types } from "mongoose";
 import { writeAudit } from "../../lib/audit.js";
@@ -250,11 +250,13 @@ shopifyGdprWebhookRouter.post(
               customerId,
               dataRequestId,
             },
-            // One inbox row per (data_request id) — Shopify can retry
-            // delivery; we don't want N duplicates if it does.
+            // One inbox row per data request — Shopify can retry delivery;
+            // we don't want N duplicates if it does. Without a request id,
+            // the delivery id (the same on every retry), else the signed
+            // body itself, keeps it deterministic.
             dedupeKey: dataRequestId
               ? `gdpr_data_request:${shopDomain ?? "unknown"}:${dataRequestId}`
-              : undefined,
+              : gdprFallbackKey(req, rawBody, shopDomain),
           });
           notified = result.inAppCreated;
         } catch (err) {
@@ -389,4 +391,14 @@ function extractCustomerIdentifiers(
     shopifyCustomerId: customer.id ? String(customer.id) : undefined,
     orderIds,
   };
+}
+
+/** Deterministic dedupe key for a data request that carries no request id. */
+function gdprFallbackKey(req: Request, rawBody: Buffer, shopDomain: string | null): string {
+  const hdr = req.headers["x-shopify-webhook-id"];
+  const webhookId = Array.isArray(hdr) ? hdr[0] : hdr;
+  const ref = webhookId
+    ? `wh:${String(webhookId).slice(0, 64)}`
+    : `body:${createHash("sha256").update(rawBody).digest("hex").slice(0, 24)}`;
+  return `gdpr_data_request:${(shopDomain ?? "unknown").slice(0, 40)}:${ref}`;
 }

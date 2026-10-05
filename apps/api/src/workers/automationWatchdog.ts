@@ -126,7 +126,7 @@ export async function runAutomationWatchdog(): Promise<AutomationWatchdogResult>
           severity: "critical",
           title: `Order ${o.orderNumber}: auto-book exhausted, manual action needed`,
           body: `We tried ${attempted.length} couriers and none accepted the booking. Open the order to retry manually or change couriers.`,
-          link: `/dashboard/orders?id=${String(o._id)}`,
+          link: `/dashboard/orders?focus=${String(o._id)}`,
           subjectType: "order",
           subjectId: o._id as Types.ObjectId,
           dedupeKey,

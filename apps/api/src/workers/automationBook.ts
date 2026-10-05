@@ -424,6 +424,7 @@ export function registerAutomationBookWorker() {
       severity: "critical",
       title: `Auto-booking failed for order ${data.orderId.slice(-6)}`,
       body: `We tried ${job.attemptsMade} times to auto-book this order with ${data.courier} but the courier kept rejecting it. Please review and book manually.`,
+      link: `/dashboard/orders?focus=${data.orderId}`,
       subjectType: "order",
       subjectId: orderOid ?? undefined,
       dedupeKey: `auto_book_failed:${data.orderId}`,

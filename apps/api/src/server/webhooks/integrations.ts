@@ -365,7 +365,7 @@ integrationsWebhookRouter.post(
                 title: `Cancel courier pickup — ${liveOrder.logistics?.courier ?? "courier"} ${liveOrder.logistics?.trackingNumber ?? ""}`.trim(),
                 body:
                   "An order was trashed in WooCommerce after a courier AWB was issued. Call the courier directly to cancel pickup or you'll get an RTO charge.",
-                link: `/dashboard/orders/${String(liveOrder._id)}`,
+                link: `/dashboard/orders?focus=${String(liveOrder._id)}`,
                 subjectType: "order",
                 subjectId: liveOrder._id,
                 meta: {

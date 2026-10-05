@@ -26,8 +26,11 @@ export interface FraudAlertInput {
  * Alerts are dedupe-keyed per (merchantId, orderId, kind) so rescore runs
  * that repeatedly flip an order to pending_call only spawn one notification.
  * Merchants can disable inbox writes via `fraudConfig.alertOnPendingReview`.
+ *
+ * Returns whether an inbox alert is in place for this order (written now
+ * or by an earlier call) — false when the merchant turned review alerts off.
  */
-export async function fireFraudAlert(input: FraudAlertInput): Promise<void> {
+export async function fireFraudAlert(input: FraudAlertInput): Promise<boolean> {
   const kind = input.kind ?? "fraud.pending_review";
   const severity = input.severity ?? (input.level === "high" ? "critical" : "warning");
   const dedupeKey = createHash("sha1")
@@ -118,4 +121,5 @@ export async function fireFraudAlert(input: FraudAlertInput): Promise<void> {
       reasons: input.reasons,
     },
   });
+  return shouldNotify;
 }

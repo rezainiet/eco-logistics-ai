@@ -4,6 +4,7 @@ import { Order, Merchant } from "@ecom/db";
 import { syncOrderInventory } from "../../lib/inventory.js";
 import { parseSmsInbound } from "../../lib/sms-inbound.js";
 import { writeAudit } from "../../lib/audit.js";
+import { notifyCustomerRejected } from "../../lib/merchant-notices.js";
 import { canTransitionAutomation } from "../../lib/automation.js";
 import { enqueueAutoBook } from "../../workers/automationBook.js";
 import { checkSmsWebhookAuth } from "../../lib/sms/webhook-verify.js";
@@ -106,7 +107,7 @@ smsInboundWebhookRouter.post(
       "automation.state": "pending_confirmation",
       "customer.phone": normalizedFrom,
     })
-      .select("_id merchantId order.status automation customer.phone")
+      .select("_id merchantId orderNumber order.status automation customer.phone")
       .lean();
 
     if (!order) {
@@ -255,7 +256,7 @@ smsInboundWebhookRouter.post(
         }
       }
     } else {
-      await Order.updateOne(
+      const rejected = await Order.updateOne(
         { _id: orderOid, merchantId: merchantOid, "automation.state": "pending_confirmation" },
         {
           $set: {
@@ -277,6 +278,11 @@ smsInboundWebhookRouter.post(
         },
       );
       await syncOrderInventory([orderOid]);
+      // Only the reply that actually cancelled it notifies (a repeated SMS
+      // matches nothing; the dedupe key covers any race).
+      if (rejected.modifiedCount === 1) {
+        await notifyCustomerRejected({ merchantId: merchantOid, orderId: orderOid, orderNumber: (order as { orderNumber?: string }).orderNumber });
+      }
     }
 
     void writeAudit({

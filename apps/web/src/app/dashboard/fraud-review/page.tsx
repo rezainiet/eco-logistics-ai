@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -174,8 +175,11 @@ interface LastRejected {
 }
 
 export default function FraudReviewPage() {
+  // ?id=<orderId> (review notifications) opens that order's review.
+  const searchParams = useSearchParams();
+  const linkedId = /^[a-f0-9]{24}$/.test(searchParams?.get("id") ?? "") ? searchParams!.get("id") : null;
   const [filter, setFilter] = useState<FilterValue>("all_open");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(linkedId);
   const [notes, setNotes] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const [requestReason, setRequestReason] = useState("");
@@ -200,6 +204,10 @@ export default function FraudReviewPage() {
   );
   const stats = trpc.fraud.getReviewStats.useQuery({ days: 7 });
   const callConfigured = trpc.call.isConfigured.useQuery();
+
+  useEffect(() => {
+    if (linkedId) setSelectedId(linkedId);
+  }, [linkedId]);
 
   useEffect(() => {
     if (selectedId) return;

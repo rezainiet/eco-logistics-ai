@@ -24,6 +24,7 @@ import {
 } from "../lib/email.js";
 import { enqueueEmail } from "../workers/email.worker.js";
 import { writeAudit } from "../lib/audit.js";
+import { notifyWelcome } from "../lib/merchant-notices.js";
 import { sendPasswordResetAlertSms } from "../lib/sms/index.js";
 import {
   createSession,
@@ -249,6 +250,10 @@ authRouter.post("/signup", signupLimiter, async (req, res) => {
       trialEndsAt,
     },
   });
+
+  // First thing in the new merchant's inbox (once per account — keyed on
+  // the merchant id, so a retried or repeated request adds nothing).
+  await notifyWelcome({ merchantId: merchant._id as import("mongoose").Types.ObjectId, businessName: merchant.businessName });
 
   // Best-effort verification email; never block signup on email failures so a
   // misconfigured RESEND_API_KEY doesn't lock new merchants out.
@@ -812,6 +817,8 @@ authRouter.post("/shopify/exchange", async (req, res) => {
       }
       merchantDoc = existing;
     }
+    // New install: welcome once (the sibling of a race lands on the same key).
+    await notifyWelcome({ merchantId: merchantDoc._id as import("mongoose").Types.ObjectId, businessName: merchantDoc.businessName });
 
     // Upsert the Integration row. Keyed on
     // (merchantId, provider, accountKey) which has a unique index;

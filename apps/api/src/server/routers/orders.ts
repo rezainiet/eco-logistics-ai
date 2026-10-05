@@ -29,6 +29,7 @@ import {
 import { cached, invalidate } from "../../lib/cache.js";
 import { BOOKING_BLOCKED_REVIEW } from "../../lib/verification.js";
 import { orderProfitOf, snapshotItemCosts } from "../../lib/finance/order-cost.js";
+import { applyCatalogLinks, catalogLinksFor, linkItemsToCatalog } from "../../lib/commerce/catalog-link.js";
 import { filterHash } from "../../lib/hash.js";
 import {
   adapterFor,
@@ -78,7 +79,7 @@ import { fireFraudAlert } from "../../lib/alerts.js";
 import { enqueueRescore } from "../../workers/riskRecompute.js";
 import { resolveIdentityForOrder } from "../ingest.js";
 import { normalizePhoneOrRaw } from "../../lib/phone.js";
-import { reconcileOrderInventory, syncOrderInventory } from "../../lib/inventory.js";
+import { reconcileOrderInventory, reserveNewOrdersStock, syncOrderInventory } from "../../lib/inventory.js";
 import { assetUrlOf } from "../../lib/commerce/products.js";
 import {
   afterOrderCreated,
@@ -645,6 +646,8 @@ interface BulkStagedRow {
   price: number;
   cod: number;
   itemName: string;
+  /** Item SKU (optional column) — links the row to a catalogue product when unambiguous. */
+  sku?: string;
   orderNumber: string;
   addressHash: string | null;
   /** sha256(name:quantity:priceCents) — element of the dedup key. */
@@ -672,7 +675,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
   customerPhone: ["customerphone", "phone", "mobile", "mobilenumber", "mobileno", "contact"],
   customerAddress: ["customeraddress", "address", "shippingaddress", "deliveryaddress"],
   customerDistrict: ["customerdistrict", "district", "city", "town", "area", "zone"],
-  itemName: ["itemname", "productname", "product", "item", "sku"],
+  itemName: ["itemname", "productname", "product", "item"],
+  // Its own column (it used to be read as the item name): stock is linked by
+  // SKU. A file with only a SKU column still gets it as the item name too.
+  sku: ["sku", "productsku", "itemsku", "variantsku"],
   quantity: ["quantity", "qty", "amount", "count"],
   price: ["price", "unitprice", "rate", "totalamount", "total"],
   cod: ["cod", "codamount", "cashondelivery"],
@@ -843,7 +849,8 @@ export function parseAndStageBulk(csv: string): BulkParsed {
       address: row.customerAddress!.trim(),
       district: row.customerDistrict!.trim(),
     };
-    const itemName = (row.itemName ?? "").trim() || "Item";
+    const sku = (row.sku ?? "").trim().slice(0, 64);
+    const itemName = (row.itemName ?? "").trim() || sku || "Item";
     staged.push({
       rowNumber,
       customer,
@@ -851,6 +858,7 @@ export function parseAndStageBulk(csv: string): BulkParsed {
       price,
       cod,
       itemName,
+      ...(sku ? { sku } : {}),
       orderNumber: (row.orderNumber ?? "").trim() || generateOrderNumber(),
       addressHash: hashAddress(customer.address, customer.district),
       itemFingerprint: computeItemFingerprint([{ name: itemName, quantity, price }]),
@@ -1119,7 +1127,8 @@ export const ordersRouter = router({
     type IdempotentHit = { id: string; orderNumber: string; risk: { level: string; score: number; reviewStatus: string; reasons: string[] }; idempotent: true };
     type CreateOutcome = { kind: "created"; order: OrderCreated; orderDoc: any } | { kind: "idempotent"; payload: IdempotentHit } | { kind: "quota_exhausted"; reservation: Awaited<ReturnType<typeof reserveQuota>> };
 
-    const itemsWithCost = await snapshotItemCosts(merchantId, input.items);
+    // Cost snapshot (accounting) and catalogue link (stock), both by unambiguous SKU only.
+    const itemsWithCost = await linkItemsToCatalog(merchantId, await snapshotItemCosts(merchantId, input.items));
     const session = await mongoose.startSession();
     let outcome: CreateOutcome;
     try {
@@ -1245,6 +1254,9 @@ export const ordersRouter = router({
     }
     const order = outcome.orderDoc;
 
+    // Stock for linked lines — after the commit, so a short stock never
+    // fails the order (it is kept with a note and the merchant is told).
+    await reserveNewOrdersStock([order._id as Types.ObjectId]);
     await afterOrderCreated({ merchantId, order, risk, userId: ctx.user.id });
     return {
       id: String(order._id),
@@ -1268,6 +1280,8 @@ export const ordersRouter = router({
           dateFrom: z.coerce.date().optional(),
           dateTo: z.coerce.date().optional(),
           phone: z.string().optional(),
+          /** Only orders whose stock could not be reserved or deducted (and that are not closed out). */
+          stockIssue: z.boolean().optional(),
           cursor: z.string().optional(),
           limit: z.number().int().min(1).max(200).default(50),
         })
@@ -1277,6 +1291,10 @@ export const ordersRouter = router({
       const merchantId = merchantObjectId(ctx);
       const q: Record<string, unknown> = { merchantId };
       if (input.status) q["order.status"] = input.status;
+      if (input.stockIssue) {
+        q["inventory.note"] = { $type: "string" };
+        if (!input.status) q["order.status"] = { $nin: ["cancelled", "rto"] };
+      }
       if (input.courier) q["logistics.courier"] = input.courier;
       if (input.phone) q["customer.phone"] = input.phone;
       if (input.dateFrom || input.dateTo) {
@@ -1306,6 +1324,7 @@ export const ordersRouter = router({
         s: input.status,
         c: input.courier,
         p: input.phone,
+        k: input.stockIssue ? 1 : undefined,
         f: input.dateFrom?.toISOString(),
         t: input.dateTo?.toISOString(),
       });
@@ -1365,6 +1384,9 @@ export const ordersRouter = router({
             bookedByAutomation: o.automation?.bookedByAutomation ?? false,
             source: o.source?.channel ?? "dashboard",
             landingSlug: o.source?.landingSlug ?? null,
+            /** Why this order's stock could not be reserved / deducted, if it could not (open orders only). */
+            stockIssue:
+              o.inventory?.note && !["cancelled", "rto"].includes(o.order.status) ? o.inventory.note : null,
             createdAt: o.createdAt,
           };
         }),
@@ -2102,7 +2124,7 @@ export const ordersRouter = router({
           merchantId,
           orderNumber: s.orderNumber,
           customer: s.customer,
-          items: [{ name: s.itemName, quantity: s.quantity, price: s.price }],
+          items: [{ name: s.itemName, quantity: s.quantity, price: s.price, ...(s.sku ? { sku: s.sku } : {}) }],
           order: { cod: s.cod, total: s.price * s.quantity, status: "pending" },
           fraud: {
             detected: risk.level === "high",
@@ -2129,6 +2151,14 @@ export const ordersRouter = router({
           });
         }
       }
+
+      // Catalogue link for rows with a SKU — one lookup for the whole batch,
+      // same unambiguous-SKU rule as every other order source.
+      const links = await catalogLinksFor(
+        merchantId,
+        docs.flatMap((d) => d.items as Array<{ sku?: string }>),
+      );
+      for (const d of docs) d.items = applyCatalogLinks(d.items as Array<{ sku?: string }>, links);
 
       // Reserve the entire batch against the monthly cap up-front. Fewer rows
       // actually land when per-doc writes fail → we release the difference.
@@ -2179,6 +2209,10 @@ export const ordersRouter = router({
           await releaseQuota(merchantId, "ordersCreated", refund);
         }
       }
+
+      // Stock for the linked rows that landed, in file order. Never fails the
+      // upload: a short row is kept with a note and the merchant is told.
+      await reserveNewOrdersStock(insertedIds);
 
       // Fire alerts for every HIGH row that actually landed. We match on
       // the inserted _ids (not indices) because `insertMany { ordered: false }`

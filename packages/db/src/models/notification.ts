@@ -75,6 +75,32 @@ export const NOTIFICATION_KINDS = [
    * Fired once per order, on the courier-driven transition only.
    */
   "order.returned",
+  /**
+   * The order's stock could not be reserved (or, on delivery, deducted):
+   * not enough units. The order itself is kept; `inventory.note` says why.
+   * Fired once per order, reservation cycle and stock target.
+   */
+  "order.stock_issue",
+  /**
+   * A product (or one variant) fell to its low-stock threshold / to zero
+   * available units. Fired once per crossing; re-armed only by a restock
+   * that lifts available stock back above the line.
+   */
+  "stock.low",
+  "stock.out",
+  /**
+   * A customer placed an order (landing-page checkout, or a live store
+   * webhook). Not fired for orders the merchant created or imported, nor
+   * when a review alert already covers the order. Once per order.
+   */
+  "order.new",
+  /**
+   * The customer replied NO to the confirmation SMS, so the order was
+   * cancelled without the merchant acting. Once per order.
+   */
+  "order.customer_rejected",
+  /** Once per merchant account, when it is created. */
+  "account.welcome",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
@@ -93,7 +119,7 @@ const notificationSchema = new Schema(
     /** Subject reference — used for de-dup and UI badges. */
     subjectType: {
       type: String,
-      enum: ["order", "merchant", "integration", "system"],
+      enum: ["order", "merchant", "integration", "system", "product"],
       default: "order",
     },
     subjectId: { type: Schema.Types.ObjectId },

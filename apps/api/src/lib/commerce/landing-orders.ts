@@ -4,6 +4,7 @@ import { MAX_CART_LINES, MAX_LINE_QUANTITY, normalizeBdMobile } from "@ecom/land
 import { Order, Product, availableStock, hasVariants } from "@ecom/db";
 import { writeAudit } from "../audit.js";
 import { InventoryError, reserveOrderStock } from "../inventory.js";
+import { alertStockLevels, type StockChange } from "../inventory-alerts.js";
 import { afterOrderCreated, fraudDocFromRisk, generateOrderNumber, loadMerchantScoring, scoreOrderForCreate } from "../order-create.js";
 import { getPlan } from "../plans.js";
 import { reserveQuota } from "../usage.js";
@@ -133,7 +134,7 @@ export function validateCustomer(c: PlaceOrderInput["customer"]) {
 const PHONE_WINDOW_MS = 10 * 60 * 1000;
 const PHONE_MAX_ORDERS = 5;
 
-type Outcome = { kind: "created"; order: any } | { kind: "duplicate"; order: any } | { kind: "quota" };
+type Outcome = { kind: "created"; order: any; stock: StockChange[] } | { kind: "duplicate"; order: any } | { kind: "quota" };
 
 function placedFrom(order: any, duplicate: boolean): PlacedOrder {
   return {
@@ -376,8 +377,8 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
         ],
         { session },
       );
-      await reserveOrderStock(session, { merchantId, orderId, items });
-      return { kind: "created", order };
+      const stock = await reserveOrderStock(session, { merchantId, orderId, items });
+      return { kind: "created", order, stock };
     });
   } catch (err) {
     if (err instanceof InventoryError && err.code === "insufficient_stock") {
@@ -406,6 +407,8 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
   if (outcome.kind === "duplicate") return { ok: true, ...placedFrom(outcome.order, true) };
 
   const order = outcome.order;
+  // Committed: low / out-of-stock alerts for what this checkout reserved.
+  await alertStockLevels(merchantId, outcome.stock);
   void writeAudit({
     merchantId,
     actorId: merchantId,

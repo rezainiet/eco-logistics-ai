@@ -483,7 +483,7 @@ export async function enforceDowngradeIfNeeded(args: {
           severity: "warning",
           title: `Plan changed to ${planName} — some integrations were disabled`,
           body: lines.join(" "),
-          link: "/dashboard/integrations",
+          link: "/dashboard/settings/integrations",
           subjectType: "merchant" as const,
           subjectId: merchantId,
           meta: {

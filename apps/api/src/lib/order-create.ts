@@ -15,6 +15,7 @@ import {
 import { getMerchantValueRollup } from "./merchantValueRollup.js";
 import { writeAudit } from "./audit.js";
 import { fireFraudAlert } from "./alerts.js";
+import { notifyNewOrder } from "./merchant-notices.js";
 import { resolveIdentityForOrder } from "../server/ingest.js";
 
 /**
@@ -309,10 +310,11 @@ export async function afterOrderCreated(args: {
       subjectId: order._id,
       meta: { level: risk.level, score: risk.riskScore, reasons: risk.reasons },
     });
+    let reviewAlerted = false;
     if (risk.level === "high") {
       // Awaited so the merchant's inbox is guaranteed-written before the
       // mutation response returns — we never silently drop a fraud alert.
-      await fireFraudAlert({
+      reviewAlerted = await fireFraudAlert({
         merchantId,
         orderId: order._id,
         orderNumber: order.orderNumber,
@@ -321,6 +323,20 @@ export async function afterOrderCreated(args: {
         level: risk.level,
         reasons: risk.reasons,
         kind: "fraud.pending_review",
+      });
+    }
+    // A customer's order (landing page) is news to the merchant; an order
+    // they typed in themselves is not. The review alert, when written,
+    // already announces the order.
+    if (order.source?.channel === "landing_page" && !reviewAlerted) {
+      await notifyNewOrder({
+        merchantId,
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        total: order.order?.total,
+        currency: order.order?.currency,
+        district: order.customer?.district,
+        source: "landing_page",
       });
     }
     void resolveIdentityForOrder({

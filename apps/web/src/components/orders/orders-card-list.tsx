@@ -11,6 +11,7 @@ import {
   orderStatusClass,
   riskBadgeClass,
 } from "@/lib/status-badges";
+import { stockNoteCopy } from "@/lib/orders/stock-note";
 
 export type OrderCardRow = {
   id: string;
@@ -23,6 +24,8 @@ export type OrderCardRow = {
   riskScore: number;
   riskLevel: "low" | "medium" | "high";
   reviewStatus: ReviewStatus;
+  /** Inventory note when the order's stock could not be reserved / deducted. */
+  stockIssue?: string | null;
   createdAt: string | Date;
 };
 
@@ -147,6 +150,11 @@ export function OrdersCardList({
                   </span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 text-2xs">
+                  {r.stockIssue ? (
+                    <span className="inline-flex items-center rounded-full bg-warning-subtle px-2 py-0.5 font-medium text-warning">
+                      {stockNoteCopy(r.stockIssue, r.status)?.label}
+                    </span>
+                  ) : null}
                   {r.courier ? (
                     <span className="inline-flex items-center gap-1 rounded-full border border-stroke/12 px-2 py-0.5 text-fg-muted">
                       {r.courier}

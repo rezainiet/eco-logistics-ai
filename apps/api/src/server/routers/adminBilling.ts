@@ -604,7 +604,7 @@ export const adminBillingRouter = router({
                 severity: "warning",
                 title: `Plan changed to ${plan.name} — some integrations were disabled`,
                 body: lines.join(" "),
-                link: "/dashboard/integrations",
+                link: "/dashboard/settings/integrations",
                 subjectType: "merchant" as const,
                 subjectId: merchantOid,
                 meta: {

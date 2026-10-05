@@ -1,5 +1,8 @@
 import { Types } from "mongoose";
 import { snapshotItemCosts } from "../lib/finance/order-cost.js";
+import { linkItemsToCatalog } from "../lib/commerce/catalog-link.js";
+import { reserveNewOrdersStock } from "../lib/inventory.js";
+import { notifyNewOrder } from "../lib/merchant-notices.js";
 import {
   FraudPrediction,
   Integration,
@@ -279,8 +282,10 @@ export async function ingestNormalizedOrder(
         district: normalized.customer.district,
         ...(extractedThana ? { thana: extractedThana } : {}),
       },
-      // Cost per unit snapshotted now (unambiguous SKU match only) — never rewritten later.
-      items: await snapshotItemCosts(opts.merchantId, normalized.items),
+      // Cost per unit snapshotted now (unambiguous SKU match only) — never
+      // rewritten later — and the same SKU rule links lines to the catalogue
+      // product/variant whose stock they use.
+      items: await linkItemsToCatalog(opts.merchantId, await snapshotItemCosts(opts.merchantId, normalized.items)),
       order: {
         cod: normalized.cod,
         total: normalized.total,
@@ -356,6 +361,11 @@ export async function ingestNormalizedOrder(
       throw err;
     }
 
+    // Reserve stock for catalogue-linked lines. The order already exists
+    // upstream, so a short stock never fails ingest: the order is kept with
+    // an inventory note and the merchant is notified.
+    await reserveNewOrdersStock([orderDoc._id as Types.ObjectId]);
+
     // Persist the prediction for the monthly weight tuner. Best-effort:
     // a failure here MUST NOT undo the order create. Idempotent via the
     // unique index on `orderId` so a rescore later will overwrite cleanly.
@@ -407,8 +417,9 @@ export async function ingestNormalizedOrder(
       );
     }
 
+    let reviewAlerted = false;
     if (risk.level === "high") {
-      await fireFraudAlert({
+      reviewAlerted = await fireFraudAlert({
         merchantId: opts.merchantId,
         orderId: orderDoc._id,
         orderNumber: orderDoc.orderNumber,
@@ -417,6 +428,21 @@ export async function ingestNormalizedOrder(
         level: risk.level,
         reasons: risk.reasons,
         kind: "fraud.pending_review",
+      });
+    }
+    // A live store order (webhook / order-sync) is news to the merchant;
+    // an import they started ("api") or a CSV is not. The review alert,
+    // when written, already announces the order. Duplicate deliveries
+    // never reach this point (externalId dedupe above).
+    if (opts.channel === "webhook" && !reviewAlerted) {
+      await notifyNewOrder({
+        merchantId: opts.merchantId,
+        orderId: orderDoc._id as Types.ObjectId,
+        orderNumber: orderDoc.orderNumber,
+        total: normalized.total,
+        currency: normalized.currency,
+        district: normalized.customer.district,
+        source: opts.source,
       });
     }
 
@@ -1000,7 +1026,7 @@ async function fireWebhookNeedsAttentionAlert(
           severity: "warning",
           title: `${inbox.provider} order needs attention`,
           body: `${inbox.topic} (id ${inbox.externalId}): ${detail}`,
-          link: `/dashboard/integrations?inboxId=${String(inbox._id)}`,
+          link: "/dashboard/settings/integrations/issues",
           subjectType: "integration" as const,
           subjectId: integrationId ?? (inbox._id as Types.ObjectId),
           meta: {
@@ -1058,7 +1084,7 @@ async function fireWebhookDeadLetterAlert(inbox: {
           severity: "critical",
           title: `${inbox.provider} webhook permanently failed`,
           body: `Topic ${inbox.topic} (id ${inbox.externalId}) hit the retry cap. Last error: ${inbox.lastError ?? "unknown"}`,
-          link: `/dashboard/integrations?inboxId=${String(inbox._id)}`,
+          link: "/dashboard/settings/integrations/issues",
           subjectType: "integration" as const,
           subjectId: integrationId ?? (inbox._id as Types.ObjectId),
           meta: {

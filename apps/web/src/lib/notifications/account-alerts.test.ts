@@ -96,13 +96,16 @@ describe("bell count and drawer share one rule", () => {
   it("both the drawer rows and useNotificationCount come from buildAccountAlerts", () => {
     expect(src.match(/buildAccountAlerts\(/g)?.length).toBe(2);
     const hook = src.slice(src.indexOf("export function useNotificationCount"));
-    expect(hook).toMatch(/buildAccountAlerts\([\s\S]*?\)\.length \+ \(courierNotices\.data\?\.items\.length \?\? 0\)/);
+    expect(hook).toMatch(/buildAccountAlerts\([\s\S]*?\)\.length \+ inboxUnread\(inboxUnreadQuery\.data\)/);
   });
 
-  it("unread courier notices are counted and listed from the same query", () => {
-    // One hook feeds both sides; the drawer renders every item it returns.
-    expect(src.match(/= useCourierNotices\(\)/g)?.length).toBe(2);
-    expect(src).toMatch(/courierNoticeRows\(courierNotices\.data\?\.items \?\? \[\]\)/);
+  it("unread inbox notifications are counted and listed from the same query", () => {
+    // One hook (the inbox's "unread" view) feeds both sides: the bell counts
+    // its server-side unread total, the drawer's Unread view lists its rows.
+    expect(src.match(/= useInboxUnread\(\)/g)?.length).toBe(2);
+    expect(src).toMatch(/filter: "unread", limit: PAGE/);
+    expect(src).toMatch(/const inbox = view === "unread" \? inboxUnreadQuery : inboxAll;/);
+    expect(src).toMatch(/inboxRows\(inbox\.data\?\.pages\.flatMap\(\(p\) => p\.items\) \?\? \[\]\)/);
   });
 
   it("neither side re-implements meter eligibility with raw blocked/warning flags", () => {

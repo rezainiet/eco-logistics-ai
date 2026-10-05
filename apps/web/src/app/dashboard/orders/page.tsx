@@ -49,6 +49,7 @@ import { BulkUploadDialog } from "@/components/orders/bulk-upload-dialog";
 import { BookShipmentDialog } from "@/components/orders/book-shipment-dialog";
 import { TrackingTimelineDrawer } from "@/components/orders/tracking-timeline-drawer";
 import { sourceLabel } from "@/components/orders/order-commerce-panel";
+import { stockNoteCopy } from "@/lib/orders/stock-note";
 import {
   AutomationBadge,
   type AutomationState,
@@ -90,6 +91,7 @@ type OrderRow = {
   bookedByAutomation?: boolean;
   source?: string;
   landingSlug?: string | null;
+  stockIssue?: string | null;
   createdAt: string | Date;
 };
 
@@ -101,6 +103,7 @@ export default function OrdersPage() {
   const [courier, setCourier] = useState("");
   const [phone, setPhone] = useState("");
   const [dateFrom, setDateFrom] = useState("");
+  const [stockIssue, setStockIssue] = useState(false);
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
   const [createOpen, setCreateOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -135,13 +138,17 @@ export default function OrdersPage() {
       ...(courier ? { courier } : {}),
       ...(phone ? { phone } : {}),
       ...(dateFrom ? { dateFrom: new Date(dateFrom) } : {}),
+      ...(stockIssue ? { stockIssue: true } : {}),
       ...(currentCursor ? { cursor: currentCursor } : {}),
       limit: PAGE_SIZE,
     }),
-    [status, courier, phone, dateFrom, currentCursor],
+    [status, courier, phone, dateFrom, stockIssue, currentCursor],
   );
 
   const list = trpc.orders.listOrders.useQuery(filters);
+  // Open orders whose stock could not be reserved (or deducted) — surfaced above the list.
+  const stockIssues = trpc.orders.listOrders.useQuery({ stockIssue: true, limit: 1 }, { staleTime: 30_000 });
+  const stockIssueCount = stockIssues.data?.total ?? 0;
   const couriersQuery = trpc.orders.listCouriers.useQuery(undefined, { staleTime: 60_000 });
   const utils = trpc.useUtils();
 
@@ -190,7 +197,7 @@ export default function OrdersPage() {
   // a merchant with zero orders and zero filters needs a "get started" CTA,
   // not a "try broadening the filters" message about filters they never set.
   const hasActiveFilters =
-    status !== "all" || courier !== "" || phone !== "" || dateFrom !== "";
+    status !== "all" || courier !== "" || phone !== "" || dateFrom !== "" || stockIssue;
 
   const bookableIdsOnPage = useMemo(
     () =>
@@ -276,6 +283,11 @@ export default function OrdersPage() {
         cell: ({ row }) => (
           <div className="min-w-0">
             <span className="font-mono text-xs text-fg">{row.original.orderNumber}</span>
+            {row.original.stockIssue ? (
+              <p className="truncate text-[11px] font-medium text-warning" title={stockNoteCopy(row.original.stockIssue, row.original.status)?.detail}>
+                {stockNoteCopy(row.original.stockIssue, row.original.status)?.label}
+              </p>
+            ) : null}
             {row.original.source === "landing_page" ? (
               <p className="truncate text-[11px] text-fg-subtle" title="Placed on a landing page">
                 {sourceLabel(row.original.source, row.original.landingSlug)}
@@ -495,6 +507,27 @@ export default function OrdersPage() {
         }
       />
 
+      {stockIssueCount > 0 || stockIssue ? (
+        <div className="flex flex-col gap-2 rounded-lg border border-warning-border/40 bg-warning/5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-fg">
+            {stockIssue
+              ? "Showing orders waiting for stock (or whose delivered units could not be deducted)."
+              : `${stockIssueCount.toLocaleString()} open order${stockIssueCount === 1 ? " is" : "s are"} waiting for stock. They are reserved automatically when you restock.`}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0 border-stroke/14 bg-transparent text-fg"
+            onClick={() => {
+              setStockIssue((v) => !v);
+              resetToFirstPage();
+            }}
+          >
+            {stockIssue ? "Show all orders" : "Show them"}
+          </Button>
+        </div>
+      ) : null}
+
       <div className="rounded-xl border border-stroke/10 bg-surface p-4 shadow-card">
         <div className="grid gap-3 md:grid-cols-4">
           <div className="space-y-1.5">
@@ -686,6 +719,7 @@ export default function OrdersPage() {
                               setCourier("");
                               setPhone("");
                               setDateFrom("");
+                              setStockIssue(false);
                               resetToFirstPage();
                             }}
                           >
@@ -781,6 +815,7 @@ export default function OrdersPage() {
           setCourier("");
           setPhone("");
           setDateFrom("");
+          setStockIssue(false);
           resetToFirstPage();
         }}
       />

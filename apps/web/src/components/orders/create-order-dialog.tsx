@@ -18,6 +18,7 @@ const schema = z.object({
   customerAddress: z.string().min(1),
   customerDistrict: z.string().min(1),
   itemName: z.string().min(1),
+  sku: z.string().trim().max(64).optional(),
   quantity: z.coerce.number().int().min(1),
   price: z.coerce.number().min(0),
   cod: z.coerce.number().min(0),
@@ -52,7 +53,7 @@ export function CreateOrderDialog({
         address: values.customerAddress,
         district: values.customerDistrict,
       },
-      items: [{ name: values.itemName, quantity: values.quantity, price: values.price }],
+      items: [{ name: values.itemName, ...(values.sku ? { sku: values.sku } : {}), quantity: values.quantity, price: values.price }],
       cod: values.cod,
     });
     reset();
@@ -86,6 +87,9 @@ export function CreateOrderDialog({
             </Field>
             <Field label="Item name" error={errors.itemName?.message}>
               <Input {...register("itemName")} />
+            </Field>
+            <Field label="SKU (optional)" error={errors.sku?.message}>
+              <Input placeholder="Links the order to a product's stock" {...register("sku")} />
             </Field>
             <Field label="Quantity" error={errors.quantity?.message}>
               <Input type="number" min={1} {...register("quantity")} />

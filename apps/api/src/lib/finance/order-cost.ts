@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
-import { Order, Product } from "@ecom/db";
+import { Order } from "@ecom/db";
+import { findSkuCandidates, lineSku } from "../commerce/sku-match.js";
 import type { Period } from "./period.js";
 import { IS_BDT_ORDER } from "./report.js";
 
@@ -10,11 +11,12 @@ import { IS_BDT_ORDER } from "./report.js";
  * is created, from the product's cost at that moment; nothing rewrites it
  * later (a product cost change applies to new orders only, and existing
  * orders are never back-filled). Landing-page orders snapshot it from the
- * linked product. Orders created from the dashboard, CSV or a store
- * integration carry no product link — their items are matched by SKU to the
- * merchant's catalogue, and only an unambiguous match (exactly one product
- * or variant with that SKU, with a recorded cost) is snapshotted. Everything
- * else stays "cost not recorded" — never 0.
+ * linked product. Orders created from the dashboard or a store integration
+ * have their items matched by SKU to the merchant's catalogue
+ * (lib/commerce/sku-match.ts), and only an unambiguous match (exactly one
+ * product or variant with that SKU, with a recorded cost) is snapshotted.
+ * Everything else stays "cost not recorded" — never 0. (The same SKU rule
+ * links those lines to the catalogue for stock: lib/commerce/catalog-link.ts.)
  */
 
 interface CostableItem {
@@ -25,36 +27,17 @@ interface CostableItem {
 
 /** Fill `unitCost` on items that lack one, from an unambiguous SKU match in this merchant's catalogue. */
 export async function snapshotItemCosts<T extends CostableItem>(merchantId: Types.ObjectId, items: T[]): Promise<T[]> {
-  const skus = [
-    ...new Set(
-      items
-        .filter((i) => typeof i.unitCost !== "number" && typeof i.sku === "string" && i.sku.trim())
-        .map((i) => (i.sku as string).trim()),
-    ),
-  ];
+  const skus = items.filter((i) => typeof i.unitCost !== "number").map(lineSku).filter((s): s is string => s !== null);
   if (skus.length === 0) return items;
-  const products = await Product.find({ merchantId, $or: [{ sku: { $in: skus } }, { "variants.sku": { $in: skus } }] })
-    .select("sku costPrice variants.sku variants.costPrice")
-    .lean();
-  const matches = new Map<string, Array<number | null>>();
-  const add = (sku: string, cost: number | null | undefined) => {
-    const list = matches.get(sku) ?? [];
-    list.push(typeof cost === "number" ? cost : null);
-    matches.set(sku, list);
-  };
-  for (const p of products) {
-    if (p.sku && skus.includes(p.sku)) add(p.sku, p.costPrice);
-    for (const v of p.variants ?? []) {
-      // A variant without its own cost uses the product's.
-      if (v.sku && skus.includes(v.sku)) add(v.sku, v.costPrice ?? p.costPrice);
-    }
-  }
+  // Shared exact-SKU rule; a variant without its own cost uses the product's.
+  const matches = await findSkuCandidates(merchantId, skus);
   return items.map((i) => {
-    if (typeof i.unitCost === "number" || typeof i.sku !== "string") return i;
-    const found = matches.get(i.sku.trim());
+    const sku = lineSku(i);
+    if (typeof i.unitCost === "number" || sku === null) return i;
+    const found = matches.get(sku);
     // Ambiguous (several products/variants share the SKU) or no recorded cost: leave unrecorded.
-    if (!found || found.length !== 1 || found[0] === null) return i;
-    return { ...i, unitCost: found[0] };
+    if (!found || found.length !== 1 || found[0]!.cost === null) return i;
+    return { ...i, unitCost: found[0]!.cost };
   });
 }
 
