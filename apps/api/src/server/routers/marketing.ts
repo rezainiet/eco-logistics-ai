@@ -2,7 +2,7 @@ import { z } from "zod";
 import { LandingPage } from "@ecom/db";
 import { dhakaMidnight, resolvePeriod } from "../../lib/finance/period.js";
 import { type StoredTrackingDoc, trackingView } from "../../lib/landing/tracking.js";
-import { marketingBreakdown, marketingOverview } from "../../lib/marketing/report.js";
+import { landingFunnel, marketingBreakdown, marketingOverview } from "../../lib/marketing/report.js";
 import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 
 /**
@@ -38,8 +38,13 @@ export const marketingRouter = router({
   ),
 
   breakdown: protectedProcedure
-    .input(z.object({ period, touch, dimension: z.enum(["source", "medium", "campaign"]).default("campaign") }))
+    .input(z.object({ period, touch, dimension: z.enum(["source", "medium", "campaign", "content", "term"]).default("campaign") }))
     .query(({ ctx, input }) => marketingBreakdown(merchantObjectId(ctx), resolvePeriod(input.period), input.touch, input.dimension)),
+
+  /** Landing-page funnel: visits → cart → checkout → orders → delivered (optionally one page). */
+  funnel: protectedProcedure
+    .input(z.object({ period, landingPageId: z.string().regex(/^[a-f0-9]{24}$/).nullable().default(null) }))
+    .query(({ ctx, input }) => landingFunnel(merchantObjectId(ctx), resolvePeriod(input.period), input.landingPageId)),
 
   /** Which of this merchant's landing pages send to Meta / Google / TikTok. */
   trackingStatus: protectedProcedure.query(async ({ ctx }) => {

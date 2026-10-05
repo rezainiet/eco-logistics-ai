@@ -38,6 +38,7 @@ export function ConfirmDialog({
   tone = "warning",
   loading = false,
   onConfirm,
+  children,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -50,6 +51,8 @@ export function ConfirmDialog({
   tone?: "warning" | "neutral";
   loading?: boolean;
   onConfirm: () => void;
+  /** Optional extra content (e.g. a reason picker) between the text and the buttons. */
+  children?: ReactNode;
 }) {
   return (
     <Dialog open={open} onOpenChange={(v) => (loading ? null : onOpenChange(v))}>
@@ -67,6 +70,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {children}
         <DialogFooter>
           <Button
             variant="outline"

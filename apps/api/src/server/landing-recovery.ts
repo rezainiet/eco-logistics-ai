@@ -50,6 +50,7 @@ landingActivityRouter.post("/", activityLimiter, async (req, res) => {
         item: body.item,
         phone: body.phone,
         email: body.email,
+        touch: body.touch,
       },
       { ip: customerIp(req), userAgent: req.header("user-agent") ?? null },
     );

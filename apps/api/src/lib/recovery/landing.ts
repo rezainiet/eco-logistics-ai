@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
-import { MAX_CART_LINES, MAX_LINE_QUANTITY, normalizeBdMobile } from "@ecom/landing";
+import { MAX_CART_LINES, MAX_LINE_QUANTITY, normalizeBdMobile, sanitizeTouch } from "@ecom/landing";
+import { classifyTouch } from "../marketing/channel.js";
 import { Merchant, Product, RecoveryTask, TrackingEvent, availableStock, hasVariants } from "@ecom/db";
 import { resolvePublishedForOrder } from "../landing/resolve.js";
 import { getPlan } from "../plans.js";
@@ -26,7 +27,7 @@ const ID_RE = /^[a-f0-9]{24}$/;
 const CLIENT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]{1,64}@[^\s@<>()[\]\\,;:"]{1,190}\.[a-z]{2,24}$/i;
 
-export const LANDING_ACTIVITY_TYPES = ["add_to_cart", "remove_from_cart", "checkout_start", "identify", "checkout_submit"] as const;
+export const LANDING_ACTIVITY_TYPES = ["page_view", "add_to_cart", "remove_from_cart", "checkout_start", "identify", "checkout_submit"] as const;
 export type LandingActivityType = (typeof LANDING_ACTIVITY_TYPES)[number];
 
 export interface CartLineInput {
@@ -61,6 +62,31 @@ export interface LandingActivityInput {
   item?: unknown;
   phone?: unknown;
   email?: unknown;
+  /** page_view: the visit's marketing touch (UTM / ad-click id TYPE / referrer host). */
+  touch?: unknown;
+}
+
+/**
+ * The visit's marketing touch as stored on a page_view: validated field by
+ * field (@ecom/landing sanitizeTouch — no raw click ids, no query strings)
+ * and classified on the server with the same rule orders use. A visit
+ * without any attributable signal is "direct".
+ */
+export function visitTouch(raw: unknown, now = new Date()) {
+  const t = sanitizeTouch(raw, now);
+  if (!t) return { channel: "direct" as const, paid: false };
+  const { channel, paid } = classifyTouch(t);
+  return {
+    ...(t.source ? { source: t.source } : {}),
+    ...(t.medium ? { medium: t.medium } : {}),
+    ...(t.campaign ? { campaign: t.campaign } : {}),
+    ...(t.term ? { term: t.term } : {}),
+    ...(t.content ? { content: t.content } : {}),
+    ...(t.clickIdType ? { clickIdType: t.clickIdType } : {}),
+    ...(t.referrerHost ? { referrerHost: t.referrerHost } : {}),
+    channel,
+    paid,
+  };
 }
 
 export type LandingActivityResult =
@@ -161,6 +187,30 @@ export async function recordLandingActivity(
   if ((input.type === "add_to_cart" || input.type === "remove_from_cart") && !item) return { ok: true, recorded: false };
 
   const landing: LandingContext = { pageId: page.pageId, host: input.host.toLowerCase(), locale: page.locale };
+  if (input.type === "page_view") {
+    // A visit: no cart, no contact — only where it came from.
+    const touch = visitTouch(input.touch);
+    const recorded = await recordServerTrackingEvents(
+      merchantId,
+      [
+        {
+          sessionId: input.sessionId,
+          type: "page_view",
+          clientEventId: input.clientEventId,
+          occurredAt: new Date(),
+          url: `https://${landing.host}/`,
+          path: "/",
+          ...(touch.referrerHost ? { referrer: `https://${touch.referrerHost}/` } : {}),
+          ...(touch.source || touch.medium || touch.campaign
+            ? { campaign: { source: touch.source, medium: touch.medium, name: touch.campaign, term: touch.term, content: touch.content } }
+            : {}),
+          properties: { source: "landing_page", landing, touch },
+        },
+      ],
+      meta,
+    );
+    return { ok: true, recorded: recorded.inserted.size > 0 };
+  }
   const event: ServerTrackingEvent = {
     sessionId: input.sessionId,
     type: input.type as LandingActivityType,
@@ -186,7 +236,7 @@ export async function landingCartSnapshot(
   merchantId: Types.ObjectId,
   sessionId: string,
 ): Promise<{ landing: LandingContext; lines: SnapshotLine[] } | null> {
-  const ev = await TrackingEvent.findOne({ merchantId, sessionId, "properties.source": "landing_page" })
+  const ev = await TrackingEvent.findOne({ merchantId, sessionId, "properties.source": "landing_page", "properties.cart": { $exists: true } })
     .sort({ occurredAt: -1, receivedAt: -1 })
     .select("properties")
     .lean();

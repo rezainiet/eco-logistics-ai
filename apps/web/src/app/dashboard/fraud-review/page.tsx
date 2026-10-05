@@ -7,6 +7,7 @@ import {
   PhoneCall,
   PhoneOff,
   RotateCcw,
+  Send,
   ShieldAlert,
   ShieldCheck,
   XCircle,
@@ -15,6 +16,8 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { trpc } from "@/lib/trpc";
 import { flattenQueuePages, nextQueueCursor } from "@/lib/fraud/review-queue";
 import { QueueLoadMore } from "@/components/fraud/queue-load-more";
+import { VerificationHistory } from "@/components/fraud/verification-history";
+import { REJECT_REASONS, REQUEST_REASONS } from "@/lib/verification/reasons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,7 +43,7 @@ import { formatBDT, formatRelative } from "@/lib/formatters";
 import { REVIEW_BADGE } from "@/lib/status-badges";
 
 import { humanizeError } from "@/lib/friendly-errors";
-type FilterValue = "all_open" | "pending_call" | "no_answer";
+type FilterValue = "all_open" | "pending_call" | "no_answer" | "watch";
 
 type QueueItem = {
   id: string;
@@ -174,6 +177,8 @@ export default function FraudReviewPage() {
   const [filter, setFilter] = useState<FilterValue>("all_open");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notes, setNotes] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
+  const [requestReason, setRequestReason] = useState("");
   const [confirmRejectOpen, setConfirmRejectOpen] = useState(false);
   const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
   const [lastRejected, setLastRejected] = useState<LastRejected | null>(null);
@@ -204,6 +209,8 @@ export default function FraudReviewPage() {
 
   useEffect(() => {
     setNotes("");
+    setRejectReason("");
+    setRequestReason("");
   }, [selectedId]);
 
   async function invalidateAll() {
@@ -294,6 +301,17 @@ export default function FraudReviewPage() {
       await invalidateAll();
     },
     onError: (err) => toast.error("Update failed", humanizeError(err)),
+  });
+
+  // Watch-list (medium risk) order → into the verification queue; it can't
+  // be booked until someone verifies it.
+  const requestVerification = trpc.fraud.requestVerification.useMutation({
+    onSuccess: async () => {
+      toast.success("Sent to verification", "It won't be booked until it's verified.");
+      setSelectedId(null);
+      await invalidateAll();
+    },
+    onError: (err) => toast.error("Couldn't send to verification", humanizeError(err)),
   });
 
   const initiateCall = trpc.call.initiateCall.useMutation({
@@ -393,7 +411,14 @@ export default function FraudReviewPage() {
                 Sorted by risk score (highest first)
               </CardDescription>
             </div>
-            <Select value={filter} onValueChange={(v) => setFilter(v as FilterValue)}>
+            <Select
+              value={filter}
+              onValueChange={(v) => {
+                setFilter(v as FilterValue);
+                // A different list: open its first order, not the previous list's.
+                setSelectedId(null);
+              }}
+            >
               <SelectTrigger className="w-40">
                 <SelectValue />
               </SelectTrigger>
@@ -401,6 +426,7 @@ export default function FraudReviewPage() {
                 <SelectItem value="all_open">All open</SelectItem>
                 <SelectItem value="pending_call">Pending call</SelectItem>
                 <SelectItem value="no_answer">No answer</SelectItem>
+                <SelectItem value="watch">Watch (medium risk)</SelectItem>
               </SelectContent>
             </Select>
           </CardHeader>
@@ -794,6 +820,52 @@ export default function FraudReviewPage() {
                     reviewedAt={detail.data.fraud.reviewedAt}
                     notes={detail.data.fraud.reviewNotes}
                   />
+                ) : detail.data.fraud.reviewStatus === "optional_review" ||
+                  detail.data.fraud.reviewStatus === "not_required" ? (
+                  // Watch list (medium risk): bookable as it stands. The
+                  // merchant can pull it into verification so it is called
+                  // before the courier is booked.
+                  <div className="space-y-3 border-t border-stroke/8 pt-4">
+                    <p className="text-xs text-fg-subtle">
+                      This order can be booked as it is. Send it to verification if you want it
+                      called first — it won&apos;t be booked until it&apos;s verified.
+                    </p>
+                    <div className="space-y-1.5">
+                      <label
+                        htmlFor="request-reason"
+                        className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle"
+                      >
+                        Reason (optional)
+                      </label>
+                      <select
+                        id="request-reason"
+                        value={requestReason}
+                        onChange={(e) => setRequestReason(e.target.value)}
+                        className="w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg focus:border-brand/50 focus:outline-none focus:ring-2 focus:ring-brand/30"
+                      >
+                        <option value="">No specific reason</option>
+                        {REQUEST_REASONS.map((r) => (
+                          <option key={r.code} value={r.code}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <Button
+                      variant="brand"
+                      className="h-11 w-full disabled:opacity-60 md:h-10"
+                      disabled={requestVerification.isPending}
+                      onClick={() =>
+                        requestVerification.mutate({
+                          id: detail.data!.id,
+                          reasonCode: requestReason || undefined,
+                        })
+                      }
+                    >
+                      <Send className="mr-1.5 h-4 w-4" />
+                      {requestVerification.isPending ? "Sending…" : "Send to verification"}
+                    </Button>
+                  </div>
                 ) : (
                   <>
                 <div className="space-y-1.5">
@@ -904,6 +976,7 @@ export default function FraudReviewPage() {
                 ) : null}
                   </>
                 )}
+                <VerificationHistory orderId={detail.data.id} />
               </>
             )}
           </CardContent>
@@ -932,9 +1005,32 @@ export default function FraudReviewPage() {
           reject.mutate({
             id: pendingRejectId,
             notes: notes.trim() || undefined,
+            reasonCode: rejectReason || undefined,
           });
         }}
-      />
+      >
+        <div className="space-y-1.5">
+          <label
+            htmlFor="reject-reason"
+            className="text-2xs font-semibold uppercase tracking-[0.08em] text-fg-subtle"
+          >
+            Reason
+          </label>
+          <select
+            id="reject-reason"
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            className="w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-2 text-sm text-fg focus:border-brand/50 focus:outline-none focus:ring-2 focus:ring-brand/30"
+          >
+            <option value="">Choose a reason (optional)</option>
+            {REJECT_REASONS.map((r) => (
+              <option key={r.code} value={r.code}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

@@ -9,6 +9,7 @@ export const AUDIT_ACTIONS = [
   "review.rejected",
   "review.no_answer",
   "review.reopened",
+  "review.requested",
   "order.booked",
   "order.cancelled",
   "order.ingested",

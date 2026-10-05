@@ -56,14 +56,14 @@ export function endActivitySession(slug: string): void {
   }
 }
 
-export type ActivityType = "add_to_cart" | "remove_from_cart" | "checkout_start" | "identify" | "checkout_submit";
+export type ActivityType = "page_view" | "add_to_cart" | "remove_from_cart" | "checkout_start" | "identify" | "checkout_submit";
 
 export function reportActivity(
   slug: string,
   locale: string,
   type: ActivityType,
   cart: CartLine[],
-  extra: { item?: CartLine; phone?: string; email?: string } = {},
+  extra: { item?: CartLine; phone?: string; email?: string; touch?: unknown } = {},
 ): void {
   try {
     void fetch("/api/activity", {
@@ -79,6 +79,8 @@ export function reportActivity(
         ...(extra.item ? { item: { productId: extra.item.productId, ...(extra.item.variantId ? { variantId: extra.item.variantId } : {}), quantity: extra.item.quantity } } : {}),
         ...(extra.phone ? { phone: extra.phone } : {}),
         ...(extra.email ? { email: extra.email } : {}),
+        // A visit's marketing touch: UTM values, ad-click id TYPE, referrer host — no personal data.
+        ...(extra.touch ? { touch: extra.touch } : {}),
       }),
     }).catch(() => undefined);
   } catch {

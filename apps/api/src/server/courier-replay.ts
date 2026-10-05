@@ -113,7 +113,7 @@ export async function replayCourierInbox(args: {
           location: parsed.location,
         },
       ],
-      { source: "webhook", deliveredAt: parsed.deliveredAt },
+      { source: "webhook", deliveredAt: parsed.deliveredAt, courierFee: parsed.fee },
     );
 
     inbox.status = "succeeded";

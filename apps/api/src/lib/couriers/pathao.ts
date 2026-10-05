@@ -10,6 +10,7 @@ import {
 } from "./http.js";
 import {
   CourierError,
+  courierChargeOf,
   type AWBRequest,
   type AWBResponse,
   type CourierAdapter,
@@ -467,6 +468,8 @@ export interface PathaoWebhookPayload {
   /** Optional event note / hub name. */
   reason?: string;
   delivered_at?: string;
+  /** The parcel's delivery fee, on events that carry it. */
+  delivery_fee?: number | string;
 }
 
 export interface ParsedPathaoTracking {
@@ -476,6 +479,8 @@ export interface ParsedPathaoTracking {
   at: Date;
   description?: string;
   deliveredAt?: Date;
+  /** Courier charge, only when the payload states one. */
+  fee?: number;
 }
 
 /**
@@ -541,6 +546,7 @@ export function parsePathaoWebhook(payload: PathaoWebhookPayload): ParsedPathaoT
   const safeAt = Number.isNaN(at.getTime()) ? new Date() : at;
   const deliveredRaw = payload.delivered_at ? new Date(payload.delivered_at) : undefined;
   const safeDelivered = deliveredRaw && !Number.isNaN(deliveredRaw.getTime()) ? deliveredRaw : undefined;
+  const fee = courierChargeOf(payload.delivery_fee);
   return {
     trackingCode,
     providerStatus,
@@ -548,6 +554,7 @@ export function parsePathaoWebhook(payload: PathaoWebhookPayload): ParsedPathaoT
     at: safeAt,
     description: payload.reason ?? providerStatus,
     deliveredAt: safeDelivered,
+    ...(fee !== undefined ? { fee } : {}),
   };
 }
 

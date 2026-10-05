@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Types } from "mongoose";
 import { CallLog, Order } from "@ecom/db";
+import { normalizePhone as toE164 } from "../lib/phone.js";
 
 /**
  * Deterministic risk scoring engine. Pure-ish: given the order draft + a few
@@ -502,9 +503,13 @@ export function computeRisk(
 
   // --- Merchant blacklists — HARD BLOCK. Merchant explicitly opted these
   // numbers/addresses out; we honor it without a margin of error.
-  const normalizedPhone = normalizePhone(order.customer.phone);
+  // Compare in one canonical form: a merchant types "01711…" while orders
+  // carry "+8801711…" — raw digits would never match. E.164 (BD default)
+  // when the number normalises, digits otherwise.
+  const canonicalPhone = (p: string) => toE164(p) ?? normalizePhone(p);
+  const normalizedPhone = canonicalPhone(order.customer.phone);
   const blockedPhoneHit = (opts.blockedPhones ?? [])
-    .map((p) => normalizePhone(p))
+    .map((p) => canonicalPhone(p))
     .filter(Boolean)
     .some((p) => p === normalizedPhone);
   if (blockedPhoneHit) {

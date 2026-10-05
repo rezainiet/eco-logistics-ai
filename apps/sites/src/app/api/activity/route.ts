@@ -23,6 +23,7 @@ export async function POST(req: Request): Promise<Response> {
       item: b.item,
       phone: b.phone,
       email: b.email,
+      touch: b.touch,
     }),
   });
 }

@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/select";
 import { SettingsSection } from "@/components/settings/section";
 import { FormField, FormError } from "@/components/settings/form-field";
+import { CourierHealthPanel } from "@/components/settings/courier-health-panel";
 
 const COURIER_PROVIDERS = [
   {
@@ -87,6 +88,8 @@ type CourierId = (typeof COURIER_PROVIDERS)[number]["id"];
 export function CouriersSection() {
   const utils = trpc.useUtils();
   const couriers = trpc.merchants.getCouriers.useQuery();
+  // Connection & sync health per courier (webhook URL, shipments needing a look).
+  const health = trpc.merchants.courierHealth.useQuery(undefined, { staleTime: 30_000 });
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CourierId | null>(null);
 
@@ -137,83 +140,86 @@ export function CouriersSection() {
         ) : null}
         {configured.map((c) => {
           const meta = COURIER_PROVIDERS.find((p) => p.id === c.name);
+          const h = health.data?.find((x) => x.name === c.name);
           return (
-            <div
-              key={c.name}
-              // bg-surface-overlay (instead of the previous `bg-white/5`)
-              // gives a real surface tone in both themes — `white/5` was
-              // nearly invisible on light surfaces. Spacing/breakpoints
-              // unchanged so the layout tests still pass.
-              className="flex flex-col gap-3 rounded-lg border border-stroke/8 bg-surface-overlay p-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="flex items-start gap-3">
-                <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-md bg-surface-overlay text-xs font-bold uppercase text-brand">
-                  {(meta?.label ?? c.name).slice(0, 2)}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-fg">
-                      {meta?.label ?? c.name}
-                    </span>
-                    {c.enabled ? (
-                      <Badge
-                        variant="outline"
-                        className="border-transparent bg-success-subtle text-success"
-                      >
-                        Enabled
-                      </Badge>
-                    ) : (
-                      <Badge
-                        variant="outline"
-                        className="border-transparent bg-surface-raised text-fg-muted"
-                      >
-                        Disabled
-                      </Badge>
-                    )}
+            // bg-surface-overlay (instead of the previous `bg-white/5`)
+            // gives a real surface tone in both themes — `white/5` was
+            // nearly invisible on light surfaces.
+            <div key={c.name} className="space-y-3 rounded-lg border border-stroke/8 bg-surface-overlay p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-md bg-surface-overlay text-xs font-bold uppercase text-brand">
+                    {(meta?.label ?? c.name).slice(0, 2)}
                   </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
-                    <span className="inline-flex items-center gap-1.5">
-                      <Key className="h-3 w-3" />
-                      {c.apiKeyMasked || "••••"}
-                    </span>
-                    <span>Account: {c.accountId}</span>
-                    {c.preferredDistricts.length > 0 ? (
-                      <span>
-                        {c.preferredDistricts.length} preferred district
-                        {c.preferredDistricts.length === 1 ? "" : "s"}
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-fg">
+                        {meta?.label ?? c.name}
                       </span>
+                      {c.enabled ? (
+                        <Badge
+                          variant="outline"
+                          className="border-transparent bg-success-subtle text-success"
+                        >
+                          Enabled
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className="border-transparent bg-surface-raised text-fg-muted"
+                        >
+                          Disabled
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Key className="h-3 w-3" />
+                        {c.apiKeyMasked || "••••"}
+                      </span>
+                      <span>Account: {c.accountId}</span>
+                      {c.preferredDistricts.length > 0 ? (
+                        <span>
+                          {c.preferredDistricts.length} preferred district
+                          {c.preferredDistricts.length === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                    </div>
+                    {c.validationError ? (
+                      <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-danger">
+                        <AlertCircle className="h-3 w-3" /> {c.validationError}
+                      </p>
                     ) : null}
                   </div>
-                  {c.validationError ? (
-                    <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-danger">
-                      <AlertCircle className="h-3 w-3" /> {c.validationError}
-                    </p>
-                  ) : null}
+                </div>
+                {/*
+                  Touch targets here are now min-h-9 (36px) buttons in a
+                  gap-2 row that wraps on the smallest viewports — better
+                  than the previous 32px (audit P1-12). Still under
+                  Apple's 44pt floor by 2px; keeping them at sm because
+                  the row already wraps to a new flex column on
+                  <640px and the buttons get full width there.
+                */}
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openEdit(c.name as CourierId)}
+                    className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface"
+                  >
+                    <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                    Edit
+                  </Button>
+                  <RemoveCourierButton
+                    name={c.name as CourierId}
+                    onRemoved={() => {
+                      void utils.merchants.getCouriers.invalidate();
+                      void utils.merchants.courierHealth.invalidate();
+                    }}
+                  />
                 </div>
               </div>
-              {/*
-                Touch targets here are now min-h-9 (36px) buttons in a
-                gap-2 row that wraps on the smallest viewports — better
-                than the previous 32px (audit P1-12). Still under
-                Apple's 44pt floor by 2px; keeping them at sm because
-                the row already wraps to a new flex column on
-                <640px and the buttons get full width there.
-              */}
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openEdit(c.name as CourierId)}
-                  className="border-stroke/14 bg-surface-overlay text-fg-muted hover:bg-surface"
-                >
-                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
-                  Edit
-                </Button>
-                <RemoveCourierButton
-                  name={c.name as CourierId}
-                  onRemoved={() => void utils.merchants.getCouriers.invalidate()}
-                />
-              </div>
+              {h ? <CourierHealthPanel health={h} /> : null}
             </div>
           );
         })}
@@ -227,6 +233,7 @@ export function CouriersSection() {
         onSaved={() => {
           setOpen(false);
           void utils.merchants.getCouriers.invalidate();
+          void utils.merchants.courierHealth.invalidate();
         }}
       />
     </SettingsSection>

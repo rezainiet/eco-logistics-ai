@@ -10,6 +10,7 @@ import {
   PhoneOff,
   ShieldAlert,
   TrendingUp,
+  Truck,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -24,6 +25,7 @@ import { trpc } from "@/lib/trpc";
 import { formatRelative } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import { type AlertKind, buildAccountAlerts } from "@/lib/notifications/account-alerts";
+import { COURIER_NOTICE_KINDS, courierNoticeRows } from "@/lib/notifications/courier-notices";
 
 const ALERT_ICON: Record<AlertKind, LucideIcon> = {
   billing_past_due: AlertCircle,
@@ -45,7 +47,17 @@ type NotificationItem = {
   body?: string;
   href?: string;
   timestamp?: Date | string;
+  /** Inbox notification id — opening the row marks it read. */
+  noticeId?: string;
 };
+
+/** Unread courier outcome notices (delivery problems, returns) — shared by the drawer and the bell. */
+function useCourierNotices() {
+  return trpc.notifications.list.useQuery(
+    { onlyUnread: true, kinds: [...COURIER_NOTICE_KINDS], limit: 20, cursor: null },
+    { staleTime: 30_000 },
+  );
+}
 
 const TONE_BADGE: Record<NotificationTone, string> = {
   danger: "bg-danger-subtle text-danger",
@@ -65,9 +77,14 @@ export function NotificationsDrawer({
   onOpenChange,
   unreadCount: _unreadCount,
 }: NotificationsDrawerProps) {
+  const utils = trpc.useUtils();
   const fraudStats = trpc.fraud.getReviewStats.useQuery({ days: 7 });
   const plan = trpc.billing.getPlan.useQuery(undefined, { staleTime: 60_000 });
   const usage = trpc.billing.getUsage.useQuery(undefined, { staleTime: 60_000 });
+  const courierNotices = useCourierNotices();
+  const markRead = trpc.notifications.markRead.useMutation({
+    onSuccess: () => void utils.notifications.list.invalidate(),
+  });
   const recentCalls = trpc.callCenter.getCallLogs.useQuery({
     limit: 5,
     callType: "all",
@@ -84,6 +101,9 @@ export function NotificationsDrawer({
       reviewQueue: fraudStats.data?.queue,
     })) {
       out.push({ id: a.id, tone: a.tone, icon: ALERT_ICON[a.kind], title: a.title, body: a.body, href: a.href });
+    }
+    for (const n of courierNoticeRows(courierNotices.data?.items ?? [])) {
+      out.push({ ...n, icon: Truck });
     }
 
     // Informational rows below are not alerts and are never counted by the bell.
@@ -117,7 +137,7 @@ export function NotificationsDrawer({
     }
 
     return out;
-  }, [fraudStats.data, plan.data, usage.data, recentCalls.data]);
+  }, [fraudStats.data, plan.data, usage.data, courierNotices.data, recentCalls.data]);
 
   const isLoading =
     fraudStats.isLoading || plan.isLoading || usage.isLoading || recentCalls.isLoading;
@@ -157,9 +177,11 @@ export function NotificationsDrawer({
               {items.map((item) => {
                 const Icon = item.icon;
                 const Wrapper: React.ElementType = item.href ? Link : "div";
-                const wrapperProps = item.href
-                  ? { href: item.href, onClick: () => onOpenChange(false) }
-                  : {};
+                const open = () => {
+                  if (item.noticeId) markRead.mutate({ id: item.noticeId });
+                  onOpenChange(false);
+                };
+                const wrapperProps = item.href ? { href: item.href, onClick: open } : {};
                 return (
                   <li key={item.id}>
                     <Wrapper
@@ -201,16 +223,19 @@ export function NotificationsDrawer({
 }
 
 /**
- * Unread count for the bell: the number of account alerts — the same list
- * the drawer renders as its alert rows, built by the same function.
+ * Unread count for the bell: the account alerts plus unread courier notices —
+ * the same rows the drawer renders as alerts, from the same data.
  */
 export function useNotificationCount(): number {
   const fraudStats = trpc.fraud.getReviewStats.useQuery({ days: 7 });
   const plan = trpc.billing.getPlan.useQuery(undefined, { staleTime: 60_000 });
   const usage = trpc.billing.getUsage.useQuery(undefined, { staleTime: 60_000 });
-  return buildAccountAlerts({
-    subscription: plan.data?.subscription,
-    meters: usage.data?.meters,
-    reviewQueue: fraudStats.data?.queue,
-  }).length;
+  const courierNotices = useCourierNotices();
+  return (
+    buildAccountAlerts({
+      subscription: plan.data?.subscription,
+      meters: usage.data?.meters,
+      reviewQueue: fraudStats.data?.queue,
+    }).length + (courierNotices.data?.items.length ?? 0)
+  );
 }

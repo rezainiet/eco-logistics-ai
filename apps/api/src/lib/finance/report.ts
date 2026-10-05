@@ -249,14 +249,34 @@ function pnlFor(d: DeliveredAgg | undefined, r: ReturnedAgg | undefined, entries
     courierReturned: ret.fee,
     courierManual: sum("courier"),
     advertising: sum("advertising"),
+    marketing: sum("marketing"),
     office: sum("office"),
+    software: sum("software"),
     salary: sum("salary"),
     otherExpenses: sum("other_expense"),
+    refunds: sum("refunds"),
   };
   const productCost = p.productCostOrders + p.productCostManual;
   const courierCost = p.courierDelivered + p.courierReturned + p.courierManual;
-  const totalExpenses = productCost + courierCost + p.advertising + p.office + p.salary + p.otherExpenses;
-  return { ...p, productCost, courierCost, totalExpenses, netProfit: p.revenue + p.otherIncome - totalExpenses };
+  const operatingExpenses = p.office + p.software + p.salary + p.otherExpenses;
+  const totalExpenses = p.refunds + productCost + courierCost + p.advertising + p.marketing + operatingExpenses;
+  // P&L structure (refunds are contra-revenue):
+  //   net revenue  = delivered revenue − refunds
+  //   gross profit = net revenue − product cost − courier cost
+  //   net profit   = gross profit − advertising − marketing − operating + other income
+  // which is exactly revenue + other income − all expenses (the original rule).
+  const netRevenue = p.revenue - p.refunds;
+  const grossProfit = netRevenue - productCost - courierCost;
+  return {
+    ...p,
+    productCost,
+    courierCost,
+    operatingExpenses,
+    totalExpenses,
+    netRevenue,
+    grossProfit,
+    netProfit: p.revenue + p.otherIncome - totalExpenses,
+  };
 }
 
 export type FinanceWarningCode =
@@ -357,12 +377,19 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
       ordersMissingFee: missingFee,
       complete: missingFee === 0,
     },
+    refunds: round2(p.refunds),
+    netRevenue: round2(p.netRevenue),
+    grossProfit: round2(p.grossProfit),
     advertising: round2(p.advertising),
+    marketing: round2(p.marketing),
     office: round2(p.office),
+    software: round2(p.software),
     salary: round2(p.salary),
     otherExpenses: round2(p.otherExpenses),
+    operatingExpenses: round2(p.operatingExpenses),
     totalExpenses: round2(p.totalExpenses),
     netProfit: round2(p.netProfit),
+    /** False when a delivered/returned order lacks its product cost or courier fee: profit is then overstated. */
     costComplete: p.del.missingCost === 0 && missingFee === 0,
     byCategory: entries
       .map((e) => ({
@@ -399,18 +426,29 @@ export async function financeMonthly(merchantId: Types.ObjectId, year: number, p
       month,
       revenue: round2(p.revenue),
       deliveryCharges: round2(p.del.deliveryCharges),
+      deliveredOrders: p.del.exactOrders + p.del.fallbackOrders,
+      refunds: round2(p.refunds),
+      netRevenue: round2(p.netRevenue),
       otherIncome: round2(p.otherIncome),
       productCost: round2(p.productCost),
       courierCost: round2(p.courierCost),
+      grossProfit: round2(p.grossProfit),
       advertising: round2(p.advertising),
+      marketing: round2(p.marketing),
       office: round2(p.office),
+      software: round2(p.software),
       salary: round2(p.salary),
       otherExpenses: round2(p.otherExpenses),
+      operatingExpenses: round2(p.operatingExpenses),
       expenses: round2(p.totalExpenses),
       netProfit: round2(p.netProfit),
       costComplete: p.del.missingCost === 0 && p.del.missingFee + p.ret.missingFee === 0,
       fallbackDatedOrders: p.del.fallbackOrders + p.ret.fallbackOrders,
     };
   });
-  return { year, currency: "BDT" as const, months };
+  // Year summary = the sum of its months (same rules, no separate computation).
+  type Num = Exclude<keyof (typeof months)[number], "month" | "costComplete">;
+  const keys = Object.keys(months[0]!).filter((k) => k !== "month" && k !== "costComplete") as Num[];
+  const totals = Object.fromEntries(keys.map((k) => [k, round2(months.reduce((s, m) => s + (m[k] as number), 0))])) as Record<Num, number>;
+  return { year, currency: "BDT" as const, months, totals: { ...totals, costComplete: months.every((m) => m.costComplete) } };
 }

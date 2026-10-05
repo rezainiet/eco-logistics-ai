@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Pencil, Plus, Receipt, Undo2 } from "lucide-react";
+import { History, Loader2, Pencil, Plus, Receipt, Undo2 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { toast } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,25 @@ import { formatBDT } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import { EntryDialog, type EditableEntry, type EntryType } from "./entry-dialog";
 import type { PeriodValue } from "./period";
+import { changeText } from "@/lib/accounting/pnl";
+
+/** One entry's created / edited / voided trail (audit log). */
+function EntryHistory({ id }: { id: string }) {
+  const q = trpc.finance.entryHistory.useQuery({ id });
+  if (q.isLoading) return <p className="text-xs text-fg-subtle">Loading history…</p>;
+  if (q.isError) return <p className="text-xs text-danger">Could not load history.</p>;
+  return (
+    <ol className="space-y-1 text-xs text-fg-subtle">
+      {(q.data ?? []).map((h, i) => (
+        <li key={i}>
+          <span className="tabular-nums text-fg-faint">{new Date(h.at).toLocaleString()}</span> ·{" "}
+          {h.action === "created" ? "Created" : h.action === "voided" ? `Voided${h.reason ? ` — ${h.reason}` : ""}` : `Edited: ${changeText(h.changes) || "no visible change"}`}
+          {h.by ? <span className="text-fg-faint"> · {h.by}</span> : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 /** Income or expense entries of the period, with add / edit / void. */
 export function EntriesTable({ type, period }: { type: EntryType; period: PeriodValue }) {
@@ -20,6 +39,7 @@ export function EntriesTable({ type, period }: { type: EntryType; period: Period
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EditableEntry | null>(null);
   const [voiding, setVoiding] = useState<EditableEntry | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
   const list = trpc.finance.list.useQuery({ period, type, includeVoid: showVoid, limit: 200 });
   const voidEntry = trpc.finance.void.useMutation({
     onSuccess: () => {
@@ -92,7 +112,7 @@ export function EntriesTable({ type, period }: { type: EntryType; period: Period
             <tbody className="divide-y divide-stroke/8">
               {items.map((e) => {
                 const isVoid = e.status === "void";
-                return (
+                return [
                   <tr key={e.id} className={cn(isVoid && "opacity-60")}>
                     <td className="whitespace-nowrap px-4 py-3 tabular-nums">{e.occurredOn}</td>
                     <td className="px-4 py-3">
@@ -109,8 +129,18 @@ export function EntriesTable({ type, period }: { type: EntryType; period: Period
                     </td>
                     <td className={cn("whitespace-nowrap px-4 py-3 text-right font-medium tabular-nums", isVoid && "line-through")}>{formatBDT(e.amount)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label="History"
+                          aria-expanded={historyId === e.id}
+                          onClick={() => setHistoryId(historyId === e.id ? null : e.id)}
+                        >
+                          <History className="h-4 w-4" />
+                        </Button>
                       {!isVoid ? (
-                        <div className="flex justify-end gap-1">
+                        <>
                           <Button
                             size="sm"
                             variant="ghost"
@@ -125,11 +155,19 @@ export function EntriesTable({ type, period }: { type: EntryType; period: Period
                           <Button size="sm" variant="ghost" aria-label="Void" onClick={() => setVoiding({ ...e, type: e.type as EntryType })}>
                             <Undo2 className="h-4 w-4" />
                           </Button>
-                        </div>
+                        </>
                       ) : null}
+                      </div>
                     </td>
-                  </tr>
-                );
+                  </tr>,
+                  historyId === e.id ? (
+                    <tr key={`${e.id}-history`}>
+                      <td colSpan={5} className="bg-surface-raised/40 px-4 py-3">
+                        <EntryHistory id={e.id} />
+                      </td>
+                    </tr>
+                  ) : null,
+                ];
               })}
             </tbody>
           </table>

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Loader2, Plus, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, Coins, Loader2, Plus, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
@@ -12,10 +13,13 @@ import { EntriesTable } from "./entries-table";
 import { EntryDialog, dhakaToday } from "./entry-dialog";
 import { MonthlyChart } from "./monthly-chart";
 import { PeriodPicker, periodLabel, type PeriodValue } from "./period";
+import { OrderProfitTable } from "./order-profit";
+import { pnlLines } from "@/lib/accounting/pnl";
 
-type Tab = "overview" | "income" | "expenses" | "reports";
+type Tab = "overview" | "orders" | "income" | "expenses" | "reports";
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
   ["overview", "Overview"],
+  ["orders", "Order profit"],
   ["income", "Income"],
   ["expenses", "Expenses"],
   ["reports", "Reports"],
@@ -41,8 +45,8 @@ export function AccountingPage() {
         }
       />
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex gap-1 rounded-lg border border-stroke/10 bg-surface p-1" role="tablist" aria-label="Accounting sections">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap gap-1 self-start rounded-lg border border-stroke/10 bg-surface p-1" role="tablist" aria-label="Accounting sections">
           {TABS.map(([key, label]) => (
             <button
               key={key}
@@ -62,6 +66,7 @@ export function AccountingPage() {
       </div>
 
       {tab === "overview" ? <Overview period={period} /> : null}
+      {tab === "orders" ? <OrderProfitTable period={period} /> : null}
       {tab === "income" ? <EntriesTable type="income" period={period} /> : null}
       {tab === "expenses" ? <EntriesTable type="expense" period={period} /> : null}
       {tab === "reports" ? <Reports /> : null}
@@ -85,51 +90,31 @@ function Overview({ period }: { period: PeriodValue }) {
   }
   const s = summary.data!;
   const income = s.revenue.realized + s.otherIncome;
-
-  const lines: Array<{ label: string; value: number; note?: string; sign: "+" | "−" }> = [
-    {
-      label: "Revenue (delivered orders)",
-      value: s.revenue.realized,
-      sign: "+",
-      note: [
-        s.revenue.fallbackDated.orders > 0
-          ? `${s.revenue.exact.orders} with delivery time · ${s.revenue.fallbackDated.orders} older, dated by last update (${formatBDT(s.revenue.fallbackDated.amount)})`
-          : `${s.revenue.deliveredOrders} delivered order${s.revenue.deliveredOrders === 1 ? "" : "s"}`,
-        // Delivery charges are inside the order totals — shown as a split, not extra income.
-        s.revenue.deliveryCharges > 0 ? `${formatBDT(s.revenue.productSales)} products + ${formatBDT(s.revenue.deliveryCharges)} delivery charges` : null,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    },
-    ...(s.otherIncome > 0 ? [{ label: "Other income", value: s.otherIncome, sign: "+" as const }] : []),
-    {
-      label: "Product cost",
-      value: s.productCost.total,
-      sign: "−",
-      note: s.productCost.ordersMissingCost > 0 ? `Cost not recorded for ${s.productCost.ordersMissingCost} order(s)` : undefined,
-    },
-    {
-      label: "Courier cost",
-      value: s.courierCost.total,
-      sign: "−",
-      note: [
-        s.courierCost.fromReturned > 0 ? `incl. ${formatBDT(s.courierCost.fromReturned)} on returned parcels` : null,
-        s.courierCost.ordersMissingFee > 0 ? `Not recorded for ${s.courierCost.ordersMissingFee} order(s)` : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || undefined,
-    },
-    { label: "Advertising", value: s.advertising, sign: "−" },
-    { label: "Office rent", value: s.office, sign: "−" },
-    { label: "Salary", value: s.salary, sign: "−" },
-    { label: "Other expenses", value: s.otherExpenses, sign: "−" },
-  ];
+  const lines = pnlLines(s);
+  const notes: Record<string, string | undefined> = {
+    revenue: [
+      s.revenue.fallbackDated.orders > 0
+        ? `${s.revenue.exact.orders} with delivery time · ${s.revenue.fallbackDated.orders} older, dated by last update (${formatBDT(s.revenue.fallbackDated.amount)})`
+        : `${s.revenue.deliveredOrders} delivered order${s.revenue.deliveredOrders === 1 ? "" : "s"}`,
+      // Delivery charges are inside the order totals — shown as a split, not extra income.
+      s.revenue.deliveryCharges > 0 ? `${formatBDT(s.revenue.productSales)} products + ${formatBDT(s.revenue.deliveryCharges)} delivery charges` : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
 
   return (
     <div className="space-y-6">
       <div className="text-xs uppercase tracking-wide text-fg-faint">{periodLabel(period)}</div>
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Revenue" value={formatBDT(income)} icon={TrendingUp} tone="success" footer={<span>Delivered orders + other income</span>} />
+        <StatCard
+          label="Gross profit"
+          value={<span className={cn(s.grossProfit < 0 && "text-danger")}>{formatBDT(s.grossProfit)}</span>}
+          icon={Coins}
+          tone={s.grossProfit < 0 ? "danger" : "success"}
+          footer={!s.costComplete ? <span className="text-warning">Some costs not recorded</span> : <span>After product &amp; courier cost</span>}
+        />
         <StatCard label="Expenses" value={formatBDT(s.totalExpenses)} icon={TrendingDown} tone="warning" />
         <StatCard
           label="Net profit"
@@ -154,23 +139,42 @@ function Overview({ period }: { period: PeriodValue }) {
         <div className="rounded-xl border border-stroke/10 bg-surface lg:col-span-3">
           <div className="border-b border-stroke/8 px-4 py-3 text-sm font-semibold">Profit &amp; loss</div>
           <dl className="divide-y divide-stroke/8 text-sm">
-            {lines.map((l) => (
-              <div key={l.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <dt>
-                  {l.label}
-                  {l.note ? <span className={cn("ml-2 text-xs", l.note.includes("not recorded") || l.note.includes("Not recorded") ? "text-warning" : "text-fg-subtle")}>{l.note}</span> : null}
-                </dt>
-                <dd className="tabular-nums">
-                  {l.sign === "−" && l.value > 0 ? "− " : ""}
-                  {formatBDT(l.value)}
-                </dd>
-              </div>
-            ))}
-            <div className="flex items-center justify-between px-4 py-3 font-semibold">
-              <dt>Net profit</dt>
-              <dd className={cn("tabular-nums", s.netProfit < 0 && "text-danger")}>{formatBDT(s.netProfit)}</dd>
-            </div>
+            {lines.map((l) =>
+              l.kind === "subtotal" ? (
+                <div key={l.key} className="flex items-center justify-between gap-3 bg-surface-raised/40 px-4 py-3 font-semibold">
+                  <dt>
+                    {l.label}
+                    {l.incomplete ? (
+                      <span className="ml-2 text-xs font-normal text-warning" title="A delivered or returned order has no recorded product or courier cost — the real figure is lower">
+                        costs incomplete
+                      </span>
+                    ) : null}
+                  </dt>
+                  <dd className={cn("whitespace-nowrap tabular-nums", l.value < 0 && "text-danger")}>{formatBDT(l.value)}</dd>
+                </div>
+              ) : (
+                <div key={l.key} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <dt>
+                    {l.label}
+                    {l.note || notes[l.key] ? (
+                      <span className={cn("ml-2 text-xs", l.warn ? "text-warning" : "text-fg-subtle")}>{l.note ?? notes[l.key]}</span>
+                    ) : null}
+                  </dt>
+                  <dd className="whitespace-nowrap tabular-nums">
+                    {l.sign === "−" && l.value > 0 ? "− " : ""}
+                    {formatBDT(l.value)}
+                  </dd>
+                </div>
+              ),
+            )}
           </dl>
+          <p className="border-t border-stroke/8 px-4 py-2.5 text-2xs text-fg-faint">
+            Profit by marketing channel is in{" "}
+            <Link href="/dashboard/marketing" className="text-brand hover:underline">
+              Marketing
+            </Link>
+            ; each order&apos;s profit is under Order profit.
+          </p>
         </div>
 
         <div className="space-y-4 lg:col-span-2">
@@ -195,7 +199,7 @@ function Overview({ period }: { period: PeriodValue }) {
                     <span>
                       {c.label} <span className="text-xs text-fg-faint">× {c.count}</span>
                     </span>
-                    <span className={cn("tabular-nums", c.type === "income" ? "text-success" : "")}>
+                    <span className={cn("whitespace-nowrap tabular-nums", c.type === "income" ? "text-success" : "")}>
                       {c.type === "income" ? "+ " : "− "}
                       {formatBDT(c.total)}
                     </span>
@@ -215,10 +219,7 @@ function Reports() {
   const [year, setYear] = useState(currentYear);
   const monthly = trpc.finance.monthly.useQuery({ year });
   const months = monthly.data?.months ?? [];
-  const total = months.reduce(
-    (a, m) => ({ revenue: a.revenue + m.revenue + m.otherIncome, expenses: a.expenses + m.expenses, net: a.net + m.netProfit }),
-    { revenue: 0, expenses: 0, net: 0 },
-  );
+  const t = monthly.data?.totals;
 
   return (
     <div className="space-y-6">
@@ -255,6 +256,7 @@ function Reports() {
                 <tr>
                   <th className="px-4 py-3 font-medium">Month</th>
                   <th className="px-4 py-3 text-right font-medium">Revenue</th>
+                  <th className="px-4 py-3 text-right font-medium">Gross profit</th>
                   <th className="px-4 py-3 text-right font-medium">Expenses</th>
                   <th className="px-4 py-3 text-right font-medium">Net profit</th>
                 </tr>
@@ -276,16 +278,23 @@ function Reports() {
                       ) : null}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{formatBDT(m.revenue + m.otherIncome)}</td>
+                    <td className={cn("px-4 py-2.5 text-right tabular-nums", m.grossProfit < 0 && "text-danger")}>{formatBDT(m.grossProfit)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{formatBDT(m.expenses)}</td>
                     <td className={cn("px-4 py-2.5 text-right font-medium tabular-nums", m.netProfit < 0 && "text-danger")}>{formatBDT(m.netProfit)}</td>
                   </tr>
                 ))}
-                <tr className="font-semibold">
-                  <td className="px-4 py-3">Year</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{formatBDT(total.revenue)}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{formatBDT(total.expenses)}</td>
-                  <td className={cn("px-4 py-3 text-right tabular-nums", total.net < 0 && "text-danger")}>{formatBDT(total.net)}</td>
-                </tr>
+                {t ? (
+                  <tr className="font-semibold">
+                    <td className="px-4 py-3">
+                      Year {year}
+                      {!t.costComplete ? <span className="ml-2 text-xs font-normal text-warning">costs incomplete</span> : null}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums">{formatBDT(t.revenue + t.otherIncome)}</td>
+                    <td className={cn("px-4 py-3 text-right tabular-nums", t.grossProfit < 0 && "text-danger")}>{formatBDT(t.grossProfit)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{formatBDT(t.expenses)}</td>
+                    <td className={cn("px-4 py-3 text-right tabular-nums", t.netProfit < 0 && "text-danger")}>{formatBDT(t.netProfit)}</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

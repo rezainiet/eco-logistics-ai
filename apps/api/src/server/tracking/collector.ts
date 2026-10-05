@@ -747,6 +747,9 @@ export interface ServerTrackingEvent {
   properties: Record<string, unknown>;
   phone?: string;
   email?: string;
+  /** Campaign of the visit (UTM), already validated by the caller. Lands on the session when it is the first event. */
+  campaign?: { source?: string; medium?: string; name?: string; term?: string; content?: string };
+  referrer?: string;
 }
 
 /**
@@ -771,6 +774,8 @@ export async function recordServerTrackingEvents(
       sessionId,
       url: ev.url,
       path: ev.path,
+      referrer: ev.referrer,
+      campaign: ev.campaign,
       properties: ev.properties,
     };
     return {
@@ -787,6 +792,16 @@ export async function recordServerTrackingEvents(
         clientEventId: ev.clientEventId,
         url: clamp(ev.url, 1000),
         path: clamp(ev.path, 500),
+        referrer: clamp(ev.referrer, 1000),
+        campaign: ev.campaign
+          ? {
+              source: clamp(ev.campaign.source, 80),
+              medium: clamp(ev.campaign.medium, 80),
+              name: clamp(ev.campaign.name, 200),
+              term: clamp(ev.campaign.term, 120),
+              content: clamp(ev.campaign.content, 200),
+            }
+          : undefined,
         properties: safeProps(ev.properties),
         phone: ev.phone,
         email: ev.email,

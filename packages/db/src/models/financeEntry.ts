@@ -25,10 +25,13 @@ export type FinanceEntryStatus = (typeof FINANCE_ENTRY_STATUSES)[number];
 /** Report bucket each category rolls up into on the accounting overview. */
 export type FinanceBucket =
   | "other_income"
+  | "refunds"
   | "product_cost"
   | "courier"
   | "advertising"
+  | "marketing"
   | "office"
+  | "software"
   | "salary"
   | "other_expense";
 
@@ -53,8 +56,16 @@ export const FINANCE_CATEGORIES: readonly FinanceCategory[] = [
   { key: "ads_meta", type: "expense", label: "Meta / Facebook ads", bucket: "advertising" },
   { key: "ads_google", type: "expense", label: "Google ads", bucket: "advertising" },
   { key: "ads_tiktok", type: "expense", label: "TikTok ads", bucket: "advertising" },
+  { key: "marketing_other", type: "expense", label: "Other marketing (influencers, print, events)", bucket: "marketing" },
   { key: "office_rent", type: "expense", label: "Office rent", bucket: "office" },
+  { key: "software", type: "expense", label: "Software & subscriptions", bucket: "software" },
   { key: "salary", type: "expense", label: "Salary", bucket: "salary" },
+  /**
+   * Money paid back to customers for DELIVERED orders (cash on delivery has
+   * no automatic refund). Reduces revenue on the P&L; the order itself stays
+   * delivered — historical orders are never rewritten.
+   */
+  { key: "customer_refund", type: "expense", label: "Customer refunds (delivered orders)", bucket: "refunds" },
   { key: "other", type: "expense", label: "Other", bucket: "other_expense" },
 ];
 

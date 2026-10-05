@@ -8,6 +8,7 @@ import {
 } from "./http.js";
 import {
   CourierError,
+  courierChargeOf,
   type AWBRequest,
   type AWBResponse,
   type CourierAdapter,
@@ -339,6 +340,8 @@ export interface SteadfastWebhookPayload {
   /** ISO timestamp from the courier. */
   updated_at?: string;
   cod_amount?: number;
+  /** The parcel's delivery charge, on delivery-status notifications that carry it. */
+  delivery_charge?: number | string;
   /** Free-form event note. */
   note?: string;
 }
@@ -351,6 +354,8 @@ export interface ParsedTrackingWebhook {
   normalizedStatus: NormalizedTrackingStatus;
   at: Date;
   description?: string;
+  /** Courier charge, only when the payload states one. */
+  fee?: number;
 }
 
 /**
@@ -385,6 +390,7 @@ export function parseSteadfastWebhook(
   if (!trackingCode) return null;
   const providerStatus = (payload.status ?? "unknown").trim();
   const at = payload.updated_at ? new Date(payload.updated_at) : new Date();
+  const fee = courierChargeOf(payload.delivery_charge);
   return {
     trackingCode,
     ...(consignmentId ? { providerRef: consignmentId } : {}),
@@ -392,6 +398,7 @@ export function parseSteadfastWebhook(
     normalizedStatus: normalizeStatus(providerStatus),
     at: Number.isNaN(at.getTime()) ? new Date() : at,
     description: payload.note ?? providerStatus,
+    ...(fee !== undefined ? { fee } : {}),
   };
 }
 

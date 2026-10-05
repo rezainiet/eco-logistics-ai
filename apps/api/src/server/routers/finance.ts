@@ -1,10 +1,11 @@
 import { TRPCError } from "@trpc/server";
 import { Types } from "mongoose";
 import { z } from "zod";
-import { FINANCE_CATEGORIES, FinanceEntry, financeCategory, type FinanceEntry as FinanceEntryDoc } from "@ecom/db";
+import { AuditLog, FINANCE_CATEGORIES, FinanceEntry, financeCategory, type FinanceEntry as FinanceEntryDoc } from "@ecom/db";
 import { writeAudit } from "../../lib/audit.js";
 import { dhakaMidnight, resolvePeriod } from "../../lib/finance/period.js";
 import { financeMonthly, financeSummary } from "../../lib/finance/report.js";
+import { orderProfitList } from "../../lib/finance/order-cost.js";
 import { merchantObjectId, protectedProcedure, router } from "../trpc.js";
 
 /**
@@ -239,6 +240,58 @@ export const financeRouter = router({
       });
       return entryView(updated as EntryDoc);
     }),
+
+  /**
+   * Order-level profit for the period: delivered orders (revenue − product
+   * cost − courier fee) and returned parcels (courier fee), dated like the
+   * P&L. `missingOnly` lists the orders whose cost is not recorded.
+   */
+  orderProfit: protectedProcedure
+    .input(
+      z.object({
+        period,
+        missingOnly: z.boolean().default(false),
+        limit: z.number().int().min(1).max(200).default(50),
+        cursor: z.string().max(200).nullable().default(null),
+      }),
+    )
+    .query(({ ctx, input }) =>
+      orderProfitList(merchantObjectId(ctx), resolvePeriod(input.period), { missingOnly: input.missingOnly, limit: input.limit, cursor: input.cursor }),
+    ),
+
+  /** One entry's change history (created / edited / voided), oldest first, from the audit trail. */
+  entryHistory: protectedProcedure.input(z.object({ id: z.string().max(24) })).query(async ({ ctx, input }) => {
+    const merchantId = merchantObjectId(ctx);
+    const _id = parseId(input.id);
+    if (!(await FinanceEntry.exists({ _id, merchantId }))) throw new TRPCError({ code: "NOT_FOUND", message: "Entry not found." });
+    // Index {merchantId, subjectType, subjectId, at}.
+    const rows = await AuditLog.find({
+      merchantId,
+      subjectType: "finance_entry",
+      subjectId: _id,
+      action: { $in: ["finance.entry_created", "finance.entry_updated", "finance.entry_voided"] },
+    })
+      .sort({ at: 1 })
+      .limit(100)
+      .select("action at actorEmail prevState nextState meta")
+      .lean();
+    return rows.map((r) => {
+      const prev = (r.prevState ?? {}) as Record<string, unknown>;
+      const next = (r.nextState ?? {}) as Record<string, unknown>;
+      const changes = r.action === "finance.entry_updated"
+        ? Object.keys(next)
+            .filter((k) => JSON.stringify(prev[k]) !== JSON.stringify(next[k]))
+            .map((k) => ({ field: k, from: prev[k] ?? null, to: next[k] ?? null }))
+        : [];
+      return {
+        at: r.at,
+        action: r.action.replace("finance.entry_", "") as "created" | "updated" | "voided",
+        by: r.actorEmail ?? null,
+        changes,
+        reason: typeof (r.meta as { reason?: unknown } | undefined)?.reason === "string" ? ((r.meta as { reason: string }).reason || null) : null,
+      };
+    });
+  }),
 
   void: protectedProcedure
     .input(z.object({ id: z.string().max(24), reason: text(300).optional() }))

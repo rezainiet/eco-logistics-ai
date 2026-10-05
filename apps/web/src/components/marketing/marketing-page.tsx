@@ -2,34 +2,26 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Info, Loader2, Megaphone } from "lucide-react";
+import { AlertTriangle, ExternalLink, Info, Loader2, Megaphone, RotateCcw } from "lucide-react";
+import type { RouterOutputs } from "@ecom/types";
 import { trpc } from "@/lib/trpc";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { PeriodPicker, periodLabel, type PeriodValue } from "@/components/accounting/period";
 import { formatBDT } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
+import { CHANNEL_LABEL, TRAFFIC_LABEL, formatRate, warningText, type MarketingWarning } from "@/lib/marketing/labels";
 
-type Tab = "overview" | "tracking" | "attribution" | "campaigns";
+type Tab = "overview" | "funnel" | "tracking" | "attribution" | "campaigns";
 type Touch = "first" | "last";
 
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
   ["overview", "Overview"],
+  ["funnel", "Funnel"],
   ["tracking", "Tracking"],
   ["attribution", "Attribution"],
   ["campaigns", "Campaigns"],
 ];
-
-const CHANNEL_LABEL: Record<string, string> = {
-  meta: "Meta (Facebook / Instagram)",
-  google: "Google",
-  tiktok: "TikTok",
-  organic: "Organic search",
-  referral: "Other websites",
-  other: "Other (tagged)",
-  direct: "Direct",
-  untracked: "Not tracked",
-};
 
 const pill = (active: boolean) =>
   cn(
@@ -74,8 +66,8 @@ export function MarketingPage() {
         title="Marketing"
         description="Where your orders come from, and what they earn once delivered. Amounts in Taka (৳)."
       />
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex gap-1 rounded-lg border border-stroke/10 bg-surface p-1" role="tablist" aria-label="Marketing sections">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap gap-1 self-start rounded-lg border border-stroke/10 bg-surface p-1" role="tablist" aria-label="Marketing sections">
           {TABS.map(([key, label]) => (
             <button
               key={key}
@@ -90,16 +82,17 @@ export function MarketingPage() {
         </div>
         {tab !== "tracking" ? (
           <div className="flex flex-wrap items-center gap-3">
-            <TouchToggle value={touch} onChange={setTouch} />
+            {tab !== "funnel" ? <TouchToggle value={touch} onChange={setTouch} /> : null}
             <PeriodPicker value={period} onChange={setPeriod} />
           </div>
         ) : null}
       </div>
 
       {tab === "overview" ? <Overview period={period} touch={touch} /> : null}
+      {tab === "funnel" ? <Funnel period={period} /> : null}
       {tab === "tracking" ? <Tracking /> : null}
       {tab === "attribution" ? <Breakdown period={period} touch={touch} dimensions={["source", "medium"]} /> : null}
-      {tab === "campaigns" ? <Breakdown period={period} touch={touch} dimensions={["campaign"]} /> : null}
+      {tab === "campaigns" ? <Breakdown period={period} touch={touch} dimensions={["campaign", "content", "term"]} /> : null}
     </div>
   );
 }
@@ -114,6 +107,29 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
       <div className="text-xs uppercase tracking-wide text-fg-faint">
         {periodLabel(period)} · {touch === "last" ? "last click" : "first click"}
       </div>
+      {r.warnings.length > 0 ? (
+        <ul className="space-y-1.5 rounded-lg border border-warning-border bg-warning-subtle/40 px-4 py-3 text-xs text-fg-muted" aria-label="Missing data">
+          {(r.warnings as MarketingWarning[]).map((w, i) => (
+            <li key={`${w.code}-${w.channel ?? i}`} className="flex gap-2">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden />
+              {warningText(w)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {r.trafficTypes.length > 0 ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5" aria-label="Orders by traffic type">
+          {r.trafficTypes.map((t) => (
+            <div key={t.type} className="rounded-xl border border-stroke/10 bg-surface p-3" title={TRAFFIC_LABEL[t.type]?.hint}>
+              <div className="text-2xs uppercase tracking-wide text-fg-faint">{TRAFFIC_LABEL[t.type]?.label ?? t.type}</div>
+              <div className="text-lg font-semibold tabular-nums">{t.ordersPlaced}</div>
+              <div className="text-2xs text-fg-subtle">
+                {t.deliveredOrders} delivered · {formatBDT(t.deliveredRevenue)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
       {r.channels.length === 0 ? (
         <EmptyState icon={Megaphone} title="No orders in this period" description="Orders from your landing pages show up here with the channel that brought them." />
       ) : (
@@ -128,6 +144,9 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
                 <th className="px-4 py-3 text-right font-medium">Ad spend</th>
                 <th className="px-4 py-3 text-right font-medium">Cost / order</th>
                 <th className="px-4 py-3 text-right font-medium">ROAS</th>
+                <th className="px-4 py-3 text-right font-medium" title="Delivered revenue − product cost − courier fees − ad spend">
+                  Profit
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stroke/8">
@@ -140,6 +159,12 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
                   <td className="px-4 py-2.5 text-right tabular-nums">{c.spend === null ? "—" : formatBDT(c.spend)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{c.costPerOrder === null ? "—" : formatBDT(c.costPerOrder)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{c.roas === null ? "—" : `${c.roas}×`}</td>
+                  <td
+                    className="px-4 py-2.5 text-right tabular-nums"
+                    title={c.profit === null ? "Not shown: a product cost or courier fee is not recorded for this channel" : undefined}
+                  >
+                    {c.profit === null ? "—" : formatBDT(c.profit)}
+                  </td>
                 </tr>
               ))}
               <tr className="font-semibold">
@@ -150,6 +175,7 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
                 <td className="px-4 py-3 text-right tabular-nums">{r.totals.spend > 0 ? formatBDT(r.totals.spend) : "—"}</td>
                 <td className="px-4 py-3" />
                 <td className="px-4 py-3 text-right tabular-nums">{r.totals.roas === null ? "—" : `${r.totals.roas}×`}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{r.totals.profit === null ? "—" : formatBDT(r.totals.profit)}</td>
               </tr>
             </tbody>
           </table>
@@ -173,6 +199,23 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
           &ldquo;Not tracked&rdquo; = orders created outside your landing pages (dashboard, CSV, store integrations) or before tracking started.
         </p>
       </div>
+      {r.recovery.recoveredOrders > 0 || r.recovery.deliveredOrders > 0 ? (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border border-stroke/10 bg-surface p-4 text-sm">
+          <div className="flex items-center gap-2 font-semibold">
+            <RotateCcw className="h-4 w-4 text-brand" aria-hidden /> Won back by Cart Recovery
+          </div>
+          <div>
+            <span className="tabular-nums font-semibold">{r.recovery.recoveredOrders}</span> <span className="text-fg-subtle">orders placed</span>
+          </div>
+          <div>
+            <span className="tabular-nums font-semibold">{formatBDT(r.recovery.deliveredRevenue)}</span>{" "}
+            <span className="text-fg-subtle">delivered revenue ({r.recovery.deliveredOrders} orders)</span>
+          </div>
+          <p className="w-full text-2xs text-fg-faint">
+            Already included above: first click keeps the ad that brought the buyer; last click shows the recovery email (Other, campaign cart_recovery).
+          </p>
+        </div>
+      ) : null}
       {r.funnel ? (
         <div className="rounded-xl border border-stroke/10 bg-surface p-4">
           <div className="mb-3 text-sm font-semibold">Store visitor funnel</div>
@@ -199,7 +242,10 @@ function Overview({ period, touch }: { period: PeriodValue; touch: Touch }) {
   );
 }
 
-function Breakdown({ period, touch, dimensions }: { period: PeriodValue; touch: Touch; dimensions: Array<"source" | "medium" | "campaign"> }) {
+type Dim = "source" | "medium" | "campaign" | "content" | "term";
+const DIM_LABEL: Record<Dim, string> = { source: "source", medium: "medium", campaign: "campaign", content: "ad / content", term: "keyword / term" };
+
+function Breakdown({ period, touch, dimensions }: { period: PeriodValue; touch: Touch; dimensions: Dim[] }) {
   const [dimension, setDimension] = useState(dimensions[0]!);
   const q = trpc.marketing.breakdown.useQuery({ period, touch, dimension });
   return (
@@ -208,7 +254,7 @@ function Breakdown({ period, touch, dimensions }: { period: PeriodValue; touch: 
         <div className="flex gap-1.5">
           {dimensions.map((d) => (
             <button key={d} className={pill(dimension === d)} aria-pressed={dimension === d} onClick={() => setDimension(d)}>
-              By {d}
+              By {DIM_LABEL[d]}
             </button>
           ))}
         </div>
@@ -221,14 +267,14 @@ function Breakdown({ period, touch, dimensions }: { period: PeriodValue; touch: 
         <EmptyState
           icon={Megaphone}
           title="No tracked orders yet"
-          description="Add UTM tags (utm_source, utm_medium, utm_campaign) to your ad links to see which ones bring orders."
+          description="Add UTM tags (utm_source, utm_medium, utm_campaign, utm_content, utm_term) to your ad links to see which ones bring orders."
         />
       ) : (
         <div className="overflow-x-auto rounded-xl border border-stroke/10 bg-surface">
           <table className="w-full text-sm">
             <thead className="border-b border-stroke/8 text-left text-2xs uppercase tracking-wide text-fg-faint">
               <tr>
-                <th className="px-4 py-3 font-medium capitalize">{dimension}</th>
+                <th className="px-4 py-3 font-medium capitalize">{DIM_LABEL[dimension]}</th>
                 <th className="px-4 py-3 font-medium">Channel</th>
                 <th className="px-4 py-3 text-right font-medium">Orders</th>
                 <th className="px-4 py-3 text-right font-medium">Delivered</th>
@@ -249,6 +295,148 @@ function Breakdown({ period, touch, dimensions }: { period: PeriodValue; touch: 
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+const STEP_LABEL: ReadonlyArray<readonly [string, string]> = [
+  ["visits", "Visits"],
+  ["addedToCart", "Added to cart"],
+  ["checkoutStarted", "Started checkout"],
+  ["ordersPlaced", "Ordered"],
+  ["deliveredOrders", "Delivered"],
+];
+
+function Funnel({ period }: { period: PeriodValue }) {
+  const [pageId, setPageId] = useState<string>("");
+  const pages = trpc.marketing.trackingStatus.useQuery();
+  const q = trpc.marketing.funnel.useQuery({ period, landingPageId: pageId || null });
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="funnel-page" className="text-xs text-fg-subtle">
+          Landing page
+        </label>
+        <select
+          id="funnel-page"
+          value={pageId}
+          onChange={(e) => setPageId(e.target.value)}
+          className="max-w-full rounded-md border border-stroke/14 bg-surface-raised px-3 py-1.5 text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/30"
+        >
+          <option value="">All landing pages</option>
+          {(pages.data ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      {q.isLoading ? (
+        <Loading />
+      ) : q.isError ? (
+        <Failed message={q.error.message} />
+      ) : (
+        <FunnelBody data={q.data!} />
+      )}
+    </div>
+  );
+}
+
+type FunnelData = RouterOutputs["marketing"]["funnel"];
+
+function FunnelBody({ data }: { data: FunnelData }) {
+  const t = data.totals;
+  return (
+    <div className="space-y-4">
+      {!data.collecting ? (
+        <p className="flex gap-2 rounded-lg border border-stroke/10 bg-surface px-4 py-3 text-xs text-fg-subtle">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Visit and cart tracking on landing pages is part of Growth and above, so only orders and deliveries are shown.
+        </p>
+      ) : t.visits === 0 ? (
+        <p className="flex gap-2 rounded-lg border border-stroke/10 bg-surface px-4 py-3 text-xs text-fg-subtle">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          No landing-page visits recorded in this period yet. Visits are counted once per visitor session.
+        </p>
+      ) : null}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6" aria-label="Landing page funnel">
+        {STEP_LABEL.map(([key, label]) => (
+          <div key={key} className="rounded-xl border border-stroke/10 bg-surface p-3">
+            <div className="text-2xs uppercase tracking-wide text-fg-faint">{label}</div>
+            <div className="text-lg font-semibold tabular-nums">{t[key as keyof typeof t]}</div>
+          </div>
+        ))}
+        <div className="rounded-xl border border-stroke/10 bg-surface p-3">
+          <div className="text-2xs uppercase tracking-wide text-fg-faint">Revenue</div>
+          <div className="text-lg font-semibold tabular-nums">{formatBDT(t.deliveredRevenue)}</div>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-fg-subtle">
+        <span>Visit → cart {formatRate(data.rates.visitToCart)}</span>
+        <span>Cart → checkout {formatRate(data.rates.cartToCheckout)}</span>
+        <span>Visit → order {formatRate(data.rates.visitToOrder)}</span>
+      </div>
+      {data.pages.length > 0 ? (
+        <div className="overflow-x-auto rounded-xl border border-stroke/10 bg-surface">
+          <table className="w-full text-sm">
+            <thead className="border-b border-stroke/8 text-left text-2xs uppercase tracking-wide text-fg-faint">
+              <tr>
+                <th className="px-4 py-3 font-medium">Landing page</th>
+                <th className="px-4 py-3 text-right font-medium">Visits</th>
+                <th className="px-4 py-3 text-right font-medium">Cart</th>
+                <th className="px-4 py-3 text-right font-medium">Checkout</th>
+                <th className="px-4 py-3 text-right font-medium">Orders</th>
+                <th className="px-4 py-3 text-right font-medium">Delivered</th>
+                <th className="px-4 py-3 text-right font-medium">Revenue</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stroke/8">
+              {data.pages.map((p) => (
+                <tr key={p.id}>
+                  <td className="px-4 py-2.5">{p.name}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{p.visits}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{p.addedToCart}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{p.checkoutStarted}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{p.ordersPlaced}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{p.deliveredOrders}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{formatBDT(p.deliveredRevenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {data.channels.length > 0 ? (
+        <div className="overflow-x-auto rounded-xl border border-stroke/10 bg-surface">
+          <table className="w-full text-sm">
+            <thead className="border-b border-stroke/8 text-left text-2xs uppercase tracking-wide text-fg-faint">
+              <tr>
+                <th className="px-4 py-3 font-medium">Visits from</th>
+                <th className="px-4 py-3 text-right font-medium">Visits</th>
+                <th className="px-4 py-3 text-right font-medium">Cart</th>
+                <th className="px-4 py-3 text-right font-medium">Checkout</th>
+                <th className="px-4 py-3 text-right font-medium">Ordered</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stroke/8">
+              {data.channels.map((c) => (
+                <tr key={c.channel}>
+                  <td className="px-4 py-2.5">{CHANNEL_LABEL[c.channel] ?? c.channel}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{c.visits}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{c.addedToCart}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{c.checkoutStarted}</td>
+                  <td className="px-4 py-2.5 text-right tabular-nums">{c.checkoutSubmitted}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <p className="flex gap-2 text-2xs text-fg-faint">
+        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+        Visits, cart and checkout come from your landing pages (one count per visitor session, no personal data).
+        Orders and revenue come from your orders — revenue only once delivered, the same as Accounting.
+      </p>
     </div>
   );
 }

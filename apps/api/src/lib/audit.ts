@@ -10,6 +10,7 @@ type AuditAction =
   | "review.rejected"
   | "review.no_answer"
   | "review.reopened"
+  | "review.requested"
   | "order.booked"
   | "order.cancelled"
   | "order.ingested"

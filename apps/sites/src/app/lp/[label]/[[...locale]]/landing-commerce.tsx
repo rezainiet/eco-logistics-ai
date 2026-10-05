@@ -12,6 +12,7 @@ import {
   formatMoney,
   formatNumber,
   normalizeBdMobile,
+  touchFromVisit,
 } from "@ecom/landing";
 import { captureAttribution, storedAttribution } from "@/lib/analytics/attribution-store";
 import { emitCommerceEvent } from "@/lib/analytics/commerce-events";
@@ -155,6 +156,17 @@ export function LandingCommerce({
   useEffect(() => {
     captureAttribution();
   }, []);
+
+  // One visit per page load for the funnel, with where it came from (no
+  // personal data). Guarded so a double-invoked effect can't count it twice.
+  const visitReported = useRef(false);
+  useEffect(() => {
+    if (visitReported.current) return;
+    visitReported.current = true;
+    reportActivity(slug, locale, "page_view", [], {
+      touch: touchFromVisit(window.location.href, document.referrer, window.location.hostname),
+    });
+  }, [slug, locale]);
 
   // Restore this page's cart, checked against live stock.
   useEffect(() => {

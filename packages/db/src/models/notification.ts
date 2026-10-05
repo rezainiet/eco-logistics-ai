@@ -63,6 +63,18 @@ export const NOTIFICATION_KINDS = [
    * RTO + a wasted courier slot.
    */
   "order.courier_cancel_required",
+  /**
+   * The courier reported a failed delivery attempt or a return in progress
+   * (normalized status `failed`). The parcel is still with the courier and
+   * the order stays in transit; the merchant can call the customer before
+   * it comes back. Fired once per distinct courier event.
+   */
+  "order.delivery_issue",
+  /**
+   * The courier reported the parcel returned to the merchant (order → rto).
+   * Fired once per order, on the courier-driven transition only.
+   */
+  "order.returned",
 ] as const;
 
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];

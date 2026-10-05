@@ -19,6 +19,7 @@ import {
   Lock,
   Palette,
   Plug,
+  ShieldCheck,
   Truck,
   Webhook,
   type LucideIcon,
@@ -31,6 +32,7 @@ export type SettingsSectionKey =
   | "couriers"
   | "integrations"
   | "automation"
+  | "verification"
   | "api"
   | "security";
 
@@ -134,6 +136,14 @@ export const SETTINGS_NAV: SettingsSectionGroup[] = [
         icon: Bot,
         description:
           "How aggressively to auto-confirm and auto-book orders based on risk.",
+      },
+      {
+        key: "verification",
+        href: "/dashboard/settings/verification",
+        label: "Verification rules",
+        icon: ShieldCheck,
+        description:
+          "Which orders must be verified before booking: blocked customers, order value and risk patterns.",
       },
       {
         key: "api",

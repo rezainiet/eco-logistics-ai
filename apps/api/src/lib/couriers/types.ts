@@ -105,6 +105,15 @@ export interface TrackingInfo {
   raw?: unknown;
 }
 
+/**
+ * A courier charge from a webhook payload: a finite, non-negative number
+ * (numeric strings accepted), else undefined. Never defaults to 0.
+ */
+export function courierChargeOf(raw: unknown): number | undefined {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : undefined;
+}
+
 export interface PriceQuote {
   amount: number;
   currency: string;

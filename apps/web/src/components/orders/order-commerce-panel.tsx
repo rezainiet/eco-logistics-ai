@@ -23,6 +23,16 @@ type Commerce = {
   }>;
   /** Courier fee recorded at booking; null = not recorded. */
   courierFee?: number | null;
+  /** Profit under the Accounting rules; profit null until every cost is recorded. */
+  profit?: {
+    realized: boolean;
+    status: string;
+    revenue: number;
+    productCost: number | null;
+    courierFee: number | null;
+    profit: number | null;
+    missing: string[];
+  };
   currency: string;
   subtotal: number | null;
   deliveryCharge: number | null;
@@ -165,6 +175,21 @@ export function OrderCommercePanel({
         <div className="flex justify-between text-xs">
           <span className="text-fg-subtle">Courier fee (your cost)</span>
           {typeof c.courierFee === "number" ? <span className="tabular-nums">{money(c.courierFee)}</span> : <span className="text-fg-faint">Not recorded</span>}
+        </div>
+      ) : null}
+
+      {c.profit ? (
+        <div className="flex justify-between gap-3 text-xs">
+          <span className="text-fg-subtle">{c.profit.status === "rto" ? "Profit (returned — courier cost only)" : "Profit"}</span>
+          {!c.profit.realized ? (
+            <span className="text-fg-faint">Counted once delivered</span>
+          ) : c.profit.profit === null ? (
+            <span className="text-warning">
+              Unknown — {c.profit.missing.map((m) => (m === "product_cost" ? "product cost" : "courier fee")).join(" and ")} not recorded
+            </span>
+          ) : (
+            <span className={`font-medium tabular-nums ${c.profit.profit < 0 ? "text-danger" : "text-success"}`}>{money(c.profit.profit)}</span>
+          )}
         </div>
       ) : null}
 

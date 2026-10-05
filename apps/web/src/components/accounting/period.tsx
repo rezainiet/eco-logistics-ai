@@ -3,6 +3,7 @@
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { dhakaToday } from "./entry-dialog";
+import { monthRange } from "@/lib/accounting/pnl";
 
 export type PeriodValue =
   | { preset: "today" | "month" | "year" }
@@ -20,9 +21,12 @@ export function periodLabel(p: PeriodValue): string {
   return p.preset === "today" ? "Today" : p.preset === "month" ? "This month" : "This year";
 }
 
-/** Today / This month / This year / Custom date range (Bangladesh days). */
+/** Today / This month / This year / any month / Custom date range (Bangladesh days). */
 export function PeriodPicker({ value, onChange }: { value: PeriodValue; onChange: (p: PeriodValue) => void }) {
   const custom = value.preset === "custom" ? value : null;
+  // The month box shows a month only when the custom range is exactly that whole month.
+  const whole = custom ? monthRange(custom.from.slice(0, 7)) : null;
+  const pickedMonth = custom && whole && whole.from === custom.from && whole.to === custom.to ? custom.from.slice(0, 7) : "";
   return (
     <div className="flex flex-wrap items-center gap-2">
       <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Period">
@@ -46,6 +50,20 @@ export function PeriodPicker({ value, onChange }: { value: PeriodValue; onChange
           </button>
         ))}
       </div>
+      <label className="flex items-center gap-1.5 text-xs text-fg-subtle">
+        Month
+        <Input
+          type="month"
+          aria-label="Pick a month"
+          className="h-9 w-40"
+          max={dhakaToday().slice(0, 7)}
+          value={pickedMonth}
+          onChange={(e) => {
+            const r = monthRange(e.target.value);
+            if (r) onChange({ preset: "custom", ...r });
+          }}
+        />
+      </label>
       {custom ? (
         <div className="flex items-center gap-2">
           <Input

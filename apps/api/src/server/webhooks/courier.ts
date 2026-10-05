@@ -76,6 +76,8 @@ interface ParsedTrackingEvent {
   description?: string;
   location?: string;
   deliveredAt?: Date;
+  /** Courier charge stated by the payload (Steadfast delivery_charge, Pathao delivery_fee). */
+  fee?: number;
 }
 
 interface CourierWebhookConfig {
@@ -305,7 +307,7 @@ async function handleCourierWebhook(
           location: parsed.location,
         },
       ],
-      { source: "webhook", deliveredAt: parsed.deliveredAt },
+      { source: "webhook", deliveredAt: parsed.deliveredAt, courierFee: parsed.fee },
     );
 
     await WebhookInbox.updateOne(

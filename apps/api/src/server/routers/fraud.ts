@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
+  AuditLog,
   CustomerReliability,
   Merchant,
   type MerchantFraudConfig,
@@ -27,6 +28,14 @@ import {
   lookupNetworkRisk,
 } from "../../lib/fraud-network.js";
 import { enqueueRescore } from "../../workers/riskRecompute.js";
+import {
+  NO_ANSWER_REASON_CODES,
+  REJECT_REASON_CODES,
+  REQUEST_REASON_CODES,
+  VERIFY_REASON_CODES,
+  reviewStatusAfterRescore,
+  type ReviewReasonCode,
+} from "../../lib/verification.js";
 
 const REVIEW_NOTE_MAX = 1000;
 
@@ -37,7 +46,42 @@ const queueFilter = z
 const reviewActionInput = z.object({
   id: z.string().min(1),
   notes: z.string().max(REVIEW_NOTE_MAX).optional(),
+  /** Optional structured reason (lib/verification.ts); validated per action. */
+  reasonCode: z.string().max(40).optional(),
 });
+
+/** Validate an optional reason code against the action's list. */
+function reasonFor(allowed: readonly string[], code: string | undefined): ReviewReasonCode | undefined {
+  if (code === undefined) return undefined;
+  if (!allowed.includes(code)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: `unknown reason code '${code}'` });
+  }
+  return code as ReviewReasonCode;
+}
+
+/** Order states from which courier dispatch has not started yet. */
+const PRE_DISPATCH_STATUSES = ["pending", "confirmed", "packed"] as const;
+
+/**
+ * Audit actions that make up an order's verification history: scoring,
+ * the review decisions, the confirmation flow and the cancel/restore pair.
+ */
+const VERIFICATION_HISTORY_ACTIONS = [
+  "risk.recomputed",
+  "review.requested",
+  "review.verified",
+  "review.rejected",
+  "review.no_answer",
+  "review.reopened",
+  "automation.confirmed",
+  "automation.rejected",
+  "automation.sms_confirm",
+  "automation.auto_expired",
+  "automation.escalated_no_reply",
+  "automation.auto_booked",
+  "order.cancelled",
+  "order.restored",
+] as const;
 
 type FraudDoc = {
   _id: Types.ObjectId;
@@ -481,6 +525,7 @@ export const fraudRouter = router({
     .mutation(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
       await ensureFraudAccess(merchantId, ctx.user.role);
+      const reasonCode = reasonFor(VERIFY_REASON_CODES, input.reasonCode);
       const plan = getPlan((await Merchant.findById(merchantId).select("subscription.tier").lean())?.subscription?.tier);
       // Reserve a slot atomically up-front. Two agents racing for the last
       // review-quota unit cannot both pass a `checkQuota` and then both
@@ -507,7 +552,9 @@ export const fraudRouter = router({
             "fraud.reviewedAt": now,
             "fraud.reviewedBy": merchantId,
             ...(input.notes ? { "fraud.reviewNotes": input.notes } : {}),
+            ...(reasonCode ? { "fraud.reviewReasonCode": reasonCode } : {}),
           },
+          ...(reasonCode ? {} : { $unset: { "fraud.reviewReasonCode": "" } }),
         },
         { new: true },
       ).lean<FraudDoc>();
@@ -528,7 +575,7 @@ export const fraudRouter = router({
         action: "review.verified",
         subjectType: "order",
         subjectId: updated._id,
-        meta: { notes: input.notes ?? null, riskScore: updated.fraud?.riskScore ?? 0 },
+        meta: { notes: input.notes ?? null, reasonCode: reasonCode ?? null, riskScore: updated.fraud?.riskScore ?? 0 },
       });
       await invalidate(`dashboard:${ctx.user.id}`);
       return { id: String(updated._id), reviewStatus: "verified" as const };
@@ -544,6 +591,7 @@ export const fraudRouter = router({
     .mutation(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
       await ensureFraudAccess(merchantId, ctx.user.role);
+      const reasonCode = reasonFor(REJECT_REASON_CODES, input.reasonCode);
       const _id = parseObjectId(input.id);
       const now = new Date();
       const prior = await Order.findOne({ _id, merchantId })
@@ -613,10 +661,12 @@ export const fraudRouter = router({
             "automation.decidedAt": now,
             "automation.rejectedAt": now,
             "automation.rejectionReason":
-              input.notes ?? "rejected during fraud review",
+              input.notes ?? (reasonCode ? `rejected during fraud review (${reasonCode})` : "rejected during fraud review"),
             preActionSnapshot,
             ...(input.notes ? { "fraud.reviewNotes": input.notes } : {}),
+            ...(reasonCode ? { "fraud.reviewReasonCode": reasonCode } : {}),
           },
+          ...(reasonCode ? {} : { $unset: { "fraud.reviewReasonCode": "" } }),
         },
         { new: true },
       ).lean<FraudDoc>();
@@ -654,6 +704,7 @@ export const fraudRouter = router({
         subjectId: updated._id,
         meta: {
           notes: input.notes ?? null,
+          reasonCode: reasonCode ?? null,
           riskScore: updated.fraud?.riskScore ?? 0,
           codSaved: prior.order.cod,
         },
@@ -693,6 +744,7 @@ export const fraudRouter = router({
     .mutation(async ({ ctx, input }) => {
       const merchantId = merchantObjectId(ctx);
       await ensureFraudAccess(merchantId, ctx.user.role);
+      const reasonCode = reasonFor(NO_ANSWER_REASON_CODES, input.reasonCode);
       const _id = parseObjectId(input.id);
       const now = new Date();
       const updated = await Order.findOneAndUpdate(
@@ -707,7 +759,9 @@ export const fraudRouter = router({
             "fraud.reviewedAt": now,
             "fraud.reviewedBy": merchantId,
             ...(input.notes ? { "fraud.reviewNotes": input.notes } : {}),
+            ...(reasonCode ? { "fraud.reviewReasonCode": reasonCode } : {}),
           },
+          ...(reasonCode ? {} : { $unset: { "fraud.reviewReasonCode": "" } }),
         },
         { new: true },
       ).lean<FraudDoc>();
@@ -721,7 +775,7 @@ export const fraudRouter = router({
         action: "review.no_answer",
         subjectType: "order",
         subjectId: updated._id,
-        meta: { notes: input.notes ?? null },
+        meta: { notes: input.notes ?? null, reasonCode: reasonCode ?? null },
       });
 
       // Unreachable customer on one order raises the unreachable_history
@@ -749,7 +803,7 @@ export const fraudRouter = router({
       await ensureFraudAccess(merchantId, ctx.user.role);
       const _id = parseObjectId(input.id);
       const order = await Order.findOne({ _id, merchantId })
-        .select("customer order.cod fraud.reviewStatus fraud.level source.ip source.addressHash orderNumber")
+        .select("customer order.cod fraud.reviewStatus fraud.level fraud.manualReviewAt source.ip source.addressHash orderNumber")
         .lean<{
           orderNumber: string;
           customer: { name: string; phone: string; address?: string; district: string };
@@ -757,6 +811,7 @@ export const fraudRouter = router({
           fraud?: {
             reviewStatus?: (typeof REVIEW_STATUSES)[number];
             level?: "low" | "medium" | "high";
+            manualReviewAt?: Date | null;
           };
           source?: { ip?: string; addressHash?: string };
         }>();
@@ -803,9 +858,7 @@ export const fraudRouter = router({
         "rejected",
       ];
       const currentReview = order.fraud?.reviewStatus ?? "not_required";
-      const nextReview = terminalStatuses.includes(currentReview)
-        ? currentReview
-        : risk.reviewStatus;
+      const nextReview = reviewStatusAfterRescore(currentReview, risk.reviewStatus, !!order.fraud?.manualReviewAt);
 
       await Order.updateOne(
         { _id, merchantId },
@@ -871,6 +924,122 @@ export const fraudRouter = router({
    * Dashboard counters for the fraud analytics cards: today's risky orders,
    * verified, rejected, and estimated COD saved (sum of rejected COD).
    */
+  /**
+   * Merchant sends an order to verification: it enters the review queue
+   * (pending_call) and cannot be booked until someone verifies it. Allowed
+   * only before dispatch — not once a courier booking exists or is in
+   * flight (the booking lock checks the same review state, so the two
+   * can't both win). Sticky against rescoring until a person decides.
+   */
+  requestVerification: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().min(1),
+        notes: z.string().max(REVIEW_NOTE_MAX).optional(),
+        reasonCode: z.string().max(40).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      await ensureFraudAccess(merchantId, ctx.user.role);
+      const reasonCode = reasonFor(REQUEST_REASON_CODES, input.reasonCode);
+      const _id = parseObjectId(input.id);
+      const now = new Date();
+      const updated = await Order.findOneAndUpdate(
+        {
+          _id,
+          merchantId,
+          "fraud.reviewStatus": { $in: ["not_required", "optional_review", null] },
+          "order.status": { $in: [...PRE_DISPATCH_STATUSES] },
+          "logistics.trackingNumber": { $in: [null, ""] },
+          "logistics.bookingInFlight": { $ne: true },
+        },
+        {
+          $set: {
+            "fraud.reviewStatus": "pending_call",
+            "fraud.manualReviewAt": now,
+            "fraud.manualReviewBy": merchantId,
+            ...(input.notes ? { "fraud.reviewNotes": input.notes } : {}),
+            ...(reasonCode ? { "fraud.reviewReasonCode": reasonCode } : {}),
+          },
+          ...(reasonCode ? {} : { $unset: { "fraud.reviewReasonCode": "" } }),
+        },
+        { new: true },
+      ).lean<FraudDoc>();
+      if (!updated) {
+        const current = await Order.findOne({ _id, merchantId })
+          .select("fraud.reviewStatus order.status logistics.trackingNumber logistics.bookingInFlight")
+          .lean<{
+            fraud?: { reviewStatus?: string };
+            order?: { status?: string };
+            logistics?: { trackingNumber?: string; bookingInFlight?: boolean };
+          }>();
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+        const review = current.fraud?.reviewStatus ?? "not_required";
+        const message =
+          current.logistics?.trackingNumber || current.logistics?.bookingInFlight
+            ? "order is already being dispatched"
+            : !(PRE_DISPATCH_STATUSES as readonly string[]).includes(current.order?.status ?? "")
+              ? `order is '${current.order?.status}' — only orders not yet dispatched can be verified`
+              : `order is already ${review === "pending_call" || review === "no_answer" ? "awaiting verification" : review}`;
+        throw new TRPCError({ code: "CONFLICT", message });
+      }
+      void writeAudit({
+        merchantId,
+        actorId: merchantId,
+        actorEmail: ctx.user.email,
+        actorType: ctx.user.role === "admin" ? "admin" : "merchant",
+        action: "review.requested",
+        subjectType: "order",
+        subjectId: updated._id,
+        meta: { notes: input.notes ?? null, reasonCode: reasonCode ?? null, riskScore: updated.fraud?.riskScore ?? 0 },
+      });
+      await invalidate(`dashboard:${ctx.user.id}`);
+      return { id: String(updated._id), reviewStatus: "pending_call" as const };
+    }),
+
+  /**
+   * One order's verification history, oldest first: scoring, review
+   * decisions (with reason codes and notes), confirmation events and
+   * cancel/restore. Read from the audit trail; this merchant's order only.
+   */
+  getVerificationHistory: protectedProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      const merchantId = merchantObjectId(ctx);
+      await ensureFraudAccess(merchantId, ctx.user.role);
+      const _id = parseObjectId(input.id);
+      const owned = await Order.exists({ _id, merchantId });
+      if (!owned) throw new TRPCError({ code: "NOT_FOUND", message: "order not found" });
+      // Index {merchantId, subjectType, subjectId, at}.
+      const rows = await AuditLog.find({
+        merchantId,
+        subjectType: "order",
+        subjectId: _id,
+        action: { $in: [...VERIFICATION_HISTORY_ACTIONS] },
+      })
+        .sort({ at: 1 })
+        .limit(200)
+        .select("action actorType at meta")
+        .lean<Array<{ _id: Types.ObjectId; action: string; actorType?: string; at: Date; meta?: Record<string, unknown> }>>();
+      const str = (v: unknown, max = 500) => (typeof v === "string" && v ? v.slice(0, max) : null);
+      return rows.map((r) => ({
+        id: String(r._id),
+        at: r.at,
+        action: r.action,
+        actor: r.actorType ?? "system",
+        reasonCode: str(r.meta?.reasonCode, 40),
+        notes: str(r.meta?.notes),
+        riskScore:
+          typeof r.meta?.riskScore === "number"
+            ? r.meta.riskScore
+            : typeof r.meta?.score === "number"
+              ? (r.meta.score as number)
+              : null,
+        level: str(r.meta?.level, 10),
+      }));
+    }),
+
   getReviewStats: protectedProcedure
     .input(
       z

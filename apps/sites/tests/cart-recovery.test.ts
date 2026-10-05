@@ -100,3 +100,13 @@ describe("routing", () => {
     expect(matcher.test("/bn")).toBe(true);
   });
 });
+
+describe("visit tracking", () => {
+  it("the activity proxy forwards a page_view's marketing touch (and nothing else extra)", async () => {
+    stubApi(202, { ok: true, recorded: true });
+    const touch = { at: new Date().toISOString(), source: "facebook", medium: "cpc", clickIdType: "fbclid" };
+    await activity(request("/api/activity", { sessionId: "s-123456789", type: "page_view", clientEventId: "e-123456789", cart: [], touch, merchantId: "x" }));
+    expect(forwarded!.body).toMatchObject({ host: HOST, type: "page_view", touch });
+    expect(forwarded!.body).not.toHaveProperty("merchantId");
+  });
+});

@@ -104,6 +104,7 @@ export default function OrdersPage() {
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
   const [createOpen, setCreateOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [timelineId, setTimelineId] = useState<string | null>(null);
 
   // Deep-link from /dashboard/integrations CSV card: ?bulk=1 auto-opens the
   // bulk uploader so the CSV path is one click instead of two. Also handles
@@ -112,10 +113,12 @@ export default function OrdersPage() {
   useEffect(() => {
     if (searchParams?.get("bulk") === "1") setUploadOpen(true);
     if (searchParams?.get("new") === "1") setCreateOpen(true);
+    // ?focus=<orderId> (command palette, Accounting → Order profit) opens that order.
+    const focus = searchParams?.get("focus");
+    if (focus && /^[a-f0-9]{24}$/.test(focus)) setTimelineId(focus);
   }, [searchParams]);
   const [bookOpen, setBookOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [timelineId, setTimelineId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState<Set<string>>(new Set());
 
   const currentCursor = cursorStack[cursorStack.length - 1];

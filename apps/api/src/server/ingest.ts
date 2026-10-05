@@ -1,4 +1,5 @@
 import { Types } from "mongoose";
+import { snapshotItemCosts } from "../lib/finance/order-cost.js";
 import {
   FraudPrediction,
   Integration,
@@ -278,7 +279,8 @@ export async function ingestNormalizedOrder(
         district: normalized.customer.district,
         ...(extractedThana ? { thana: extractedThana } : {}),
       },
-      items: normalized.items,
+      // Cost per unit snapshotted now (unambiguous SKU match only) — never rewritten later.
+      items: await snapshotItemCosts(opts.merchantId, normalized.items),
       order: {
         cod: normalized.cod,
         total: normalized.total,

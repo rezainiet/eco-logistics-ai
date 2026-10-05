@@ -27,6 +27,7 @@ import {
 import { recordReliabilityOutcome } from "../lib/observability/delivery-reliability.js";
 import { isWriteEnabledForMerchant } from "../lib/delivery-reliability-rollout.js";
 import { env } from "../env.js";
+import { notifyDeliveryIssue, notifyReturned } from "../lib/couriers/outcome-notify.js";
 
 /**
  * Tracking lifecycle mapper — courier event → order.status. Only terminal
@@ -99,6 +100,13 @@ export interface ApplyTrackingOptions {
   source?: "poll" | "webhook";
   /** Provider-supplied actual delivery time, used when status === delivered. */
   deliveredAt?: Date;
+  /**
+   * The courier's charge for this parcel, when the provider's event carries
+   * one. Stored only if the order has no fee recorded yet — a fee captured at
+   * booking (or by an earlier event) is never overwritten, so accounting sees
+   * one courier cost per order.
+   */
+  courierFee?: number;
   /**
    * Internal: set on the single re-evaluation after the compare-and-set
    * missed because the order's status moved. Callers never pass it.
@@ -255,6 +263,29 @@ export async function applyTrackingEvents(
     // Idempotent — a repeated webhook can never deduct twice.
     await syncOrderInventory([order._id]);
   }
+  if (typeof options.courierFee === "number" && Number.isFinite(options.courierFee) && options.courierFee >= 0) {
+    await Order.updateOne(
+      { _id: order._id, merchantId: order.merchantId, "logistics.courierFee": null },
+      { $set: { "logistics.courierFee": options.courierFee } },
+    );
+  }
+  // A failed attempt / return in progress that was actually appended now
+  // (not a replay): tell the merchant while the parcel can still be saved.
+  if (
+    normalizedStatus === "failed" &&
+    persisted &&
+    effectivelyAppended > 0 &&
+    !["delivered", "rto", "cancelled"].includes(nextStatus)
+  ) {
+    const latest = newEvents[newEvents.length - 1]!;
+    await notifyDeliveryIssue({
+      merchantId: order.merchantId,
+      orderId: order._id,
+      providerStatus: latest.providerStatus,
+      description: latest.description,
+      eventKey: latest.dedupeKey,
+    });
+  }
   if (nextStatus !== prevStatus && !persisted) {
     // The write still did not land after re-evaluation (the order moved
     // again, or the event was already recorded). The writer that won owns
@@ -283,6 +314,7 @@ export async function applyTrackingEvents(
     await invalidate(`dashboard:${order.merchantId.toString()}`);
 
     if (nextStatus === "rto") {
+      await notifyReturned({ merchantId: order.merchantId, orderId: order._id });
       const full = await Order.findById(order._id).select("customer.phone").lean();
       const phone = (full as { customer?: { phone?: string } } | null)?.customer?.phone;
       if (phone) {

@@ -27,6 +27,8 @@ import {
   router,
 } from "../trpc.js";
 import { cached, invalidate } from "../../lib/cache.js";
+import { BOOKING_BLOCKED_REVIEW } from "../../lib/verification.js";
+import { orderProfitOf, snapshotItemCosts } from "../../lib/finance/order-cost.js";
 import { filterHash } from "../../lib/hash.js";
 import {
   adapterFor,
@@ -369,6 +371,10 @@ export async function bookSingleShipment(args: {
       "logistics.bookingInFlight": { $ne: true },
       "logistics.trackingNumber": { $in: [null, ""] },
       "order.status": { $in: [...BOOKABLE_STATUSES] },
+      // Re-assert the verification gate atomically: an order sent to (or
+      // put back into) verification after the pre-check above must not be
+      // dispatched by a booking that was already on its way.
+      "fraud.reviewStatus": { $nin: [...BOOKING_BLOCKED_REVIEW] },
     },
     {
       $set: {
@@ -402,7 +408,7 @@ export async function bookSingleShipment(args: {
     // Race lost. Re-read to surface the right error to the caller.
     const fresh = await Order.findOne({ _id: orderOid, merchantId: args.merchantId })
       .select(
-        "logistics.trackingNumber logistics.courier logistics.bookingInFlight logistics.estimatedDelivery order.status",
+        "logistics.trackingNumber logistics.courier logistics.bookingInFlight logistics.estimatedDelivery order.status fraud.reviewStatus",
       )
       .lean();
     if (!fresh) return { ok: false, error: "order not found", code: "NOT_FOUND" };
@@ -422,6 +428,17 @@ export async function bookSingleShipment(args: {
       return {
         ok: false,
         error: "another booking attempt is in progress for this order",
+        code: "CONFLICT",
+      };
+    }
+    const freshReview = (fresh as { fraud?: { reviewStatus?: string } }).fraud?.reviewStatus;
+    if (freshReview && (BOOKING_BLOCKED_REVIEW as readonly string[]).includes(freshReview)) {
+      return {
+        ok: false,
+        error:
+          freshReview === "rejected"
+            ? "order was rejected during verification"
+            : `order requires call verification before booking (${freshReview})`,
         code: "CONFLICT",
       };
     }
@@ -1102,6 +1119,7 @@ export const ordersRouter = router({
     type IdempotentHit = { id: string; orderNumber: string; risk: { level: string; score: number; reviewStatus: string; reasons: string[] }; idempotent: true };
     type CreateOutcome = { kind: "created"; order: OrderCreated; orderDoc: any } | { kind: "idempotent"; payload: IdempotentHit } | { kind: "quota_exhausted"; reservation: Awaited<ReturnType<typeof reserveQuota>> };
 
+    const itemsWithCost = await snapshotItemCosts(merchantId, input.items);
     const session = await mongoose.startSession();
     let outcome: CreateOutcome;
     try {
@@ -1150,7 +1168,8 @@ export const ordersRouter = router({
               merchantId,
               orderNumber: input.orderNumber ?? generateOrderNumber(),
               customer,
-              items: input.items,
+              // Cost per unit snapshotted now (unambiguous SKU match only) — never rewritten later.
+              items: itemsWithCost,
               order: { cod: input.cod, total, status: "pending" },
               fraud: fraudDocFromRisk(risk),
               ...(input.pinnedCourier
@@ -1569,6 +1588,8 @@ export const ordersRouter = router({
           })),
           /** Courier fee recorded at booking; null = not recorded. */
           courierFee: typeof order.logistics?.courierFee === "number" ? order.logistics.courierFee : null,
+          /** This order's profit under the Accounting rules (null until every cost is recorded). */
+          profit: orderProfitOf(order),
           currency: order.order.currency ?? "BDT",
           subtotal: order.order.subtotal ?? null,
           deliveryCharge: order.order.deliveryCharge ?? null,
@@ -2256,6 +2277,18 @@ export const ordersRouter = router({
           message: `invalid status transition: ${prevStatus} → ${input.status}`,
         });
       }
+      // Marking an order shipped by hand is a dispatch too: the same
+      // verification gate as courier booking applies.
+      const review = order.fraud?.reviewStatus ?? "not_required";
+      if (input.status === "shipped" && (BOOKING_BLOCKED_REVIEW as readonly string[]).includes(review)) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            review === "rejected"
+              ? "order was rejected during verification"
+              : `order requires call verification before dispatch (${review})`,
+        });
+      }
       order.order.status = input.status;
       // Revenue is recognized on delivery: stamp when it happened (the
       // courier path stamps it too). Saved under the same status CAS below.
@@ -2285,7 +2318,12 @@ export const ordersRouter = router({
       // the status the transition was checked against. A courier event or
       // another request that moved it in between wins; this one is stale
       // and runs none of the side effects below (stats, stock, rescore).
-      order.$where = { merchantId, "order.status": prevStatus };
+      order.$where = {
+        merchantId,
+        "order.status": prevStatus,
+        // Dispatching by hand re-asserts the verification gate atomically.
+        ...(nextStatus === "shipped" ? { "fraud.reviewStatus": { $nin: [...BOOKING_BLOCKED_REVIEW] } } : {}),
+      };
     }
     try {
       await order.save();

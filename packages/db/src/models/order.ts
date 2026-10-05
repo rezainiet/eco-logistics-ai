@@ -245,6 +245,20 @@ const fraudSchema = new Schema(
     reviewedAt: { type: Date },
     reviewedBy: { type: Schema.Types.ObjectId, ref: "Merchant" },
     reviewNotes: { type: String, trim: true, maxlength: 1000 },
+    /**
+     * Structured reason for the latest verification decision (e.g.
+     * "fake_order", "confirmed_by_call"). Validated by the review router
+     * (lib/verification.ts) — no `enum:` here for the same sub-schema
+     * quirk noted on preRejectReviewStatus below.
+     */
+    reviewReasonCode: { type: String, trim: true, maxlength: 40 },
+    /**
+     * Set when the merchant explicitly sent the order to verification.
+     * While set, a rescore keeps the order awaiting review instead of
+     * letting a lower score make it bookable again.
+     */
+    manualReviewAt: { type: Date },
+    manualReviewBy: { type: Schema.Types.ObjectId, ref: "Merchant" },
     scoredAt: { type: Date },
     /** 0–100 inverse of riskScore — surfaced as the merchant trust badge. */
     confidence: { type: Number, min: 0, max: 100, default: 100 },

@@ -16,6 +16,8 @@ const listInput = z
     limit: z.number().int().min(1).max(100).default(25),
     onlyUnread: z.boolean().default(false),
     kind: z.enum(NOTIFICATION_KINDS).optional(),
+    /** Any of these kinds (e.g. the courier outcome kinds the bell drawer lists). */
+    kinds: z.array(z.enum(NOTIFICATION_KINDS)).min(1).max(20).optional(),
   })
   .default({ cursor: null, limit: 25, onlyUnread: false });
 
@@ -25,6 +27,7 @@ export const notificationsRouter = router({
     const query: Record<string, unknown> = { merchantId };
     if (input.onlyUnread) query.readAt = null;
     if (input.kind) query.kind = input.kind;
+    else if (input.kinds) query.kind = { $in: input.kinds };
     if (input.cursor && Types.ObjectId.isValid(input.cursor)) {
       query._id = { $lt: new Types.ObjectId(input.cursor) };
     }

@@ -6,6 +6,7 @@ import { bullJobId } from "../lib/queue-ids.js";
 import { writeAudit } from "../lib/audit.js";
 import { fireFraudAlert } from "../lib/alerts.js";
 import { updateOrderWithVersion } from "../lib/orderConcurrency.js";
+import { reviewStatusAfterRescore } from "../lib/verification.js";
 import {
   collectRiskHistory,
   computeRisk,
@@ -99,7 +100,7 @@ export async function processRescoreJob(
     "order.status": { $in: NON_TERMINAL_STATUSES },
     ...(excludeId ? { _id: { $ne: excludeId } } : {}),
   })
-    .select("_id orderNumber customer order.cod source.ip source.addressHash fraud.reviewStatus fraud.level version")
+    .select("_id orderNumber customer order.cod source.ip source.addressHash fraud.reviewStatus fraud.level fraud.manualReviewAt version")
     .lean();
 
   if (openOrders.length === 0) {
@@ -144,9 +145,13 @@ export async function processRescoreJob(
       );
 
       const currentReview = order.fraud?.reviewStatus ?? "not_required";
-      const nextReview = TERMINAL_REVIEW.has(currentReview)
-        ? currentReview
-        : risk.reviewStatus;
+      // A person's decision stays; an order the merchant sent to
+      // verification stays awaiting review (lib/verification.ts).
+      const nextReview = reviewStatusAfterRescore(
+        currentReview as Parameters<typeof reviewStatusAfterRescore>[0],
+        risk.reviewStatus,
+        !!(order.fraud as { manualReviewAt?: Date | null } | undefined)?.manualReviewAt,
+      );
 
       const wasHigh = order.fraud?.level === "high";
       const nowHigh = risk.level === "high";

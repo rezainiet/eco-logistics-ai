@@ -96,7 +96,13 @@ describe("bell count and drawer share one rule", () => {
   it("both the drawer rows and useNotificationCount come from buildAccountAlerts", () => {
     expect(src.match(/buildAccountAlerts\(/g)?.length).toBe(2);
     const hook = src.slice(src.indexOf("export function useNotificationCount"));
-    expect(hook).toMatch(/return buildAccountAlerts\([\s\S]*?\)\.length;/);
+    expect(hook).toMatch(/buildAccountAlerts\([\s\S]*?\)\.length \+ \(courierNotices\.data\?\.items\.length \?\? 0\)/);
+  });
+
+  it("unread courier notices are counted and listed from the same query", () => {
+    // One hook feeds both sides; the drawer renders every item it returns.
+    expect(src.match(/= useCourierNotices\(\)/g)?.length).toBe(2);
+    expect(src).toMatch(/courierNoticeRows\(courierNotices\.data\?\.items \?\? \[\]\)/);
   });
 
   it("neither side re-implements meter eligibility with raw blocked/warning flags", () => {

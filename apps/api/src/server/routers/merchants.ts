@@ -13,6 +13,7 @@ import { protectedProcedure, router } from "../trpc.js";
 import { encryptSecret, maskSecretPayload } from "../../lib/crypto.js";
 import { adapterFor, hasCourierAdapter } from "../../lib/couriers/index.js";
 import { registerCourierWebhook } from "../../lib/couriers/webhook-registration.js";
+import { courierHealth } from "../../lib/couriers/health.js";
 import { hashAddress } from "../risk.js";
 import { writeAudit } from "../../lib/audit.js";
 import { emailDeliveryStatus } from "../../lib/email.js";
@@ -347,6 +348,12 @@ export const merchantsRouter = router({
       updatedAt: c.updatedAt ?? null,
     }));
   }),
+
+  /**
+   * Per-courier connection & sync health (webhook URL, last pushed update,
+   * active shipments needing attention, failed bookings). Merchant-scoped.
+   */
+  courierHealth: protectedProcedure.query(async ({ ctx }) => courierHealth(new Types.ObjectId(ctx.user.id))),
 
   upsertCourier: protectedProcedure
     .input(upsertCourierInput)
