@@ -539,10 +539,12 @@ const premiumBrand: SystemTemplateDef = {
  * shops above it sells through the page's own checkout: the Product
  * spotlight shows the page's featured linked product live (name, price,
  * discount, stock, options) with Buy now, and the mobile order bar points
- * at it. No section holds a copy of the product, its price or a delivery
- * fee: the offer banner's price fields are locked empty, and delivery
- * charges come from the checkout. Reviews start as bracketed prompts to
- * replace with real ones — never invented customers or ratings.
+ * at it. No section holds a copy of the product or its price: the offer
+ * banner's price fields are locked empty. The delivery zones are the
+ * checkout's delivery options (deliveryOptions in commerce.ts) — their
+ * charges are what an order is charged, so they start at the same baseline
+ * as BD Modern Shop for the merchant to edit. Reviews start as bracketed
+ * prompts to replace with real ones — never invented customers or ratings.
  */
 const toSpotlight = (en: string, bnLabel: string) => biCta(en, bnLabel, "spotlight");
 
@@ -812,15 +814,17 @@ const singleProduct: SystemTemplateDef = {
           "We deliver across Bangladesh. The times below are typical and can vary by area.",
           "আমরা সারা বাংলাদেশে ডেলিভারি দিই। নিচের সময়গুলো সাধারণত প্রযোজ্য, এলাকাভেদে কম-বেশি হতে পারে।",
         ),
-        // No charges here: the checkout shows the live charge for the customer's area.
+        // These zones are the checkout's delivery options and their charges are
+        // added to the order (an empty charge would mean ৳0), so they start at
+        // BD Modern Shop's baseline for the merchant to adjust.
         zones: bi(
           [
-            { area: "Inside Dhaka", time: "1–2 days", charge: null },
-            { area: "Outside Dhaka", time: "2–5 days", charge: null },
+            { area: "Inside Dhaka", time: "1–2 days", charge: 60 },
+            { area: "Outside Dhaka", time: "2–5 days", charge: 120 },
           ],
           [
-            { area: "ঢাকার ভিতরে", time: "১–২ দিন", charge: null },
-            { area: "ঢাকার বাইরে", time: "২–৫ দিন", charge: null },
+            { area: "ঢাকার ভিতরে", time: "১–২ দিন", charge: 60 },
+            { area: "ঢাকার বাইরে", time: "২–৫ দিন", charge: 120 },
           ],
         ),
         paymentHeading: bi("Payment", "পেমেন্ট"),

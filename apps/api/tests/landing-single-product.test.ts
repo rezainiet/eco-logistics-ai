@@ -7,6 +7,7 @@ import {
   SYSTEM_TEMPLATES,
   type TemplateSpec,
   defaultContent,
+  deliveryOptions,
   effectiveSections,
   hasMobileActionBar,
   parseTemplateSpec,
@@ -16,7 +17,7 @@ import {
   validateContent,
 } from "@ecom/landing";
 import { LandingRenderer, assetEnv } from "@ecom/landing/react";
-import { LandingPageTemplate, LandingPageTemplateVersion } from "@ecom/db";
+import { LandingPageTemplate, LandingPageTemplateVersion, Order } from "@ecom/db";
 import { placeLandingOrder } from "../src/lib/commerce/landing-orders.js";
 import { resolveLandingPageByHost } from "../src/lib/landing/resolve.js";
 import { __resetTemplateCacheForTests, ensureSystemTemplates } from "../src/lib/landing/templates.js";
@@ -136,10 +137,11 @@ describe("BD Single Product: registration and structure", () => {
 // ── Honest defaults: no copied product data, no invented reviews ────────────
 
 describe("BD Single Product: defaults hold no product data and no invented reviews", () => {
-  it("holds no price, stock or product name anywhere in its content", () => {
+  it("holds no product price, stock or product name anywhere in its content", () => {
     for (const locale of ["bn", "en"] as const) {
       const c = defaultContent(spec(), locale) as Content;
-      const priced = JSON.stringify(c).match(/"(price|oldPrice|charge)":\s*(-?\d+)/g);
+      // Delivery charges are the only amounts: they are the checkout's delivery fees, not product data.
+      const priced = JSON.stringify({ ...c, delivery: null }).match(/"(price|oldPrice|charge)":\s*(-?\d+)/g);
       expect(priced, locale).toBeNull();
       expect(Object.keys(c.spotlight!).sort()).toEqual(["ctaLabel", "eyebrow", "highlights", "layout", "note", "showDescription", "tagline"]);
     }
@@ -167,12 +169,28 @@ describe("BD Single Product: defaults hold no product data and no invented revie
     expect(sectionHtml(render(spec(), defaultContent(spec(), "bn")), "reviews")).not.toContain('role="img"'); // no stars
   });
 
-  it("delivery copy names no fee (the checkout shows the live charge) and offers cash on delivery only", () => {
+  it("delivery zones charge ৳60 inside / ৳120 outside Dhaka by default — editable — and payment is cash on delivery only", () => {
+    const zones = { en: ["Inside Dhaka", "Outside Dhaka"], bn: ["ঢাকার ভিতরে", "ঢাকার বাইরে"] };
     for (const locale of ["bn", "en"] as const) {
       const d = (defaultContent(spec(), locale) as Content).delivery!;
-      expect((d.zones as Array<{ charge: unknown }>).every((z) => z.charge === null)).toBe(true);
+      expect((d.zones as Array<{ area: string; charge: unknown }>).map((z) => [z.area, z.charge])).toEqual([
+        [zones[locale][0], 60],
+        [zones[locale][1], 120],
+      ]);
       expect(d.payments).toEqual([{ method: "cod" }]);
+      // The checkout's delivery options are built from these zones, with these charges.
+      expect(deliveryOptions(spec(), defaultContent(spec(), locale), locale).map((o) => [o.id, o.label, o.charge])).toEqual([
+        ["delivery-0", zones[locale][0], 60],
+        ["delivery-1", zones[locale][1], 120],
+      ]);
     }
+    const zonesField = effectiveSections(spec()).find((s) => s.id === "delivery")!.fields.find((f) => f.key === "zones")!;
+    expect(zonesField.editable).not.toBe(false);
+    // An empty charge still means ৳0 everywhere (merchant left it empty) — unchanged.
+    const blank = clone(defaultContent(spec(), "en")) as Content;
+    blank.delivery = { ...blank.delivery, zones: [{ area: "Anywhere", time: "", charge: null }] };
+    expect(deliveryOptions(spec(), blank, "en")).toEqual([{ id: "delivery-0", label: "Anywhere", time: null, charge: 0 }]);
+    expect(sectionHtml(render(spec(), defaultContent(spec(), "bn")), "delivery")).toMatch(/৳ ৬০[\s\S]*৳ ১২০/);
   });
 });
 
@@ -265,20 +283,32 @@ describe("BD Single Product: seeding, publishing and ordering (database)", () =>
 
     const M = product.variants.find((v) => v.label === "M")!.id;
     const L = product.variants.find((v) => v.label === "L")!.id;
-    const place = (items: Array<{ productId: string; variantId?: string; quantity: number; unitPrice?: number }>, phone = "01712345678") =>
+    // The published page's checkout offers the template's zones with their charges.
+    expect(resolved.commerce!.delivery.map((d) => [d.label, d.charge])).toEqual([
+      ["ঢাকার ভিতরে", 60],
+      ["ঢাকার বাইরে", 120],
+    ]);
+    const place = (items: Array<{ productId: string; variantId?: string; quantity: number; unitPrice?: number }>, phone = "01712345678", zone = 0) =>
       placeLandingOrder({
         host,
         locale: null,
         idempotencyKey: `single-${Date.now()}-${Math.random().toString(36).slice(2)}-abcdefgh`,
         items,
         customer: { name: "রহিম", phone, address: "বাড়ি ১২, রোড ৫, ধানমন্ডি", district: "ঢাকা" },
-        deliveryOptionId: resolved.commerce!.delivery[0]!.id,
+        deliveryOptionId: resolved.commerce!.delivery[zone]!.id,
       });
     expect(await place([{ productId: product.id, quantity: 1 }])).toMatchObject({ ok: false, code: "invalid_request" }); // option required
     expect(await place([{ productId: product.id, variantId: L, quantity: 1 }])).toMatchObject({ ok: false, code: "unavailable" });
     expect(await place([{ productId: product.id, variantId: M, quantity: 1, unitPrice: 1 }])).toMatchObject({ ok: false, code: "price_changed" });
     const ok = await place([{ productId: product.id, variantId: M, quantity: 1 }]);
-    expect(ok).toMatchObject({ ok: true, subtotal: 1200 });
+    expect(ok).toMatchObject({ ok: true, subtotal: 1200, deliveryCharge: 60, total: 1260 });
+    const outside = await place([{ productId: product.id, variantId: M, quantity: 1 }], "01812345678", 1);
+    expect(outside).toMatchObject({ ok: true, deliveryCharge: 120, total: 1320 });
+    if (!ok.ok || !outside.ok) throw new Error("order failed");
+    for (const [r, charge] of [[ok, 60], [outside, 120]] as const) {
+      const stored = (await Order.findOne({ orderNumber: r.orderNumber }).lean())!;
+      expect(stored.order).toMatchObject({ deliveryCharge: charge });
+    }
   });
 
   it("is added to a database that already has the other five without touching them", async () => {

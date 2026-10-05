@@ -162,8 +162,10 @@ banner hero (`promoHero`) → `productSpotlight` → `benefits` → `trustFeatur
 `mobileActionBar` → `shopFooter`. The hero, benefits and offer buttons scroll to the spotlight;
 the order bar's button points at it, so on phones it is Buy now. The product, its price,
 discount, stock and options are only ever the live spotlight: the offer banner's price fields
-are locked empty, delivery zones carry no fee (the checkout shows the live charge), and
-payment is COD. Reviews start as bracketed prompts with no stars, to be replaced with real
+are locked empty. Its delivery zones are the checkout's delivery options (`deliveryOptions`),
+so their charges are what orders are charged — they start at ৳60 inside / ৳120 outside Dhaka
+(BD Modern Shop's baseline) for the merchant to edit; an empty charge would mean ৳0. Payment
+is COD. Reviews start as bracketed prompts with no stars, to be replaced with real
 customer reviews — the template never invents customers or ratings. Its defaults pass
 publish validation as they are; the spotlight (and the bar's Buy now) appears once a product
 is linked — star it on the Products tab when the page links several.

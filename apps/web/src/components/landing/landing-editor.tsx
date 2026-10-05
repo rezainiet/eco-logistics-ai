@@ -54,6 +54,7 @@ import {
 import { PublishBlockersDialog } from "./publish-blockers-dialog";
 import { type RevealElement, revealField } from "./reveal-field";
 import { LandingStatusBadge } from "./status-badge";
+import { PublishWarnings, publishWarnings } from "./publish-warnings";
 import { TrackingSettings } from "./tracking-settings";
 import { DomainSettings } from "./domain-settings";
 import { PageProductsPanel } from "@/components/commerce/page-products-panel";
@@ -151,6 +152,15 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     () => (spec && content && settings ? validateLocalizedContent(spec, content, settings, "publish") : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [spec, content, settings?.locales.join(","), settings?.defaultLocale],
+  );
+  // Shown in the publish confirmation — never blocks publishing (no product to sell, template placeholders left).
+  const warnings = useMemo(
+    () =>
+      spec && content && settings
+        ? publishWarnings({ spec, content, locales: settings.locales, catalog: linkedProducts.data?.catalog ?? null })
+        : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spec, content, settings?.locales.join(","), linkedProducts.data],
   );
 
   const onError = (title: string) => (err: { message: string; data?: { code?: string } | null }) => {
@@ -794,7 +804,9 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         confirmLabel="Publish"
         loading={busy}
         onConfirm={() => void doPublish()}
-      />
+      >
+        <PublishWarnings warnings={warnings} />
+      </ConfirmDialog>
       <UnsavedChangesDialog {...unsavedDialog} />
       <PublishBlockersDialog
         open={blockedOpen && blockers.length > 0}
