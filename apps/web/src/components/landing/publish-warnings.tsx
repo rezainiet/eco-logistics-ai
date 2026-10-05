@@ -27,7 +27,7 @@ export interface PublishWarning {
 /** A whole value that is a template prompt to replace, e.g. "[Customer name]". */
 const PLACEHOLDER_RE = /^\s*\[[^[\]]+\]\s*$/;
 
-function hasPlaceholder(v: unknown, depth = 0): boolean {
+export function hasPlaceholder(v: unknown, depth = 0): boolean {
   if (typeof v === "string") return PLACEHOLDER_RE.test(v);
   // Section values are shallow (field → repeater item → field); stop well before anything deep.
   if (depth > 4 || v === null || typeof v !== "object") return false;
@@ -52,6 +52,20 @@ export function placeholderSections(
 }
 
 /**
+ * Can the product a page's Product spotlight shows be bought? The one truth
+ * for the publish warning and the editor's setup list. `catalog` null/undefined
+ * = still loading ("unknown").
+ */
+export function spotlightReadiness(
+  catalog: ReadonlyArray<CatalogProduct> | null | undefined,
+): { state: "unknown" } | { state: "none" } | { state: "unavailable"; product: CatalogProduct } | { state: "buyable"; product: CatalogProduct } {
+  if (!catalog) return { state: "unknown" };
+  const product = spotlightProduct(catalog);
+  if (!product) return { state: "none" };
+  return product.available ? { state: "buyable", product } : { state: "unavailable", product };
+}
+
+/**
  * Warnings for the publish confirmation. `catalog` is the page's linked
  * products as the editor loaded them (the draft selection publishing will
  * use); null while unknown, which never warns.
@@ -63,17 +77,17 @@ export function publishWarnings(input: {
   catalog: ReadonlyArray<CatalogProduct> | null | undefined;
 }): PublishWarning[] {
   const out: PublishWarning[] = [];
-  if (input.catalog && input.spec.sections.some((s) => s.type === "productSpotlight")) {
-    const product = spotlightProduct(input.catalog);
-    if (!product) {
+  if (input.spec.sections.some((s) => s.type === "productSpotlight")) {
+    const spot = spotlightReadiness(input.catalog);
+    if (spot.state === "none") {
       out.push({
         key: "no-product",
         message: "This page has no product to sell yet — its Order now buttons won’t open checkout. Link a product on the Products tab.",
       });
-    } else if (!product.available) {
+    } else if (spot.state === "unavailable") {
       out.push({
         key: "product-unavailable",
-        message: `“${product.name}” can’t be ordered right now (out of stock or inactive) — the page’s Order now buttons won’t open checkout. Check it on the Products tab.`,
+        message: `“${spot.product.name}” can’t be ordered right now (out of stock or inactive) — the page’s Order now buttons won’t open checkout. Check it on the Products tab.`,
       });
     }
   }

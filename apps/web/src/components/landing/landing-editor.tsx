@@ -55,6 +55,8 @@ import { PublishBlockersDialog } from "./publish-blockers-dialog";
 import { type RevealElement, revealField } from "./reveal-field";
 import { LandingStatusBadge } from "./status-badge";
 import { PublishWarnings, publishWarnings } from "./publish-warnings";
+import { landingSetup } from "./section-setup";
+import { SectionRowContent, SetupSummary } from "./section-setup-view";
 import { TrackingSettings } from "./tracking-settings";
 import { DomainSettings } from "./domain-settings";
 import { PageProductsPanel } from "@/components/commerce/page-products-panel";
@@ -161,6 +163,22 @@ export function LandingEditor({ pageId }: { pageId: string }) {
         : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [spec, content, settings?.locales.join(","), linkedProducts.data],
+  );
+  // Read-only setup status per visible section (Content tab). Never blocks publishing.
+  const setup = useMemo(
+    () =>
+      spec && content && settings
+        ? landingSetup({
+            templateKey: data?.template.key,
+            spec,
+            content,
+            locales: settings.locales,
+            catalog: linkedProducts.data?.catalog ?? null,
+            issues: publishCheck?.issues ?? [],
+          })
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [spec, content, settings?.locales.join(","), linkedProducts.data, publishCheck, data?.template.key],
   );
 
   const onError = (title: string) => (err: { message: string; data?: { code?: string } | null }) => {
@@ -322,6 +340,12 @@ export function LandingEditor({ pageId }: { pageId: string }) {
     setTab("content");
     setPane("edit");
     setReveal((r) => ({ path: b.fieldPath!, n: (r?.n ?? 0) + 1, focus: true }));
+  };
+  // Setup list → the section's existing panel (same mechanism as click-to-edit).
+  const openSection = (sectionId: string) => {
+    setTab("content");
+    setPane("edit");
+    setReveal((r) => ({ path: sectionId, n: (r?.n ?? 0) + 1 }));
   };
   const requestPublish = () => {
     if (blockers.length) {
@@ -532,48 +556,66 @@ export function LandingEditor({ pageId }: { pageId: string }) {
               ) : (
                 <p className="px-1 text-2xs text-fg-faint">Tip: click any text, image or button in the preview to edit it.</p>
               )}
-              {sections.map((section, i) => {
-                const editable = section.fields.filter((f) => f.editable);
-                const locked = section.fields.filter((f) => !f.editable);
-                const errCount = issuesAt(issues, section.id).length;
+              {setup ? <SetupSummary setup={setup} onOpen={openSection} /> : null}
+              {(() => {
+                const rows = new Map((setup?.sections ?? []).map((r) => [r.id, r]));
+                const renderSection = (section: (typeof sections)[number], i: number) => {
+                  const row = section.visual ? rows.get(section.id) : undefined;
+                  const editable = section.fields.filter((f) => f.editable);
+                  const locked = section.fields.filter((f) => !f.editable);
+                  const errCount = issuesAt(issues, section.id).length;
+                  return (
+                    <details
+                      key={`${locale}:${section.id}`}
+                      data-section-id={section.id}
+                      // scroll-mt: opening a section from the setup list lands below the sticky top bar.
+                      className="group scroll-mt-20 rounded-lg border border-stroke/10 bg-surface"
+                      open={i === 3}
+                    >
+                      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3 text-sm font-medium text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        {row ? <SectionRowContent section={row} /> : <span>{section.label}</span>}
+                        {errCount ? <Badge variant="destructive">{errCount}</Badge> : null}
+                      </summary>
+                      <div className="space-y-4 border-t border-stroke/8 px-4 py-4">
+                        {editable.length === 0 ? <p className="text-xs text-fg-faint">Nothing to edit here.</p> : null}
+                        {editable.map((field) => (
+                          <FieldInput
+                            key={field.key}
+                            field={field}
+                            value={localeContent[section.id]?.[field.key]}
+                            path={`${section.id}.${field.key}`}
+                            issues={issues}
+                            env={env}
+                            onChange={(v) => updateField(section.id, field.key, v)}
+                          />
+                        ))}
+                        {locked.length ? (
+                          <div className="space-y-1.5 pt-1">
+                            {locked.map((f) => (
+                              <LockedField key={f.key} field={f} />
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </details>
+                  );
+                };
+                const indexed = sections.map((section, i) => ({ section, i }));
+                const settingsRows = indexed.filter((x) => !x.section.visual);
+                const pageRows = indexed.filter((x) => x.section.visual);
                 return (
-                  <details
-                    key={`${locale}:${section.id}`}
-                    data-section-id={section.id}
-                    className="group rounded-lg border border-stroke/10 bg-surface"
-                    open={i === 3}
-                  >
-                    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-fg">
-                      <span>
-                        {section.label}
-                        {!section.visual ? <span className="ml-2 text-2xs text-fg-faint">page setting</span> : null}
-                      </span>
-                      {errCount ? <Badge variant="destructive">{errCount}</Badge> : null}
-                    </summary>
-                    <div className="space-y-4 border-t border-stroke/8 px-4 py-4">
-                      {editable.length === 0 ? <p className="text-xs text-fg-faint">Nothing to edit here.</p> : null}
-                      {editable.map((field) => (
-                        <FieldInput
-                          key={field.key}
-                          field={field}
-                          value={localeContent[section.id]?.[field.key]}
-                          path={`${section.id}.${field.key}`}
-                          issues={issues}
-                          env={env}
-                          onChange={(v) => updateField(section.id, field.key, v)}
-                        />
-                      ))}
-                      {locked.length ? (
-                        <div className="space-y-1.5 pt-1">
-                          {locked.map((f) => (
-                            <LockedField key={f.key} field={f} />
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  </details>
+                  <>
+                    {settingsRows.length ? (
+                      <h3 className="px-1 pt-2 text-2xs font-semibold uppercase tracking-wider text-fg-faint">Page settings</h3>
+                    ) : null}
+                    {settingsRows.map((x) => renderSection(x.section, x.i))}
+                    {pageRows.length ? (
+                      <h3 className="px-1 pt-3 text-2xs font-semibold uppercase tracking-wider text-fg-faint">Landing page sections</h3>
+                    ) : null}
+                    {pageRows.map((x) => renderSection(x.section, x.i))}
+                  </>
                 );
-              })}
+              })()}
             </div>
           ) : null}
           {tab === "products" || visited.has("products") ? (
