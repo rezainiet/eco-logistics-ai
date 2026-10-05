@@ -17,6 +17,7 @@ import {
 import { captureAttribution, storedAttribution } from "@/lib/analytics/attribution-store";
 import { emitCommerceEvent } from "@/lib/analytics/commerce-events";
 import { VariantPicker } from "./variant-picker";
+import { cartButtonClass } from "@/lib/commerce/cart-button";
 import {
   consumeRecoveryToken,
   endActivitySession,
@@ -114,12 +115,15 @@ export function LandingCommerce({
   slug,
   numerals,
   assetBaseUrl,
+  actionBar = false,
 }: {
   commerce: Commerce;
   locale: Locale;
   slug: string;
   numerals?: NumeralMode;
   assetBaseUrl: string;
+  /** The page shows the mobile order bar: on phones the cart button sits above it. */
+  actionBar?: boolean;
 }) {
   const t = commerceStrings(locale);
   const catalog = commerce.products;
@@ -545,7 +549,7 @@ export function LandingCommerce({
         <button
           type="button"
           onClick={() => openDrawer("cart")}
-          className="fixed bottom-4 right-4 z-40 inline-flex min-h-14 items-center gap-2 rounded-full bg-[var(--lp-primary)] px-5 py-3 font-semibold text-[color:var(--lp-on-primary)] shadow-lg ring-1 ring-black/10 sm:bottom-6 sm:right-6"
+          className={cartButtonClass(actionBar)}
           aria-label={t.openCart(num(totals.count))}
           data-lp-cart-button=""
         >

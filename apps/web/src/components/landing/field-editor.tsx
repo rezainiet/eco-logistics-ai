@@ -4,7 +4,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ImagePlus, Loader2, Lock, Plus, Trash2 } from "lucide-react";
 import {
   ALLOWED_ASSET_MIME,
-  CTA_ACTION_KINDS,
+  ctaActionsFor,
   MAX_ASSET_BYTES,
   type ContentIssue,
   type CtaAction,
@@ -247,7 +247,9 @@ export function FieldInput({
         </div>,
       );
     case "cta":
-      return shell(<CtaInput value={value as CtaValue} onChange={onChange} env={env} a11y={a11y} label={field.label} />);
+      return shell(
+        <CtaInput value={value as CtaValue} onChange={onChange} env={env} a11y={a11y} label={field.label} kinds={ctaActionsFor(field)} />,
+      );
     case "repeater":
       return (
         <RepeaterInput field={field} value={Array.isArray(value) ? value : []} onChange={onChange} path={path} issues={issues} env={env} />
@@ -386,12 +388,15 @@ function CtaInput({
   env,
   a11y,
   label,
+  kinds,
 }: {
   value: CtaValue | undefined;
   onChange: (v: unknown) => void;
   env: FieldEditorEnv;
   a11y: FieldA11y;
   label: string;
+  /** What the button may do — every kind unless the field restricts it. */
+  kinds: ReadonlyArray<CtaAction["kind"]>;
 }) {
   const v: CtaValue = value ?? { label: "", action: { kind: "none" } };
   const a = v.action;
@@ -423,7 +428,7 @@ function CtaInput({
         {...mark(actionInvalid)}
         onChange={(e) => set(blankAction(e.target.value as CtaAction["kind"], env))}
       >
-        {CTA_ACTION_KINDS.map((k) => (
+        {kinds.map((k) => (
           <option key={k} value={k}>
             {CTA_KIND_LABEL[k]}
           </option>

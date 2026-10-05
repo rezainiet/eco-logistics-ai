@@ -3,6 +3,7 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { PREVIEW_MESSAGE_SOURCE, type PreviewRenderMessage, parsePreviewMessage } from "@ecom/landing";
 import { LandingRenderer, assetEnv } from "@ecom/landing/react";
+import { LandingMotion } from "@/lib/landing-motion";
 import { EditOverlay } from "./edit-overlay";
 
 /**
@@ -89,6 +90,10 @@ export function PreviewFrame({ allowedOrigins, assetBaseUrl }: { allowedOrigins:
         className="min-h-screen"
       />
       {editing ? <EditOverlay spec={msg.spec} locale={msg.locale} selected={msg.edit?.selected ?? null} parentOrigin={editorOrigin} /> : null}
+      {/* Plain previews (full preview, template gallery) show the page's
+          scroll reveal; click-to-edit never animates — the renderer emits no
+          motion markers when editable, and the script is not mounted. */}
+      {editing ? null : <LandingMotion watch={msg} />}
     </div>
   );
 }

@@ -5,3 +5,31 @@
 html {
   scroll-behavior: smooth;
 }
+
+/*
+ * Landing-page scroll reveal (src/lib/motion.ts). Nothing is hidden by the
+ * server markup: only a section the script has marked "pending" (it started
+ * below the fold after load) is held back, and only while the visitor has
+ * not asked for reduced motion. Opacity and transform only — no layout
+ * shift, nothing blocks interaction.
+ */
+[data-lp-motion="subtle"] {
+  --lp-reveal-distance: 14px;
+  --lp-reveal-duration: 420ms;
+}
+[data-lp-motion="lively"] {
+  --lp-reveal-distance: 32px;
+  --lp-reveal-duration: 600ms;
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-lp-motion] [data-lp-reveal="pending"],
+  [data-lp-motion] [data-lp-reveal="shown"] {
+    transition:
+      opacity var(--lp-reveal-duration) cubic-bezier(0.22, 1, 0.36, 1),
+      transform var(--lp-reveal-duration) cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  [data-lp-motion] [data-lp-reveal="pending"] {
+    opacity: 0;
+    transform: translate3d(0, var(--lp-reveal-distance), 0);
+  }
+}

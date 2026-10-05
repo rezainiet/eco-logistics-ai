@@ -11,6 +11,7 @@
 export {
   FIELD_TYPES,
   CTA_ACTION_KINDS,
+  ctaActionsFor,
   valueSchemaFor,
   emptyValueFor,
   isEmptyValue,
@@ -18,10 +19,11 @@ export {
   ctaValueSchema,
   imageValueSchema,
 } from "./fields.js";
-export type { FieldDef, FieldType, ImageValue, CtaAction, CtaValue } from "./fields.js";
+export type { FieldDef, FieldType, ImageValue, CtaAction, CtaActionKind, CtaValue } from "./fields.js";
 
 export {
   SECTION_TYPES,
+  MOTION_MODES,
   ICON_NAMES,
   FONT_STACKS,
   FONT_KEYS,
@@ -32,8 +34,10 @@ export {
   getSectionType,
   listSectionTypes,
   sectionTypeKey,
+  themeMotion,
+  hasMobileActionBar,
 } from "./sections.js";
-export type { SectionTypeDef, IconName, FontKey, PaymentMethod } from "./sections.js";
+export type { SectionTypeDef, IconName, FontKey, PaymentMethod, MotionMode } from "./sections.js";
 
 export { SUPPORTED_LOCALES, LOCALE_LABELS, isLocale, localeScript } from "./locales.js";
 export type { Locale } from "./locales.js";

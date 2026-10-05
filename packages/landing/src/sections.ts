@@ -38,6 +38,60 @@ export {
 } from "./vocab.js";
 export type { IconName, FontKey, PaymentMethod } from "./vocab.js";
 
+/**
+ * The page-wide theme. `theme@1` is the original contract; `theme@2` adds
+ * `motion` and is otherwise identical. Pages and templates on theme@1 never
+ * see the motion setting (their editor, content and output are unchanged);
+ * new templates opt in by using theme@2.
+ */
+const THEME_FIELDS: ReadonlyArray<FieldDef> = [
+  { key: "primary", type: "color", label: "Primary colour", default: "#4f46e5", required: true },
+  { key: "onPrimary", type: "color", label: "Text on primary", default: "#ffffff", required: true },
+  { key: "accent", type: "color", label: "Accent colour", default: "#f59e0b", required: true },
+  { key: "background", type: "color", label: "Page background", default: "#ffffff", required: true },
+  { key: "surface", type: "color", label: "Card background", default: "#f8fafc", required: true },
+  { key: "text", type: "color", label: "Body text", default: "#0f172a", required: true },
+  { key: "muted", type: "color", label: "Secondary text", default: "#475569", required: true },
+  { key: "font", type: "select", label: "Font", options: FONT_OPTIONS, default: "system", required: true },
+  {
+    key: "radius",
+    type: "select",
+    label: "Corner style",
+    options: [
+      { value: "sharp", label: "Sharp" },
+      { value: "soft", label: "Soft" },
+      { value: "round", label: "Round" },
+    ],
+    default: "soft",
+    required: true,
+  },
+  {
+    key: "numerals",
+    type: "select",
+    label: "Numbers",
+    help: "How prices and numbers are written. Auto uses Bangla digits (১২৩) on Bangla pages and 123 on English pages.",
+    options: NUMERAL_MODES.map((m) => ({ value: m, label: m === "auto" ? "Auto (match language)" : m === "latin" ? "123" : "১২৩" })),
+    default: "auto",
+  },
+];
+
+/** Entrance animation as visitors scroll (see the renderer and apps/sites motion). */
+export const MOTION_MODES = ["none", "subtle", "lively"] as const;
+export type MotionMode = (typeof MOTION_MODES)[number];
+
+const MOTION_FIELD: FieldDef = {
+  key: "motion",
+  type: "select",
+  label: "Animation",
+  help: "Sections gently fade in as visitors scroll. Visitors who turn off animations on their phone or computer never see it.",
+  options: [
+    { value: "none", label: "None" },
+    { value: "subtle", label: "Subtle" },
+    { value: "lively", label: "Lively" },
+  ],
+  default: "none",
+};
+
 const SECTION_LIST: SectionTypeDef[] = [
   {
     type: "theme",
@@ -45,36 +99,15 @@ const SECTION_LIST: SectionTypeDef[] = [
     label: "Colours & font",
     description: "Page-wide colours and typography.",
     visual: false,
-    fields: [
-      { key: "primary", type: "color", label: "Primary colour", default: "#4f46e5", required: true },
-      { key: "onPrimary", type: "color", label: "Text on primary", default: "#ffffff", required: true },
-      { key: "accent", type: "color", label: "Accent colour", default: "#f59e0b", required: true },
-      { key: "background", type: "color", label: "Page background", default: "#ffffff", required: true },
-      { key: "surface", type: "color", label: "Card background", default: "#f8fafc", required: true },
-      { key: "text", type: "color", label: "Body text", default: "#0f172a", required: true },
-      { key: "muted", type: "color", label: "Secondary text", default: "#475569", required: true },
-      { key: "font", type: "select", label: "Font", options: FONT_OPTIONS, default: "system", required: true },
-      {
-        key: "radius",
-        type: "select",
-        label: "Corner style",
-        options: [
-          { value: "sharp", label: "Sharp" },
-          { value: "soft", label: "Soft" },
-          { value: "round", label: "Round" },
-        ],
-        default: "soft",
-        required: true,
-      },
-      {
-        key: "numerals",
-        type: "select",
-        label: "Numbers",
-        help: "How prices and numbers are written. Auto uses Bangla digits (১২৩) on Bangla pages and 123 on English pages.",
-        options: NUMERAL_MODES.map((m) => ({ value: m, label: m === "auto" ? "Auto (match language)" : m === "latin" ? "123" : "১২৩" })),
-        default: "auto",
-      },
-    ],
+    fields: THEME_FIELDS,
+  },
+  {
+    type: "theme",
+    version: 2,
+    label: "Colours, font & animation",
+    description: "Page-wide colours, typography and scroll animation.",
+    visual: false,
+    fields: [...THEME_FIELDS, MOTION_FIELD],
   },
   {
     type: "seo",
@@ -427,4 +460,18 @@ export function getSectionType(type: string, version: number): SectionTypeDef | 
 
 export function listSectionTypes(): SectionTypeDef[] {
   return [...SECTION_TYPES.values()];
+}
+
+/**
+ * The page's motion setting, from its resolved theme values. Anything other
+ * than "subtle" / "lively" (absent on theme@1, tampered, unknown) is "none".
+ */
+export function themeMotion(theme: Record<string, unknown> | undefined): MotionMode {
+  const v = theme?.motion;
+  return v === "subtle" || v === "lively" ? v : "none";
+}
+
+/** True when the template shows the mobile order bar (the floating cart then sits above it). */
+export function hasMobileActionBar(spec: { sections: ReadonlyArray<{ type: string }> }): boolean {
+  return spec.sections.some((s) => s.type === "mobileActionBar");
 }

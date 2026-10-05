@@ -341,4 +341,38 @@ export const COMMERCE_SECTIONS: SectionTypeDef[] = [
       { key: "copyright", type: "text", label: "Copyright line", maxLength: 120 },
     ],
   },
+  {
+    type: "mobileActionBar",
+    version: 1,
+    label: "Mobile order bar",
+    description: "A bar fixed to the bottom of phone screens: an order button, plus optional WhatsApp and call buttons. Hidden on tablets and computers.",
+    visual: true,
+    fields: [
+      {
+        key: "primaryCta",
+        type: "cta",
+        label: "Order button",
+        help: "Scrolls to a section of this page — usually your products or order form.",
+        required: true,
+        actions: ["section"],
+        default: { label: "Order now", action: { kind: "none" } },
+      },
+      {
+        key: "whatsappCta",
+        type: "cta",
+        label: "WhatsApp button (optional)",
+        help: "Add your WhatsApp number to show this button.",
+        actions: ["whatsapp"],
+        default: { label: "WhatsApp", action: { kind: "none" } },
+      },
+      {
+        key: "callCta",
+        type: "cta",
+        label: "Call button (optional)",
+        help: "Add your phone number to show this button.",
+        actions: ["phone"],
+        default: { label: "Call", action: { kind: "none" } },
+      },
+    ],
+  },
 ];

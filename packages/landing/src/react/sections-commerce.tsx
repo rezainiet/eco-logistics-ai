@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { ctaHref } from "../cta.js";
 import { productKey } from "../analytics.js";
+import type { CtaValue } from "../fields.js";
 import { safeUrl } from "../safe.js";
 import { SOCIAL_NETWORKS } from "../vocab.js";
 import {
@@ -634,6 +635,105 @@ function ShopFooter({ values: v, env }: SectionProps) {
   );
 }
 
+/**
+ * Mobile order bar — fixed to the bottom of phone screens, hidden from 768px
+ * (md) up. One wide order button (thumb side) plus optional WhatsApp / call
+ * icon buttons; every href comes from `ctaHref`, so only a validated
+ * section anchor, wa.me link or tel: number can render.
+ *
+ * Height: 0.5rem + 3rem buttons + bottom padding (at least 0.5rem, or the
+ * device's safe-area inset) + 1px border. Two numbers elsewhere are sized
+ * from it and must stay in step: the page's bottom padding on phones
+ * (renderer.tsx, ACTION_BAR_PAD) and the floating cart button's offset
+ * (apps/sites landing-commerce.tsx).
+ */
+function MobileActionBar({ values: v, env }: SectionProps) {
+  const { t } = ctxOf(env);
+  const primary = S.cta(v.primaryCta);
+  const primaryHref = primary ? ctaHref(primary.action) : null;
+  const side = (key: "whatsappCta" | "callCta", fallback: string) => {
+    const value = (v[key] ?? null) as CtaValue | null;
+    const target = value?.action ? ctaHref(value.action) : null;
+    if (!target) return null;
+    return { href: target.href, external: target.external, label: S.str(value?.label).trim() || fallback };
+  };
+  const wa = side("whatsappCta", t.whatsapp);
+  const call = side("callCta", t.call);
+  if (!primary && !wa && !call) return null;
+  const sideCls = "inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--lp-radius)]";
+  // Editor preview only: show where an unset optional button would go, so it can be clicked to edit.
+  const placeholder = (key: string, icon: "whatsapp" | "phone") =>
+    env.editable ? (
+      <span className={cx(sideCls, "border border-dashed border-current text-[color:var(--lp-muted)] opacity-60")} {...ed(env, key)}>
+        {icon === "whatsapp" ? <WhatsAppGlyph /> : <Icon name="phone" className="h-5 w-5" />}
+      </span>
+    ) : null;
+  const primaryCls =
+    "inline-flex min-h-12 min-w-0 flex-1 items-center justify-center gap-2 rounded-[var(--lp-radius)] bg-[var(--lp-primary)] px-4 py-2 text-center text-[15px] font-semibold leading-[var(--lp-lh-snug)] text-[color:var(--lp-on-primary)] shadow-sm transition-opacity hover:opacity-90";
+  return (
+    <div className="md:hidden" data-lp-action-bar="">
+      <nav
+        aria-label={t.quickOrder}
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-black/10 bg-[var(--lp-bg)] px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.25)]"
+      >
+        <div className="mx-auto flex w-full max-w-md items-stretch gap-2">
+          {wa ? (
+            <a
+              href={wa.href}
+              target="_blank"
+              rel="noopener noreferrer nofollow ugc"
+              aria-label={wa.label}
+              title={wa.label}
+              className={cx(sideCls, "bg-[#128c4a] text-white shadow-sm transition-opacity hover:opacity-90")}
+              {...ed(env, "whatsappCta")}
+            >
+              <WhatsAppGlyph />
+            </a>
+          ) : (
+            placeholder("whatsappCta", "whatsapp")
+          )}
+          {call ? (
+            <a
+              href={call.href}
+              aria-label={call.label}
+              title={call.label}
+              className={cx(sideCls, "bg-[var(--lp-surface)] text-[color:var(--lp-text)] ring-1 ring-inset ring-black/10 transition-opacity hover:opacity-90")}
+              {...ed(env, "callCta")}
+            >
+              <Icon name="phone" className="h-5 w-5" />
+            </a>
+          ) : (
+            placeholder("callCta", "phone")
+          )}
+          {primary ? (
+            primaryHref ? (
+              <a href={primaryHref.href} className={primaryCls} {...ed(env, "primaryCta")}>
+                <Icon name="bag" className="h-5 w-5 shrink-0" />
+                <span className="min-w-0 break-words">{primary.label}</span>
+              </a>
+            ) : (
+              // No destination yet (unfinished draft): honest layout, goes nowhere.
+              <span className={primaryCls} aria-disabled="true" data-cta-unlinked="" {...ed(env, "primaryCta")}>
+                <span className="min-w-0 break-words">{primary.label}</span>
+              </span>
+            )
+          ) : null}
+        </div>
+      </nav>
+    </div>
+  );
+}
+
+/** WhatsApp-style mark (speech bubble with a handset) — internal glyph, not a merchant icon choice. */
+function WhatsAppGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-6 w-6">
+      <path d="M3.5 20.5l1.3-4A8.5 8.5 0 1 1 8.2 19.5z" />
+      <path d="M9.2 8.6c.2 2.7 3.4 5.8 6 6l1.1-1.3-2-1.1-.9.7a4.6 4.6 0 0 1-2.3-2.3l.7-.9-1.1-2z" />
+    </svg>
+  );
+}
+
 export const COMMERCE_COMPONENTS: Readonly<Record<string, ComponentType<SectionProps>>> = {
   "announcement@1": Announcement,
   "shopHeader@1": ShopHeader,
@@ -645,4 +745,5 @@ export const COMMERCE_COMPONENTS: Readonly<Record<string, ComponentType<SectionP
   "trustFeatures@1": TrustFeatures,
   "deliveryInfo@1": DeliveryInfo,
   "shopFooter@1": ShopFooter,
+  "mobileActionBar@1": MobileActionBar,
 };

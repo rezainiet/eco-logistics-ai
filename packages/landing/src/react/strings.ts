@@ -19,6 +19,9 @@ export interface UiStrings {
   time: string;
   charge: string;
   free: string;
+  /** Mobile order bar: call button fallback label, and the bar's accessible name. */
+  call: string;
+  quickOrder: string;
   off: (pct: string) => string;
   stars: (n: number) => string;
   payment: Record<PaymentMethod, string>;
@@ -38,6 +41,8 @@ const en: UiStrings = {
   time: "Delivery time",
   charge: "Charge",
   free: "Free",
+  call: "Call",
+  quickOrder: "Quick order",
   off: (pct) => `-${pct}`,
   stars: (n) => `${n} out of 5 stars`,
   payment: {
@@ -65,6 +70,8 @@ const bn: UiStrings = {
   time: "ডেলিভারি সময়",
   charge: "চার্জ",
   free: "ফ্রি",
+  call: "কল করুন",
+  quickOrder: "দ্রুত অর্ডার",
   off: (pct) => `${pct} ছাড়`,
   stars: (n) => `৫-এর মধ্যে ${n} রেটিং`,
   payment: {

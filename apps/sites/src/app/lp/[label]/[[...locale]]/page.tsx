@@ -1,8 +1,18 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { LOCALE_LABELS, type Locale, type NumeralMode, analyticsConfigOf, effectiveSections, productCatalog } from "@ecom/landing";
+import {
+  LOCALE_LABELS,
+  type Locale,
+  type NumeralMode,
+  analyticsConfigOf,
+  effectiveSections,
+  hasMobileActionBar,
+  productCatalog,
+  themeMotion,
+} from "@ecom/landing";
 import { LandingRenderer, assetEnv, themeStyle } from "@ecom/landing/react";
 import { analyticsAllowed, indexingAllowed } from "@/lib/config";
+import { LandingMotion } from "@/lib/landing-motion";
 import { resolveCurrentHost } from "@/lib/resolve";
 import { LandingAnalytics } from "./landing-analytics";
 import { LandingCommerce } from "./landing-commerce";
@@ -109,9 +119,18 @@ export default async function PublicLandingPage({ params }: Props) {
       {commerce ? (
         // Themed like the page (colours, radius, Bangla typography).
         <div style={themeStyle(theme, r.locale)} className="contents">
-          <LandingCommerce commerce={commerce} locale={r.locale} slug={r.slug} numerals={numerals} assetBaseUrl={r.assetBaseUrl} />
+          <LandingCommerce
+            commerce={commerce}
+            locale={r.locale}
+            slug={r.slug}
+            numerals={numerals}
+            assetBaseUrl={r.assetBaseUrl}
+            actionBar={hasMobileActionBar(r.spec)}
+          />
         </div>
       ) : null}
+      {/* Scroll reveal: only for theme@2 "subtle" / "lively" (the script is never mounted otherwise). */}
+      {themeMotion(theme) !== "none" ? <LandingMotion /> : null}
       {/* Published page only — the preview frame never mounts analytics. The
           IDs are re-validated here: only well-formed public IDs reach the browser. */}
       {analyticsAllowed() && publicTracking ? (

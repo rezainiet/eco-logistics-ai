@@ -1,11 +1,11 @@
 import type { CSSProperties } from "react";
 import { type NumeralMode, NUMERAL_MODES } from "../format.js";
 import type { Locale } from "../locales.js";
-import { sectionTypeKey } from "../sections.js";
+import { hasMobileActionBar, sectionTypeKey, themeMotion } from "../sections.js";
 import { safeColor } from "../safe.js";
 import { type PageContent, type TemplateSpec, effectiveSections, resolveContent } from "../spec.js";
 import { fontStack } from "../vocab.js";
-import type { RenderEnv } from "./primitives.js";
+import { type RenderEnv, cx } from "./primitives.js";
 import { SECTION_COMPONENTS } from "./sections.js";
 
 const RADIUS: Record<string, string> = { sharp: "0px", soft: "0.75rem", round: "1.5rem" };
@@ -90,6 +90,20 @@ function numeralMode(theme: Record<string, unknown> | undefined): NumeralMode {
   return typeof v === "string" && (NUMERAL_MODES as readonly string[]).includes(v) ? (v as NumeralMode) : "auto";
 }
 
+/**
+ * Sections that never take part in the scroll reveal: top-of-page chrome
+ * that is on screen at load, and the fixed mobile order bar (a transform on
+ * its wrapper would detach a fixed element from the viewport).
+ */
+const NO_REVEAL = new Set(["header", "shopHeader", "announcement", "mobileActionBar"]);
+
+/**
+ * Bottom padding on phones when the page has a mobile order bar, so the bar
+ * never covers the end of the page. Kept in step with the bar's height
+ * (react/sections-commerce.tsx, MobileActionBar).
+ */
+const ACTION_BAR_PAD = "max-md:pb-[calc(4.75rem+env(safe-area-inset-bottom,0px))]";
+
 export interface LandingRendererProps {
   spec: TemplateSpec;
   /** Untrusted stored content for `locale`. Re-validated here before any component sees it. */
@@ -109,8 +123,21 @@ export function LandingRenderer({ spec, content, env, locale = "en", className }
   const sections = effectiveSections(spec, locale);
   const theme = resolved[sections.find((s) => s.type === "theme")?.id ?? ""];
   const sectionEnv: RenderEnv = { ...env, locale, numerals: numeralMode(theme) };
+  // Scroll reveal (theme@2 "subtle" / "lively"): only markers — the server
+  // HTML hides nothing; apps/sites' motion script animates sections that
+  // start below the fold, unless the visitor prefers reduced motion. Never
+  // in the editor's click-to-edit preview.
+  const motion = env.editable ? "none" : themeMotion(theme);
+  const reveal = motion !== "none";
+  const rootClass = hasMobileActionBar(spec) ? cx(className, ACTION_BAR_PAD) : className;
   return (
-    <div className={className} style={themeStyle(theme, locale)} lang={locale} data-landing-root="">
+    <div
+      className={rootClass}
+      style={themeStyle(theme, locale)}
+      lang={locale}
+      data-landing-root=""
+      {...(reveal ? { "data-lp-motion": motion } : {})}
+    >
       {sections.map((section) => {
         if (!section.visual) return null;
         const Component = SECTION_COMPONENTS[sectionTypeKey(section.type, section.typeVersion)];
@@ -122,6 +149,7 @@ export function LandingRenderer({ spec, content, env, locale = "en", className }
             data-section-type={section.type}
             className="scroll-mt-4"
             {...(env.editable ? { "data-lp-section": section.id } : {})}
+            {...(reveal && !NO_REVEAL.has(section.type) ? { "data-lp-reveal": "" } : {})}
           >
             <Component id={section.id} values={resolved[section.id] ?? {}} env={sectionEnv} />
           </section>

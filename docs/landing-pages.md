@@ -110,6 +110,25 @@ editor (landing-editor.tsx)         resolveEditTarget(spec, locale, path)  ← s
 - Stale clicks from a frame rendering another language are ignored, so a click can never
   open the wrong language's field.
 
+**Scroll animation (opt-in):** `theme@2` is `theme@1` plus `motion` (`none` / `subtle` /
+`lively`, default `none`). Templates and pages on `theme@1` (all current system templates)
+never see the setting and render exactly as before. With motion on, the renderer only adds
+markers (`data-lp-motion` on the root, `data-lp-reveal` on sections other than the header,
+announcement and order bar); the server HTML hides nothing. apps/sites' `lib/motion.ts`
+(bundled, no library, CSP `'self'`) then holds back only the sections that start below the
+fold and fades/slides each in (opacity + transform) as it scrolls into view. It does nothing
+for visitors who prefer reduced motion or browsers without IntersectionObserver, and focus,
+printing or switching to reduced motion reveal everything. The editor's click-to-edit preview
+never animates (no markers when `editable`, script not mounted); plain previews do.
+
+**Mobile order bar (`mobileActionBar@1`):** fixed to the bottom of phone screens (hidden from
+768px): a wide order button plus optional WhatsApp and call icon buttons, with safe-area
+padding. Its `cta` fields declare `actions` — the order button may only scroll to a section of
+the page (no product buy-now yet), WhatsApp only opens a chat, call only dials — enforced on
+write by the field schema and offered that way in the editor. When a template has the bar, the
+page gets bottom padding on phones and the floating cart button sits above the bar
+(`apps/sites/src/lib/commerce/cart-button.ts`); without it both are unchanged.
+
 **Prices:** `price` fields hold numbers; `formatBDT` renders `৳ ১,২৯০` (bn) or
 `৳ 1,290` (en), switchable per page (`theme.numerals`: auto / 123 / ১২৩). Discount %
 is computed from old and current price. Payment methods (COD, bKash, Nagad, …) are

@@ -49,7 +49,16 @@ export type FieldDef =
   | (FieldBase & { type: "image" })
   /** A BDT amount (number). Rendered with the page's numeral setting via formatBDT. */
   | (FieldBase & { type: "price" })
-  | (FieldBase & { type: "cta" })
+  | (FieldBase & {
+      type: "cta";
+      /**
+       * Actions this button may take (besides "none", the unset state).
+       * Omitted = every kind. Set by a section type whose component only
+       * makes sense with some actions (e.g. an order bar that may only
+       * scroll to a section of the page).
+       */
+      actions?: ReadonlyArray<Exclude<CtaActionKind, "none">>;
+    })
   | (FieldBase & {
       type: "repeater";
       itemLabel: string;
@@ -79,6 +88,13 @@ export type CtaAction =
   | { kind: "section"; sectionId: string };
 
 export const CTA_ACTION_KINDS = ["none", "link", "phone", "whatsapp", "email", "section"] as const;
+export type CtaActionKind = (typeof CTA_ACTION_KINDS)[number];
+
+/** Action kinds a CTA field offers: "none" plus the field's allowed kinds (all when unrestricted). */
+export function ctaActionsFor(field: { actions?: ReadonlyArray<CtaActionKind> }): CtaActionKind[] {
+  if (!field.actions?.length) return [...CTA_ACTION_KINDS];
+  return CTA_ACTION_KINDS.filter((k) => k === "none" || field.actions!.includes(k));
+}
 
 export interface CtaValue {
   label: string;
@@ -211,8 +227,11 @@ export function valueSchemaFor(field: FieldDef): z.ZodTypeAny {
         .max(100_000_000, "Price is too large")
         .refine((v) => Math.abs(Math.round(v * 100) - v * 100) < 1e-6, "At most 2 decimal places")
         .nullable();
-    case "cta":
-      return ctaValueSchema;
+    case "cta": {
+      if (!field.actions?.length) return ctaValueSchema;
+      const allowed = ctaActionsFor(field);
+      return ctaValueSchema.refine((v) => allowed.includes(v.action.kind), "This button can't do that");
+    }
     case "repeater": {
       const shape: Record<string, z.ZodTypeAny> = {};
       for (const f of field.itemFields) shape[f.key] = valueSchemaFor(f);
