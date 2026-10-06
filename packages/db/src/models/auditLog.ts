@@ -11,6 +11,7 @@ export const AUDIT_ACTIONS = [
   "review.reopened",
   "review.requested",
   "order.booked",
+  "order.booking_failed",
   "order.cancelled",
   "order.ingested",
   "courier.configured",

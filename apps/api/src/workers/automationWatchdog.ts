@@ -3,7 +3,7 @@ import { Types } from "mongoose";
 import { Merchant, Order } from "@ecom/db";
 import { getQueue, QUEUE_NAMES, registerWorker } from "../lib/queue.js";
 import { writeAudit } from "../lib/audit.js";
-import { dispatchNotification } from "../lib/notifications.js";
+import { notifyBookingFailed } from "../lib/booking-failure.js";
 import { enqueueAutoBook, MAX_AUTO_BOOK_AGE_MS } from "./automationBook.js";
 
 /**
@@ -118,18 +118,12 @@ export async function runAutomationWatchdog(): Promise<AutomationWatchdogResult>
       const attempted = (o as { automation?: { attemptedCouriers?: string[] } }).automation
         ?.attemptedCouriers ?? [];
       if (attempted.length >= FALLBACK_MAX_COURIERS) {
-        // Already tried every fallback. Notify the merchant once per hour.
-        const dedupeKey = `watchdog_exhausted:${String(o._id)}`;
-        await dispatchNotification({
+        // Already tried every fallback: the order's one booking-failed
+        // alert (written by the worker with its reason; added here if missing).
+        await notifyBookingFailed({
           merchantId: o.merchantId as Types.ObjectId,
-          kind: "integration.webhook_failed",
-          severity: "critical",
-          title: `Order ${o.orderNumber}: auto-book exhausted, manual action needed`,
-          body: `We tried ${attempted.length} couriers and none accepted the booking. Open the order to retry manually or change couriers.`,
-          link: `/dashboard/orders?focus=${String(o._id)}`,
-          subjectType: "order",
-          subjectId: o._id as Types.ObjectId,
-          dedupeKey,
+          orderId: o._id as Types.ObjectId,
+          onlyIfMissing: true,
         });
         await writeAudit({
           merchantId: o.merchantId as Types.ObjectId,

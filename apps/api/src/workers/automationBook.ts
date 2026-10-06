@@ -5,7 +5,7 @@ import { adapterFor, type CourierName } from "../lib/couriers/index.js";
 import { getQueue, QUEUE_NAMES, registerWorker, safeEnqueue } from "../lib/queue.js";
 import { bullJobId } from "../lib/queue-ids.js";
 import { writeAudit } from "../lib/audit.js";
-import { dispatchNotification } from "../lib/notifications.js";
+import { notifyBookingFailed } from "../lib/booking-failure.js";
 import { recordCourierBookFailure, selectBestCourier } from "../lib/courier-intelligence.js";
 import { Merchant } from "@ecom/db";
 import { updateOrderWithVersion } from "../lib/orderConcurrency.js";
@@ -220,6 +220,11 @@ async function bookOrThrow(
       .map((c) => c.name.toLowerCase());
     const candidates = enabled.filter((c) => !attemptedAlready.has(c));
     if (candidates.length === 0) {
+      // Every courier has already been tried (a watchdog re-enqueue, or a
+      // courier disabled mid-chain): the booking has finally failed.
+      if (attemptedAlready.size > 0) {
+        await notifyBookingFailed({ merchantId: merchantOid, orderId: orderOid, onlyIfMissing: true });
+      }
       return {
         ok: true,
         status: "skipped",
@@ -337,8 +342,33 @@ async function bookOrThrow(
     console.error("[automation-book] failure record failed:", (err as Error).message),
   );
 
-  const attemptedNext = [...attemptedAlready, pickedCourier];
-  if (attemptedNext.length < FALLBACK_MAX_COURIERS) {
+  const attemptedNext = [...new Set([...attemptedAlready, pickedCourier])];
+  // Is there another enabled courier left to fall back to?
+  const enabledNow = (
+    (await Merchant.findById(merchantOid).select("couriers").lean()) as { couriers?: Array<{ name: string; enabled?: boolean }> } | null
+  )?.couriers?.filter((c) => c.enabled !== false).map((c) => c.name.toLowerCase()) ?? [];
+  const canFallBack =
+    attemptedNext.length < FALLBACK_MAX_COURIERS && enabledNow.some((c) => !attemptedNext.includes(c));
+  if (!canFallBack) {
+    // Final outcome: no courier would book it. Tell the merchant once —
+    // a booking failure, not an integration/webhook failure.
+    void writeAudit({
+      merchantId: merchantOid,
+      actorId: merchantOid,
+      actorType: "system",
+      action: "automation.auto_book_failed",
+      subjectType: "order",
+      subjectId: orderOid,
+      meta: { courier: pickedCourier, error: res.error, reasonCode: res.courierError ?? null, attempted: attemptedNext, willFallback: false },
+    });
+    await notifyBookingFailed({
+      merchantId: merchantOid,
+      orderId: orderOid,
+      courier: pickedCourier,
+      code: res.courierError ?? null,
+      error: res.error,
+    });
+  } else {
     void writeAudit({
       merchantId: merchantOid,
       actorId: merchantOid,
@@ -367,8 +397,12 @@ async function bookOrThrow(
     return { ok: true, status: "skipped", error: `fallback queued (${pickedCourier} failed)` };
   }
 
-  // No more couriers — let BullMQ count this as a real failure so the
-  // retry-exhaustion notification fires.
+  if (attemptedNext.length < FALLBACK_MAX_COURIERS) {
+    // Fewer couriers than the cap, all tried: nothing a queue retry can change.
+    return { ok: false, status: "failed", error: `all couriers failed (${attemptedNext.join(", ")})` };
+  }
+  // Courier cap reached — keep the existing queue retry policy (the
+  // merchant has already been notified; a retry that books clears it).
   throw new Error(res.error ?? `auto-book failed on ${pickedCourier}`);
 }
 
@@ -417,19 +451,17 @@ export function registerAutomationBookWorker() {
       },
     }).catch(() => {});
 
-    // Critical-severity inbox row + (if merchant has a phone) SMS.
-    void dispatchNotification({
-      merchantId: merchantOid,
-      kind: "integration.webhook_failed",
-      severity: "critical",
-      title: `Auto-booking failed for order ${data.orderId.slice(-6)}`,
-      body: `We tried ${job.attemptsMade} times to auto-book this order with ${data.courier} but the courier kept rejecting it. Please review and book manually.`,
-      link: `/dashboard/orders?focus=${data.orderId}`,
-      subjectType: "order",
-      subjectId: orderOid ?? undefined,
-      dedupeKey: `auto_book_failed:${data.orderId}`,
-      meta: { courier: data.courier, error: err.message?.slice(0, 500) },
-    }).catch((e) => console.error("[automation-book] notify failed", e));
+    // The final failure was already reported by bookOrThrow with its reason;
+    // this only covers a job that died before it could (same one-per-order alert).
+    if (orderOid) {
+      void notifyBookingFailed({
+        merchantId: merchantOid,
+        orderId: orderOid,
+        courier: data.courier ?? null,
+        error: err.message?.slice(0, 500) ?? null,
+        onlyIfMissing: true,
+      });
+    }
   });
 
   return worker;

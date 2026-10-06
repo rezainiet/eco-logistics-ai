@@ -362,6 +362,38 @@ export function buildTrialEndingEmail(args: {
 }
 
 /**
+ * Renewal reminder for a manually paid plan — it does not renew by itself,
+ * so access ends on `endsOn` unless the merchant pays again. Sent once per
+ * reminder window (7 / 3 / 1 days), alongside the in-app notification.
+ */
+export function buildRenewalReminderEmail(args: {
+  businessName: string;
+  planName: string;
+  /** "in 7 days" / "in 3 days" / "tomorrow" / "today". */
+  when: string;
+  /** "13 Oct 2026". */
+  endsOn: string;
+  /** "৳2,499", or null when unknown. */
+  amount: string | null;
+  billingUrl: string;
+  branding?: BrandingConfig;
+}): { subject: string; html: string; text: string } {
+  const b = resolveBranding(args.branding);
+  const subject = `Your ${b.name} ${args.planName} plan ends ${args.when}`;
+  const price = args.amount ? ` (${escapeHtml(args.amount)} / month)` : "";
+  const html = renderLayout({
+    branding: b,
+    heading: `Your plan ends ${escapeHtml(args.when)}`,
+    body: `<p>Hi ${escapeHtml(args.businessName)} — your ${escapeHtml(args.planName)} plan${price} is paid until <strong>${escapeHtml(args.endsOn)}</strong> and does not renew automatically.</p>
+    <p>Renew before then to keep orders, verification and courier booking running: pay by bKash, Nagad or bank transfer and upload the receipt on the Billing page.</p>`,
+    cta: { label: "Renew now", href: args.billingUrl },
+    footer: "Already paid? We'll confirm your receipt shortly — no need to pay twice.",
+  });
+  const text = `Your ${b.name} ${args.planName} plan ends ${args.when} (${args.endsOn}). Renew: ${args.billingUrl}`;
+  return { subject, html, text };
+}
+
+/**
  * Critical alert when a merchant trashes an order upstream (Woo
  * `order.deleted`) AFTER a courier AWB has already been issued. BD
  * courier adapters don't expose a REST cancel, so the merchant must

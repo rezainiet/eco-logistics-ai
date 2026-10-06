@@ -35,6 +35,7 @@ export const INBOX_KIND_CATEGORY = {
   "order.delivery_issue": "courier",
   "order.returned": "courier",
   "order.courier_cancel_required": "courier",
+  "order.booking_failed": "courier",
   "stock.low": "stock",
   "stock.out": "stock",
   "order.stock_issue": "stock",
@@ -42,6 +43,7 @@ export const INBOX_KIND_CATEGORY = {
   "integration.webhook_needs_attention": "integration",
   "subscription.plan_downgrade_enforced": "account",
   "subscription.order_quota_reached": "account",
+  "subscription.renewal_due": "account",
   "account.welcome": "account",
   "gdpr.data_request_received": "compliance",
   "recovery.cart_pending": "recovery",
@@ -68,6 +70,7 @@ export const INBOX_ROUTES = {
   productStock: "/dashboard/products", // ?stock=<productId> opens its stock dialog
   integrationIssues: "/dashboard/settings/integrations/issues",
   integrations: "/dashboard/settings/integrations",
+  billing: "/dashboard/settings/billing",
   recovery: "/dashboard/recovery",
   gettingStarted: "/dashboard/getting-started",
 } as const;
@@ -115,6 +118,8 @@ export function resolveInboxLink(n: InboxLinkInput, ctx: { fraudReview: boolean 
       return INBOX_ROUTES.integrationIssues;
     case "subscription.plan_downgrade_enforced":
       return INBOX_ROUTES.integrations;
+    case "subscription.renewal_due":
+      return INBOX_ROUTES.billing;
     case "recovery.cart_pending":
       return INBOX_ROUTES.recovery;
     case "account.welcome":

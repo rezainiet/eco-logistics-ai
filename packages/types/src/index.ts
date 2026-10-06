@@ -54,6 +54,7 @@ export const MERCHANT_LANGUAGES = [
 export type MerchantLanguage = (typeof MERCHANT_LANGUAGES)[number];
 
 export * from "./plans.js";
+export * from "./renewal.js";
 
 // ---------------------------------------------------------------------------
 // WooCommerce site URL validation

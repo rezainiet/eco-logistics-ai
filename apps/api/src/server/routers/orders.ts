@@ -37,6 +37,8 @@ import {
   CourierError,
   hasCourierAdapter,
 } from "../../lib/couriers/index.js";
+import type { CourierErrorCode } from "../../lib/couriers/types.js";
+import { bookingFailureReason, clearBookingFailed } from "../../lib/booking-failure.js";
 import { resolveProviderOrderId } from "../../lib/couriers/provider-ref.js";
 import { syncOrderTracking } from "../tracking.js";
 import { enqueueAutoBook } from "../../workers/automationBook.js";
@@ -166,7 +168,13 @@ type BookResult =
         fee?: number;
       };
     }
-  | { ok: false; error: string; code?: TrpcErrorCode };
+  | {
+      ok: false;
+      error: string;
+      code?: TrpcErrorCode;
+      /** Set only when the courier itself refused or failed the booking (the adapter's error taxonomy). */
+      courierError?: CourierErrorCode;
+    };
 
 type TrackingEventView = { at: Date; description: string; location?: string | null };
 
@@ -508,6 +516,7 @@ export async function bookSingleShipment(args: {
     });
   } catch (err) {
     const message = err instanceof CourierError ? err.message : (err as Error).message;
+    const courierError: CourierErrorCode = err instanceof CourierError ? err.code : "unknown";
     await Promise.allSettled([
       PendingAwb.updateOne(
         { orderId: orderOid, attempt },
@@ -524,7 +533,7 @@ export async function bookSingleShipment(args: {
         { $set: { "logistics.bookingInFlight": false } },
       ),
     ]);
-    return { ok: false, error: message };
+    return { ok: false, error: message, courierError };
   }
 
   // -------- Persist tracking + release lock atomically ----------------
@@ -593,6 +602,9 @@ export async function bookSingleShipment(args: {
           )
         : Promise.resolve(),
       invalidate(`dashboard:${args.userId}`),
+      // Booked after all (a fallback courier, a manual retry): the earlier
+      // booking-failed alert no longer describes the order.
+      clearBookingFailed(args.merchantId, orderOid),
     ]);
     return {
       ok: true,
@@ -634,6 +646,35 @@ export async function bookSingleShipment(args: {
     error: "order state changed during upstream call — AWB is orphaned, ops notified",
     code: "CONFLICT",
   };
+}
+
+/**
+ * A merchant-run booking (single or bulk) the courier refused. The merchant
+ * sees the error in place; this keeps a per-order record of it under its
+ * own action — a courier booking failure, not an integration failure.
+ */
+function recordBookingFailure(
+  merchantId: Types.ObjectId,
+  orderId: string,
+  courier: string,
+  result: { error: string; courierError?: CourierErrorCode },
+  mode: "manual" | "bulk",
+): void {
+  if (!Types.ObjectId.isValid(orderId)) return;
+  void writeAudit({
+    merchantId,
+    actorId: merchantId,
+    action: "order.booking_failed",
+    subjectType: "order",
+    subjectId: new Types.ObjectId(orderId),
+    meta: {
+      courier,
+      mode,
+      reasonCode: result.courierError ?? "unknown",
+      reason: bookingFailureReason(result.courierError, result.error),
+      error: result.error.slice(0, 300),
+    },
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3162,6 +3203,9 @@ export const ordersRouter = router({
       }
       if (!result.ok) {
         await releaseQuota(merchantId, "shipmentsBooked", 1);
+        if (result.courierError) {
+          recordBookingFailure(merchantId, input.orderId, input.courier, result, "manual");
+        }
         throw new TRPCError({
           code: result.code ?? "BAD_REQUEST",
           message: result.error ?? "shipment booking failed",
@@ -3231,6 +3275,9 @@ export const ordersRouter = router({
 
       const succeeded = results.filter((r) => r.ok);
       const failed = results.filter((r) => !r.ok);
+      for (const r of failed) {
+        if (!r.ok && r.courierError) recordBookingFailure(merchantId, r.orderId, input.courier, r, "bulk");
+      }
       const refund = batchSize - succeeded.length;
       if (refund > 0) {
         await releaseQuota(merchantId, "shipmentsBooked", refund);

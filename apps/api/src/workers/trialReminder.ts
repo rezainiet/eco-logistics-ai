@@ -7,6 +7,7 @@ import {
   sendEmail,
   webUrl,
 } from "../lib/email.js";
+import { sweepRenewalReminders, type RenewalReminderResult } from "../lib/renewal-reminders.js";
 
 /**
  * Trial-ending warning sweep.
@@ -104,8 +105,12 @@ export async function sweepTrialReminders(): Promise<TrialReminderJobResult> {
   return { scanned: candidates.length, sent, skipped };
 }
 
+/**
+ * The billing-reminder job: trial-ending warnings, and (same schedule, same
+ * job) renewal reminders for manually paid plans — see lib/renewal-reminders.ts.
+ */
 export function registerTrialReminderWorker() {
-  return registerWorker<unknown, TrialReminderJobResult>(
+  return registerWorker<unknown, TrialReminderJobResult & { renewal: RenewalReminderResult }>(
     QUEUE_NAMES.trialReminder,
     async (job: Job<unknown>) => {
       const res = await sweepTrialReminders();
@@ -114,7 +119,13 @@ export function registerTrialReminderWorker() {
           `[trial-reminder] job=${job.id} scanned=${res.scanned} sent=${res.sent} skipped=${res.skipped}`,
         );
       }
-      return res;
+      const renewal = await sweepRenewalReminders();
+      if (renewal.notified > 0) {
+        console.log(
+          `[renewal-reminder] job=${job.id} scanned=${renewal.scanned} notified=${renewal.notified} emailed=${renewal.emailed} pending=${renewal.pendingPayment}`,
+        );
+      }
+      return { ...res, renewal };
     },
     { concurrency: 1 },
   );

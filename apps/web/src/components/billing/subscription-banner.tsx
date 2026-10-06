@@ -4,6 +4,7 @@ import Link from "next/link";
 import { AlertCircle, Clock, TrendingUp } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { classifyMeter } from "@/lib/billing/meters";
+import { renewalNotice } from "@/lib/billing/renewal";
 
 /**
  * Cross-dashboard banner. Silent when everything's fine; loud when the merchant
@@ -107,6 +108,26 @@ export function SubscriptionBanner() {
           Upgrade now
         </Link>{" "}
         to avoid interruption.
+      </Banner>
+    );
+  }
+
+  // Manually paid plan nearing / past its end (it doesn't renew by itself).
+  const renewal = renewalNotice(sub, plan.data?.plan.name ?? "current");
+  if (renewal) {
+    const Icon = renewal.tone === "error" ? AlertCircle : Clock;
+    return (
+      <Banner tone={renewal.tone} icon={<Icon className="h-4 w-4" />}>
+        {renewal.message}
+        {renewal.action ? (
+          <>
+            {" "}
+            <Link href="/dashboard/billing" className="underline">
+              {renewal.action}
+            </Link>
+            .
+          </>
+        ) : null}
       </Banner>
     );
   }

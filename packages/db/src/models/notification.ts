@@ -39,6 +39,13 @@ export const NOTIFICATION_KINDS = [
    * body/meta carry the live held / turned-away counts.
    */
   "subscription.order_quota_reached",
+  /**
+   * A manually paid plan (bKash / Nagad / bank / one-shot card) ends soon
+   * and won't renew by itself. One per reminder window (7 / 3 / 1 days) per
+   * billing period; not sent while a payment is awaiting approval, nor to
+   * recurring Stripe subscriptions.
+   */
+  "subscription.renewal_due",
   "recovery.cart_pending",
   "automation.stale_pending",
   "automation.watchdog_exhausted",
@@ -71,6 +78,13 @@ export const NOTIFICATION_KINDS = [
    * RTO + a wasted courier slot.
    */
   "order.courier_cancel_required",
+  /**
+   * A courier would not book the order. Fired once per order when automatic
+   * booking has run out of couriers to try (never for an attempt a
+   * fallback courier recovered); removed if the order is booked later.
+   * Distinct from `integration.webhook_failed` (store webhooks).
+   */
+  "order.booking_failed",
   /**
    * The courier reported a failed delivery attempt or a return in progress
    * (normalized status `failed`). The parcel is still with the courier and
