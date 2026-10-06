@@ -155,6 +155,8 @@ export async function processCommerceImport(
         merchantId: integration.merchantId as Types.ObjectId,
         integrationId: integration._id,
         source: integration.provider as "shopify" | "woocommerce" | "custom_api",
+        // Importing the store's recent history: recorded, never live automation.
+        lifecycle: "historical_import",
         channel: "api",
       });
       if (!result.ok) {

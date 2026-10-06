@@ -52,6 +52,7 @@ describe("Address Intelligence v1 — stamped at ingest", () => {
     const result = await ingestNormalizedOrder(buildNormalized(), {
       merchantId: merchant._id,
       source: "dashboard",
+      lifecycle: "historical_import",
       channel: "dashboard",
     });
     expect(result.ok).toBe(true);
@@ -76,7 +77,7 @@ describe("Address Intelligence v1 — stamped at ingest", () => {
           district: "Dhaka",
         },
       }),
-      { merchantId: merchant._id, source: "dashboard", channel: "dashboard" },
+      { merchantId: merchant._id, source: "dashboard", lifecycle: "historical_import", channel: "dashboard" },
     );
     const order = await Order.findById(result.orderId).lean();
     expect(order!.customer.thana).toBe("dhanmondi");
@@ -93,7 +94,7 @@ describe("Address Intelligence v1 — stamped at ingest", () => {
           district: "Dhaka",
         },
       }),
-      { merchantId: merchant._id, source: "dashboard", channel: "dashboard" },
+      { merchantId: merchant._id, source: "dashboard", lifecycle: "historical_import", channel: "dashboard" },
     );
     const order = await Order.findById(result.orderId).lean();
     expect(order!.customer.thana).toBeUndefined();
@@ -110,7 +111,7 @@ describe("Address Intelligence v1 — stamped at ingest", () => {
           district: "Dhaka",
         },
       }),
-      { merchantId: merchant._id, source: "dashboard", channel: "dashboard" },
+      { merchantId: merchant._id, source: "dashboard", lifecycle: "historical_import", channel: "dashboard" },
     );
     const order = await Order.findById(result.orderId).lean();
     expect(order!.address?.quality?.completeness).toBe("incomplete");
@@ -242,6 +243,7 @@ describe("Schema compatibility — additive only", () => {
     const result = await ingestNormalizedOrder(buildNormalized(), {
       merchantId: merchant._id,
       source: "dashboard",
+      lifecycle: "historical_import",
       channel: "dashboard",
     });
     const order = await Order.findById(result.orderId).lean();

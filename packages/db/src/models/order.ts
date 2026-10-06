@@ -87,6 +87,29 @@ const itemSchema = new Schema(
  */
 export const ORDER_INVENTORY_STATES = ["reserved", "released", "fulfilled"] as const;
 
+/**
+ * How a newly created order entered operations (lib/order-lifecycle.ts):
+ *   live              — a sale happening now (landing checkout, dashboard
+ *                       order, fresh store webhook/sync order): the full
+ *                       post-create pipeline incl. automation runs.
+ *   historical_import — an import/backfill of orders placed earlier (store
+ *                       history import, late or replayed store orders):
+ *                       recorded and scored, never live automation.
+ */
+export const ORDER_LIFECYCLES = ["live", "historical_import"] as const;
+export type OrderLifecycle = (typeof ORDER_LIFECYCLES)[number];
+
+/** Stamped once by the post-create pipeline; its presence is the run-once claim. */
+const orderLifecycleSchema = new Schema(
+  {
+    kind: { type: String, enum: ORDER_LIFECYCLES, required: true },
+    /** dashboard / landing_page / shopify / woocommerce / custom_api. */
+    source: { type: String, trim: true, maxlength: 40 },
+    processedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const orderInventorySchema = new Schema(
   {
     state: { type: String, enum: ORDER_INVENTORY_STATES, required: true },
@@ -664,6 +687,8 @@ const orderSchema = new Schema(
       default: undefined,
     },
     inventory: { type: orderInventorySchema, default: undefined },
+    /** Post-create pipeline record (see ORDER_LIFECYCLES). Absent on legacy and CSV-uploaded orders. */
+    lifecycle: { type: orderLifecycleSchema, default: undefined },
     /**
      * Intent Intelligence v1. Stamped fire-and-forget post-identity-
      * resolution at ingest. Absent on legacy orders and on orders whose

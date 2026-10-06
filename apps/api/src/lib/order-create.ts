@@ -1,9 +1,5 @@
 import type { Types } from "mongoose";
-import { FraudPrediction, Merchant, type MerchantFraudConfig, Order } from "@ecom/db";
-import { enqueueAutoBook } from "../workers/automationBook.js";
-import { entitledAutomationConfig } from "./entitlements.js";
-import { enqueueOrderConfirmationSms } from "../workers/automationSms.js";
-import { type AutomationState, decideAutomationAction } from "./automation.js";
+import { Merchant, type MerchantFraudConfig } from "@ecom/db";
 import { type NetworkRiskAggregate, hashPhoneForNetwork, lookupNetworkRisk } from "./fraud-network.js";
 import {
   DEFAULT_WEIGHTS_VERSION,
@@ -14,17 +10,13 @@ import {
   hashAddress,
 } from "../server/risk.js";
 import { getMerchantValueRollup } from "./merchantValueRollup.js";
-import { writeAudit } from "./audit.js";
-import { fireFraudAlert } from "./alerts.js";
-import { notifyNewOrder } from "./merchant-notices.js";
-import { resolveIdentityForOrder } from "../server/ingest.js";
 
 /**
  * Order creation building blocks shared by every path that creates an
  * order for a merchant in-process (dashboard `orders.createOrder`, landing
- * page checkout): numbering, fraud scoring, and the post-commit pipeline
- * (fraud prediction ledger, automation decision + confirmation SMS,
- * auto-book, risk audit, fraud alert, identity stitching).
+ * page checkout): numbering and fraud scoring. What happens after the
+ * order is committed is the canonical post-create pipeline,
+ * lib/order-lifecycle.ts (`processOrderAfterCreate`), shared by every source.
  */
 
 export function generateOrderNumber(): string {
@@ -177,182 +169,3 @@ export function fraudDocFromRisk(risk: Awaited<ReturnType<typeof scoreOrderForCr
 }
 
 export type ScoredRisk = Awaited<ReturnType<typeof scoreOrderForCreate>>;
-
-/**
- * Best-effort post-create work. Runs OUTSIDE the order transaction and
- * never throws: the order is already committed.
- */
-export async function afterOrderCreated(args: {
-  merchantId: Types.ObjectId;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  order: any;
-  risk: ScoredRisk;
-  /** User on whose behalf automation (auto-book) acts. */
-  userId: string;
-}): Promise<void> {
-  const { merchantId, order, risk } = args;
-  // Best-effort post-create work runs OUTSIDE the transaction — these are
-  // observability / automation hooks that must not roll back the order if
-  // they fail. Wrapped in a try/catch so a stray throw cannot prevent the
-  // mutation from returning the created order to the caller.
-  try {
-    // Feedback-loop ledger — captured at scoring time, outcome stamped
-    // later by the tracking pipeline. Best-effort; never undoes the order.
-    void FraudPrediction.create({
-      merchantId,
-      orderId: order._id,
-      riskScore: risk.riskScore,
-      pRto: risk.pRto,
-      levelPredicted: risk.level,
-      customerTier: risk.customerTier,
-      signals: risk.signals.map((s) => ({ key: s.key, weight: s.weight })),
-      weightsVersion: risk.weightsVersion,
-    }).catch((err) =>
-      console.error(
-        "[fraud-prediction] write failed",
-        (err as Error).message,
-      ),
-    );
-    // --- Automation engine ---------------------------------------------
-    // Decide what (if anything) the engine should do for this fresh order.
-    // Persistence is best-effort; a failure must not roll back the order
-    // creation. Booking is fire-and-forget — never blocks the response.
-    let automationState: AutomationState = "not_evaluated";
-    let automationReason = "";
-    try {
-      const merchant = await Merchant.findById(merchantId)
-        .select("automationConfig couriers subscription.tier")
-        .lean();
-      // Full-auto / auto-book run only on a plan that includes them.
-      const automationCfg = entitledAutomationConfig(
-        merchant?.subscription?.tier,
-        (merchant as { automationConfig?: Record<string, unknown> } | null)?.automationConfig ?? {},
-      );
-      const decision = decideAutomationAction(risk.level, risk.riskScore, automationCfg as never);
-      automationState = decision.state;
-      automationReason = decision.reason;
-
-      if (decision.action !== "no_op") {
-        const set: Record<string, unknown> = {
-          "automation.state": decision.state,
-          "automation.decidedBy": "system",
-          "automation.decidedAt": new Date(),
-          "automation.reason": decision.reason.slice(0, 200),
-        };
-        let confirmationCode: string | undefined;
-        if (decision.state === "auto_confirmed") {
-          set["automation.confirmedAt"] = new Date();
-          set["order.status"] = "confirmed";
-        } else if (decision.state === "pending_confirmation") {
-          // Mint a 6-digit code so an inbound "YES 123456" reply maps to
-          // a single order even when the same customer has multiple
-          // pending orders.
-          confirmationCode = String(Math.floor(10000000 + Math.random() * 90000000));
-          set["automation.confirmationCode"] = confirmationCode;
-          set["automation.confirmationChannel"] = "sms";
-          // confirmationSentAt is stamped by the SMS worker on success,
-          // so the stale-pending sweeper sees a missing timestamp until
-          // the gateway actually accepts the message.
-        }
-        await Order.updateOne({ _id: order._id }, { $set: set });
-
-        // Pending-confirmation outbound SMS — queued, with retries +
-        // exponential backoff. Survives transient gateway outages.
-        if (decision.state === "pending_confirmation" && confirmationCode) {
-          void enqueueOrderConfirmationSms({
-            orderId: String(order._id),
-            merchantId: String(merchantId),
-            phone: order.customer.phone,
-            orderNumber: order.orderNumber,
-            codAmount: order.order.cod,
-            confirmationCode,
-          }).catch((err) =>
-            console.error("[automation] enqueue confirm SMS failed:", (err as Error).message),
-          );
-        }
-        void writeAudit({
-          merchantId,
-          actorId: merchantId,
-          actorType: "system",
-          action: `automation.${decision.action}`,
-          subjectType: "order",
-          subjectId: order._id,
-          meta: { state: decision.state, reason: decision.reason, riskScore: risk.riskScore },
-        });
-
-        // Auto-book hook: never inline-await, never throw. If booking fails,
-        // the order stays in `confirmed` and the merchant can retry from UI.
-        if (decision.shouldAutoBook) {
-          const courierName =
-            (automationCfg as { autoBookCourier?: string }).autoBookCourier ??
-            ((merchant as { couriers?: Array<{ name: string; enabled?: boolean }> } | null)?.couriers ?? [])
-              .find((c) => c.enabled !== false)?.name;
-          if (courierName) {
-            // Auto-book runs in the BullMQ queue (apps/api/src/workers/automationBook.ts)
-            // with attempts: 3, exponential backoff, and a critical-tier
-            // merchant notification when retries are exhausted. Never blocks
-            // the response; never throws.
-            void enqueueAutoBook({
-              orderId: String(order._id),
-              merchantId: String(merchantId),
-              userId: args.userId,
-              courier: courierName,
-            }).catch((err) =>
-              console.error("[automation] enqueueAutoBook failed:", (err as Error).message),
-            );
-          }
-        }
-      }
-    } catch (err) {
-      console.error("[automation] evaluation failed", (err as Error).message);
-    }
-
-    void writeAudit({
-      merchantId,
-      actorId: merchantId,
-      action: "risk.scored",
-      subjectType: "order",
-      subjectId: order._id,
-      meta: { level: risk.level, score: risk.riskScore, reasons: risk.reasons },
-    });
-    let reviewAlerted = false;
-    if (risk.level === "high") {
-      // Awaited so the merchant's inbox is guaranteed-written before the
-      // mutation response returns — we never silently drop a fraud alert.
-      reviewAlerted = await fireFraudAlert({
-        merchantId,
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        phone: order.customer.phone,
-        riskScore: risk.riskScore,
-        level: risk.level,
-        reasons: risk.reasons,
-        kind: "fraud.pending_review",
-      });
-    }
-    // A customer's order (landing page) is news to the merchant; an order
-    // they typed in themselves is not. The review alert, when written,
-    // already announces the order.
-    if (order.source?.channel === "landing_page" && !reviewAlerted) {
-      await notifyNewOrder({
-        merchantId,
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        total: order.order?.total,
-        currency: order.order?.currency,
-        district: order.customer?.district,
-        source: "landing_page",
-      });
-    }
-    void resolveIdentityForOrder({
-      merchantId,
-      orderId: order._id,
-      phone: order.customer.phone,
-    }).catch((err) => console.error("[orders.create] identity stitch failed", err));
-  } catch (err) {
-    // Order is already committed — best-effort post-create work failing
-    // must NOT roll back the order or throw to the caller. Log and move
-    // on; the merchant has a valid order in their list either way.
-    console.error("[orders.create] post-commit hook failed", (err as Error).message);
-  }
-}

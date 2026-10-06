@@ -12,7 +12,8 @@ import { authRouter } from "../src/server/auth.js";
 import { processWebhookOnce } from "../src/server/ingest.js";
 import { smsInboundWebhookRouter } from "../src/server/webhooks/sms-inbound.js";
 import { shopifyGdprWebhookRouter } from "../src/server/webhooks/shopify-gdpr.js";
-import { afterOrderCreated, scoreOrderForCreate, loadMerchantScoring } from "../src/lib/order-create.js";
+import { scoreOrderForCreate, loadMerchantScoring } from "../src/lib/order-create.js";
+import { processOrderAfterCreate } from "../src/lib/order-lifecycle.js";
 import { notifyWelcome } from "../src/lib/merchant-notices.js";
 import { notifyDeliveryIssue } from "../src/lib/couriers/outcome-notify.js";
 import { dispatchNotification } from "../src/lib/notifications.js";
@@ -146,6 +147,7 @@ describe("new order notifications", () => {
     await ingestNormalizedOrder(shopifyAdapter.normalizeWebhookPayload("orders/create", shopifyOrder(9002)) as never, {
       merchantId: mid,
       source: "shopify",
+      lifecycle: "historical_import",
       channel: "api",
     });
     await caller.orders.createOrder({
@@ -170,7 +172,7 @@ describe("new order notifications", () => {
         order: { cod: 900, total: 900, status: "pending" },
         source: { channel: "landing_page" },
       });
-      await afterOrderCreated({ merchantId: mid, order, risk, userId: String(mid) });
+      await processOrderAfterCreate({ merchantId: mid, orderId: order._id, lifecycle: "live", source: "landing_page", customerPlaced: true, risk, userId: String(mid) });
       return order;
     };
     const plain = await landing(phone());

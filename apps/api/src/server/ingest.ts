@@ -2,9 +2,7 @@ import { Types } from "mongoose";
 import { snapshotItemCosts } from "../lib/finance/order-cost.js";
 import { linkItemsToCatalog } from "../lib/commerce/catalog-link.js";
 import { reserveNewOrdersStock } from "../lib/inventory.js";
-import { notifyNewOrder } from "../lib/merchant-notices.js";
 import {
-  FraudPrediction,
   Integration,
   Merchant,
   type MerchantFraudConfig,
@@ -23,18 +21,18 @@ import {
   type RiskOptions,
 } from "./risk.js";
 import { getMerchantValueRollup } from "../lib/merchantValueRollup.js";
-import { fireFraudAlert } from "../lib/alerts.js";
 import { writeAudit } from "../lib/audit.js";
 import { releaseQuota, reserveQuota } from "../lib/usage.js";
 import { getPlan } from "../lib/plans.js";
 import { ORDER_QUOTA_EXCEEDED, notifyOrderQuotaReached, type OrderQuotaDetail } from "../lib/order-quota.js";
+import { processOrderAfterCreate, storeOrderLifecycle, type OrderSourceKind } from "../lib/order-lifecycle.js";
+import type { OrderLifecycle } from "@ecom/db";
 import { invalidate } from "../lib/cache.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
 import { wasOrderDeleted } from "../lib/integrations/order-tombstone.js";
 import { normalizePhoneOrRaw, phoneLookupVariants } from "../lib/phone.js";
 import { computeAddressQuality } from "../lib/address-intelligence.js";
 import { extractThana } from "../lib/thana-lexicon.js";
-import { scoreIntentForOrder } from "../lib/intent.js";
 import { canonicaliseAddress } from "../lib/address-canonical.js";
 import { getGazetteer } from "../lib/gazetteer.js";
 import { env } from "../env.js";
@@ -64,6 +62,12 @@ export type IngestSource = "shopify" | "woocommerce" | "custom_api" | "csv" | "d
 export interface IngestOptions {
   merchantId: Types.ObjectId;
   source: IngestSource;
+  /**
+   * Live sale (full post-create pipeline incl. automation) or an import of
+   * earlier orders (never live automation). Always explicit — see
+   * lib/order-lifecycle.ts.
+   */
+  lifecycle: OrderLifecycle;
   channel: "dashboard" | "bulk_upload" | "api" | "webhook" | "system";
   integrationId?: Types.ObjectId;
   ip?: string;
@@ -378,25 +382,6 @@ export async function ingestNormalizedOrder(
     // an inventory note and the merchant is notified.
     await reserveNewOrdersStock([orderDoc._id as Types.ObjectId]);
 
-    // Persist the prediction for the monthly weight tuner. Best-effort:
-    // a failure here MUST NOT undo the order create. Idempotent via the
-    // unique index on `orderId` so a rescore later will overwrite cleanly.
-    void FraudPrediction.create({
-      merchantId: opts.merchantId,
-      orderId: orderDoc._id,
-      riskScore: risk.riskScore,
-      pRto: risk.pRto,
-      levelPredicted: risk.level,
-      customerTier: risk.customerTier,
-      signals: risk.signals.map((s) => ({ key: s.key, weight: s.weight })),
-      weightsVersion: risk.weightsVersion,
-    }).catch((err) =>
-      console.error(
-        "[fraud-prediction] write failed",
-        (err as Error).message,
-      ),
-    );
-
     void writeAudit({
       merchantId: opts.merchantId,
       actorId: opts.merchantId,
@@ -429,64 +414,20 @@ export async function ingestNormalizedOrder(
       );
     }
 
-    let reviewAlerted = false;
-    if (risk.level === "high") {
-      reviewAlerted = await fireFraudAlert({
-        merchantId: opts.merchantId,
-        orderId: orderDoc._id,
-        orderNumber: orderDoc.orderNumber,
-        phone: orderDoc.customer.phone,
-        riskScore: risk.riskScore,
-        level: risk.level,
-        reasons: risk.reasons,
-        kind: "fraud.pending_review",
-      });
-    }
-    // A live store order (webhook / order-sync) is news to the merchant;
-    // an import they started ("api") or a CSV is not. The review alert,
-    // when written, already announces the order. Duplicate deliveries
-    // never reach this point (externalId dedupe above).
-    if (opts.channel === "webhook" && !reviewAlerted) {
-      await notifyNewOrder({
-        merchantId: opts.merchantId,
-        orderId: orderDoc._id as Types.ObjectId,
-        orderNumber: orderDoc.orderNumber,
-        total: normalized.total,
-        currency: normalized.currency,
-        district: normalized.customer.district,
-        source: opts.source,
-      });
-    }
-
     await invalidate(`dashboard:${String(opts.merchantId)}`);
 
-    // Identity-resolution best-effort — links prior anon sessions. Then,
-    // chained on the same fire-and-forget, Intent Intelligence v1 scores
-    // the just-stitched sessions. Each step has its own try/catch so an
-    // identity-resolution failure doesn't suppress intent and vice versa
-    // — neither path can throw back into the request.
-    void (async () => {
-      try {
-        await resolveIdentityForOrder({
-          merchantId: opts.merchantId,
-          orderId: orderDoc._id as Types.ObjectId,
-          phone: normalized.customer.phone,
-          email: normalized.customer.email,
-        });
-      } catch (err) {
-        console.error("[ingest] identity resolution failed", err);
-      }
-      if (env.INTENT_SCORING_ENABLED) {
-        try {
-          await scoreIntentForOrder({
-            merchantId: opts.merchantId,
-            orderId: orderDoc._id as Types.ObjectId,
-          });
-        } catch (err) {
-          console.error("[ingest] intent scoring failed", err);
-        }
-      }
-    })();
+    // The canonical post-create pipeline: prediction ledger, automation
+    // (live orders only), review alert, new-order notice, identity/intent.
+    await processOrderAfterCreate({
+      merchantId: opts.merchantId,
+      orderId: orderDoc._id as Types.ObjectId,
+      lifecycle: opts.lifecycle,
+      source: opts.source as OrderSourceKind,
+      customerPlaced: true,
+      risk,
+      userId: String(opts.merchantId),
+      customerEmail: normalized.customer.email ?? null,
+    });
 
     return {
       ok: true,
@@ -712,6 +653,8 @@ export async function processWebhookOnce(args: {
   const result = await ingestNormalizedOrder(args.normalized, {
     merchantId: args.merchantId,
     source: args.source,
+    // A store order placed just now is a live sale; one placed long ago is a backfill.
+    lifecycle: storeOrderLifecycle(args.normalized.placedAt),
     channel: "webhook",
     integrationId: args.integrationId,
     ip: args.ip,
@@ -938,6 +881,8 @@ export async function replayWebhookInbox(args: {
   const result = await ingestNormalizedOrder(normalized, {
     merchantId: inbox.merchantId as Types.ObjectId,
     source: inbox.provider as IngestSource,
+    // Fresh → live; a late delivery, first sync poll or a replay days later → backfill.
+    lifecycle: storeOrderLifecycle(normalized.placedAt),
     channel: "webhook",
     integrationId: inbox.integrationId as Types.ObjectId,
   });

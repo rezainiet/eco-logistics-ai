@@ -84,8 +84,8 @@ import { resolveIdentityForOrder } from "../ingest.js";
 import { normalizePhoneOrRaw } from "../../lib/phone.js";
 import { reconcileOrderInventory, reserveNewOrdersStock, syncOrderInventory } from "../../lib/inventory.js";
 import { assetUrlOf } from "../../lib/commerce/products.js";
+import { processOrderAfterCreate } from "../../lib/order-lifecycle.js";
 import {
-  afterOrderCreated,
   fraudDocFromRisk,
   generateOrderNumber,
   loadMerchantScoring,
@@ -1299,7 +1299,16 @@ export const ordersRouter = router({
     // Stock for linked lines — after the commit, so a short stock never
     // fails the order (it is kept with a note and the merchant is told).
     await reserveNewOrdersStock([order._id as Types.ObjectId]);
-    await afterOrderCreated({ merchantId, order, risk, userId: ctx.user.id });
+    // A dashboard order is a live order: the canonical post-create pipeline.
+    await processOrderAfterCreate({
+      merchantId,
+      orderId: order._id as Types.ObjectId,
+      lifecycle: "live",
+      source: "dashboard",
+      customerPlaced: false,
+      risk,
+      userId: ctx.user.id,
+    });
     return {
       id: String(order._id),
       orderNumber: order.orderNumber,

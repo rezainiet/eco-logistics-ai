@@ -293,7 +293,7 @@ describe("order cost snapshot (dashboard & integration orders)", () => {
         cod: 1100,
         total: 1100,
       },
-      { merchantId: m._id as Types.ObjectId, source: "custom_api", channel: "api" },
+      { merchantId: m._id as Types.ObjectId, source: "custom_api", lifecycle: "historical_import", channel: "api" },
     );
     expect(r.ok).toBe(true);
     expect(await unitCosts(r.orderId!)).toEqual([400, undefined]);

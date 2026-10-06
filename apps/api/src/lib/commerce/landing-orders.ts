@@ -5,7 +5,8 @@ import { Order, Product, availableStock, hasVariants } from "@ecom/db";
 import { writeAudit } from "../audit.js";
 import { InventoryError, reserveOrderStock } from "../inventory.js";
 import { alertStockLevels, type StockChange } from "../inventory-alerts.js";
-import { afterOrderCreated, fraudDocFromRisk, generateOrderNumber, loadMerchantScoring, scoreOrderForCreate } from "../order-create.js";
+import { fraudDocFromRisk, generateOrderNumber, loadMerchantScoring, scoreOrderForCreate } from "../order-create.js";
+import { processOrderAfterCreate } from "../order-lifecycle.js";
 import { getPlan } from "../plans.js";
 import { reserveQuota } from "../usage.js";
 import { notifyOrderQuotaReached } from "../order-quota.js";
@@ -440,7 +441,16 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
       delivery: deliveryLabel,
     },
   });
-  await afterOrderCreated({ merchantId, order, risk, userId: String(merchantId) });
+  // A checkout is a live customer order: the canonical post-create pipeline.
+  await processOrderAfterCreate({
+    merchantId,
+    orderId: order._id,
+    lifecycle: "live",
+    source: "landing_page",
+    customerPlaced: true,
+    risk,
+    userId: String(merchantId),
+  });
   if (input.recoveryToken) {
     // Recovered order → its recovery task. Never fails the order.
     await linkRecoveredOrder({ host: input.host, locale: input.locale ?? null, token: input.recoveryToken, orderId: order._id, merchantId }).catch((err) =>
