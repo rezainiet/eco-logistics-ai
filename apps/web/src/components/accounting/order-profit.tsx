@@ -15,8 +15,8 @@ import type { PeriodValue } from "./period";
  * Each delivered order's profit (and each returned parcel's courier cost)
  * in the period — the rows the P&L is made of. Unknown costs stay unknown.
  */
-export function OrderProfitTable({ period }: { period: PeriodValue }) {
-  const [missingOnly, setMissingOnly] = useState(false);
+export function OrderProfitTable({ period, initialMissingOnly = false }: { period: PeriodValue; initialMissingOnly?: boolean }) {
+  const [missingOnly, setMissingOnly] = useState(initialMissingOnly);
   const q = trpc.finance.orderProfit.useInfiniteQuery(
     { period, missingOnly, limit: 50 },
     { getNextPageParam: (last) => last.nextCursor ?? undefined, initialCursor: null },

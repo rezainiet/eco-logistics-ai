@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { changeText, monthRange, pnlLines, type PnlSummaryLike } from "./pnl";
+import { changeText, monthRange, pnlLines, profitPresentation, type PnlSummaryLike } from "./pnl";
 
 const base: PnlSummaryLike = {
   revenue: { realized: 10_000 },
@@ -47,6 +47,37 @@ describe("P&L statement", () => {
     const gross = lines.find((l) => l.key === "grossProfit");
     expect(gross).toMatchObject({ kind: "subtotal", incomplete: true });
     expect(lines.find((l) => l.key === "productCost")).toMatchObject({ note: "not recorded for 2 order(s)", warn: true });
+  });
+});
+
+describe("profit presentation by cost coverage", () => {
+  it("shows a fully costed profit as it is", () => {
+    expect(profitPresentation({ eligibleOrders: 4, coveredOrders: 4, incompleteOrders: 0, percentage: 100, complete: true })).toEqual({
+      state: "complete",
+      prefix: "",
+      coverage: null,
+      detail: null,
+    });
+  });
+
+  it("shows a partly costed profit as an upper bound with its coverage", () => {
+    expect(profitPresentation({ eligibleOrders: 4, coveredOrders: 3, incompleteOrders: 1, percentage: 75, complete: false })).toEqual({
+      state: "incomplete",
+      prefix: "Up to ",
+      coverage: "Cost coverage 75%",
+      detail: "3 of 4 orders fully costed",
+    });
+    expect(profitPresentation({ eligibleOrders: 1, coveredOrders: 0, incompleteOrders: 1, percentage: 0, complete: false }).detail).toBe(
+      "0 of 1 order fully costed",
+    );
+  });
+
+  it("has no coverage without delivered or returned orders", () => {
+    const p = profitPresentation({ eligibleOrders: 0, coveredOrders: 0, incompleteOrders: 0, percentage: null, complete: true });
+    expect(p.state).toBe("no_orders");
+    expect(p.prefix).toBe("");
+    expect(p.coverage).toBeNull();
+    expect(p.detail).toBe("No delivered or returned orders in this period");
   });
 });
 

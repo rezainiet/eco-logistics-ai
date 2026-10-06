@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import Link from "next/link";
 import { AlertTriangle, Coins, Loader2, Plus, TrendingDown, TrendingUp, Wallet } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -14,7 +14,7 @@ import { EntryDialog, dhakaToday } from "./entry-dialog";
 import { MonthlyChart } from "./monthly-chart";
 import { PeriodPicker, periodLabel, type PeriodValue } from "./period";
 import { OrderProfitTable } from "./order-profit";
-import { pnlLines } from "@/lib/accounting/pnl";
+import { pnlLines, profitPresentation } from "@/lib/accounting/pnl";
 
 type Tab = "overview" | "orders" | "income" | "expenses" | "reports";
 const TABS: ReadonlyArray<readonly [Tab, string]> = [
@@ -29,6 +29,8 @@ export function AccountingPage() {
   const [tab, setTab] = useState<Tab>("overview");
   const [period, setPeriod] = useState<PeriodValue>({ preset: "month" });
   const [addOpen, setAddOpen] = useState(false);
+  // Opening Order profit from an incomplete profit figure starts on its "missing costs" filter.
+  const [missingOnly, setMissingOnly] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -52,7 +54,10 @@ export function AccountingPage() {
               key={key}
               role="tab"
               aria-selected={tab === key}
-              onClick={() => setTab(key)}
+              onClick={() => {
+                setTab(key);
+                setMissingOnly(false);
+              }}
               className={cn(
                 "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
                 tab === key ? "bg-brand/12 text-fg" : "text-fg-subtle hover:text-fg",
@@ -65,8 +70,16 @@ export function AccountingPage() {
         {tab !== "reports" ? <PeriodPicker value={period} onChange={setPeriod} /> : null}
       </div>
 
-      {tab === "overview" ? <Overview period={period} /> : null}
-      {tab === "orders" ? <OrderProfitTable period={period} /> : null}
+      {tab === "overview" ? (
+        <Overview
+          period={period}
+          onReviewMissing={() => {
+            setMissingOnly(true);
+            setTab("orders");
+          }}
+        />
+      ) : null}
+      {tab === "orders" ? <OrderProfitTable period={period} initialMissingOnly={missingOnly} /> : null}
       {tab === "income" ? <EntriesTable type="income" period={period} /> : null}
       {tab === "expenses" ? <EntriesTable type="expense" period={period} /> : null}
       {tab === "reports" ? <Reports /> : null}
@@ -76,7 +89,7 @@ export function AccountingPage() {
   );
 }
 
-function Overview({ period }: { period: PeriodValue }) {
+function Overview({ period, onReviewMissing }: { period: PeriodValue; onReviewMissing: () => void }) {
   const summary = trpc.finance.summary.useQuery({ period });
   if (summary.isLoading) {
     return (
@@ -91,6 +104,28 @@ function Overview({ period }: { period: PeriodValue }) {
   const s = summary.data!;
   const income = s.revenue.realized + s.otherIncome;
   const lines = pnlLines(s);
+  // Missing costs only lower profit: while any are missing the figures are an upper bound.
+  const shown = profitPresentation(s.costCoverage);
+  const incomplete = shown.state === "incomplete";
+  const profitValue = (value: number) => (
+    <span className={cn(value < 0 && "text-danger")}>
+      {shown.prefix ? <span className="text-base font-medium text-fg-subtle">{shown.prefix}</span> : null}
+      {formatBDT(value)}
+    </span>
+  );
+  const profitFooter = (complete: ReactNode) =>
+    incomplete ? (
+      <span className="flex flex-wrap items-center gap-x-2 text-warning">
+        <span title={shown.detail ?? undefined}>{shown.coverage}</span>
+        <button type="button" onClick={onReviewMissing} className="underline underline-offset-2 hover:text-fg">
+          Review {s.costCoverage.incompleteOrders} order{s.costCoverage.incompleteOrders === 1 ? "" : "s"}
+        </button>
+      </span>
+    ) : shown.state === "no_orders" ? (
+      <span>{shown.detail}</span>
+    ) : (
+      complete
+    );
   const notes: Record<string, string | undefined> = {
     revenue: [
       s.revenue.fallbackDated.orders > 0
@@ -110,18 +145,18 @@ function Overview({ period }: { period: PeriodValue }) {
         <StatCard label="Revenue" value={formatBDT(income)} icon={TrendingUp} tone="success" footer={<span>Delivered orders + other income</span>} />
         <StatCard
           label="Gross profit"
-          value={<span className={cn(s.grossProfit < 0 && "text-danger")}>{formatBDT(s.grossProfit)}</span>}
+          value={profitValue(s.grossProfit)}
           icon={Coins}
-          tone={s.grossProfit < 0 ? "danger" : "success"}
-          footer={!s.costComplete ? <span className="text-warning">Some costs not recorded</span> : <span>After product &amp; courier cost</span>}
+          tone={s.grossProfit < 0 ? "danger" : incomplete ? "warning" : "success"}
+          footer={profitFooter(<span>After product &amp; courier cost</span>)}
         />
         <StatCard label="Expenses" value={formatBDT(s.totalExpenses)} icon={TrendingDown} tone="warning" />
         <StatCard
           label="Net profit"
-          value={<span className={cn(s.netProfit < 0 && "text-danger")}>{formatBDT(s.netProfit)}</span>}
+          value={profitValue(s.netProfit)}
           icon={Wallet}
-          tone={s.netProfit < 0 ? "danger" : "brand"}
-          footer={!s.costComplete ? <span className="text-warning">Some costs not recorded</span> : undefined}
+          tone={s.netProfit < 0 ? "danger" : incomplete ? "warning" : "brand"}
+          footer={profitFooter(undefined)}
         />
       </div>
 
@@ -146,11 +181,14 @@ function Overview({ period }: { period: PeriodValue }) {
                     {l.label}
                     {l.incomplete ? (
                       <span className="ml-2 text-xs font-normal text-warning" title="A delivered or returned order has no recorded product or courier cost — the real figure is lower">
-                        costs incomplete
+                        costs incomplete{shown.coverage ? ` · ${shown.coverage.toLowerCase()}` : ""}
                       </span>
                     ) : null}
                   </dt>
-                  <dd className={cn("whitespace-nowrap tabular-nums", l.value < 0 && "text-danger")}>{formatBDT(l.value)}</dd>
+                  <dd className={cn("whitespace-nowrap tabular-nums", l.value < 0 && "text-danger")}>
+                    <UpTo show={l.incomplete} />
+                    {formatBDT(l.value)}
+                  </dd>
                 </div>
               ) : (
                 <div key={l.key} className="flex items-center justify-between gap-3 px-4 py-2.5">
@@ -249,6 +287,11 @@ function Reports() {
           <div className="rounded-xl border border-stroke/10 bg-surface p-4">
             <div className="mb-2 text-sm font-semibold">Monthly trend · {year}</div>
             <MonthlyChart data={months} />
+            {months.some((m) => !m.costComplete) ? (
+              <p className="mt-2 text-2xs text-fg-faint">
+                Months marked “costs incomplete” show profit before their unrecorded costs — the real profit is lower.
+              </p>
+            ) : null}
           </div>
           <div className="overflow-x-auto rounded-xl border border-stroke/10 bg-surface">
             <table className="w-full text-sm">
@@ -267,8 +310,8 @@ function Reports() {
                     <td className="px-4 py-2.5 tabular-nums">
                       {m.month}
                       {!m.costComplete ? (
-                        <span className="ml-2 text-xs text-warning" title="Some delivered or returned orders have no recorded product or courier cost">
-                          costs incomplete
+                        <span className="ml-2 text-xs text-warning" title="Some delivered or returned orders have no recorded product or courier cost — the real profit is lower">
+                          costs incomplete · {m.costCoverage.percentage ?? 0}% costed
                         </span>
                       ) : null}
                       {m.fallbackDatedOrders > 0 ? (
@@ -278,21 +321,35 @@ function Reports() {
                       ) : null}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{formatBDT(m.revenue + m.otherIncome)}</td>
-                    <td className={cn("px-4 py-2.5 text-right tabular-nums", m.grossProfit < 0 && "text-danger")}>{formatBDT(m.grossProfit)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-2.5 text-right tabular-nums", m.grossProfit < 0 && "text-danger")}>
+                      <UpTo show={!m.costComplete} />
+                      {formatBDT(m.grossProfit)}
+                    </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{formatBDT(m.expenses)}</td>
-                    <td className={cn("px-4 py-2.5 text-right font-medium tabular-nums", m.netProfit < 0 && "text-danger")}>{formatBDT(m.netProfit)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-2.5 text-right font-medium tabular-nums", m.netProfit < 0 && "text-danger")}>
+                      <UpTo show={!m.costComplete} />
+                      {formatBDT(m.netProfit)}
+                    </td>
                   </tr>
                 ))}
                 {t ? (
                   <tr className="font-semibold">
                     <td className="px-4 py-3">
                       Year {year}
-                      {!t.costComplete ? <span className="ml-2 text-xs font-normal text-warning">costs incomplete</span> : null}
+                      {!t.costComplete ? (
+                        <span className="ml-2 text-xs font-normal text-warning">costs incomplete · {t.costCoverage.percentage ?? 0}% costed</span>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatBDT(t.revenue + t.otherIncome)}</td>
-                    <td className={cn("px-4 py-3 text-right tabular-nums", t.grossProfit < 0 && "text-danger")}>{formatBDT(t.grossProfit)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-3 text-right tabular-nums", t.grossProfit < 0 && "text-danger")}>
+                      <UpTo show={!t.costComplete} />
+                      {formatBDT(t.grossProfit)}
+                    </td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatBDT(t.expenses)}</td>
-                    <td className={cn("px-4 py-3 text-right tabular-nums", t.netProfit < 0 && "text-danger")}>{formatBDT(t.netProfit)}</td>
+                    <td className={cn("whitespace-nowrap px-4 py-3 text-right tabular-nums", t.netProfit < 0 && "text-danger")}>
+                      <UpTo show={!t.costComplete} />
+                      {formatBDT(t.netProfit)}
+                    </td>
                   </tr>
                 ) : null}
               </tbody>
@@ -302,4 +359,9 @@ function Reports() {
       )}
     </div>
   );
+}
+
+/** "up to" in front of a profit that leaves out unrecorded costs, so is an upper bound. */
+function UpTo({ show }: { show: boolean }) {
+  return show ? <span className="text-xs font-normal text-fg-subtle">up to </span> : null;
 }

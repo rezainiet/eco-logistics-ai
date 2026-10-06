@@ -61,10 +61,12 @@ interface DeliveredAgg {
   missingCost: number;
   fee: number;
   missingFee: number;
+  /** Orders lacking a product cost OR a courier fee — each counted once (missingCost + missingFee may overlap). */
+  incompleteOrders: number;
   nonBdt: number;
 }
 const emptyDelivered = (): DeliveredAgg => ({
-  exactRevenue: 0, exactOrders: 0, fallbackRevenue: 0, fallbackOrders: 0, deliveryCharges: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, nonBdt: 0,
+  exactRevenue: 0, exactOrders: 0, fallbackRevenue: 0, fallbackOrders: 0, deliveryCharges: 0, productCost: 0, missingCost: 0, fee: 0, missingFee: 0, incompleteOrders: 0, nonBdt: 0,
 });
 
 interface ReturnedAgg {
@@ -142,6 +144,7 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
         missingCost: count("$costMissing"),
         fee: { $sum: "$fee" },
         missingFee: count("$feeMissing"),
+        incompleteOrders: count({ $or: ["$costMissing", "$feeMissing"] }),
       },
     },
   ]);
@@ -158,6 +161,7 @@ async function deliveredOrders(merchantId: Types.ObjectId, p: Period, monthly: b
       a.missingCost += r.missingCost;
       a.fee += r.fee;
       a.missingFee += r.missingFee;
+      a.incompleteOrders += r.incompleteOrders;
     } else {
       a.nonBdt += r.orders;
     }
@@ -279,6 +283,44 @@ function pnlFor(d: DeliveredAgg | undefined, r: ReturnedAgg | undefined, entries
   };
 }
 
+/**
+ * How much of a period's P&L rests on known costs. The orders that are
+ * revenue or cost in the period (delivered and returned, BDT — the P&L's own
+ * population, and the Order profit list's) are "fully costed" when they have
+ * every cost their profit needs, by the same rule as orderProfitOf and the
+ * "missing costs" order filter:
+ *   delivered → every item's unitCost and the courier fee
+ *   returned  → the courier fee (no product cost: the product came back)
+ * An order counts once however many costs it lacks. Manual product-cost or
+ * courier entries can't be matched to orders, so they never make one covered.
+ *
+ * While any order is not fully costed, the P&L leaves its missing costs out,
+ * so gross and net profit are an upper bound on the real figures — never the
+ * profit itself. `percentage` is rounded down (100 only when complete) and
+ * null when the period has no such orders.
+ */
+export interface CostCoverage {
+  eligibleOrders: number;
+  coveredOrders: number;
+  incompleteOrders: number;
+  percentage: number | null;
+  complete: boolean;
+}
+
+function costCoverage(eligibleOrders: number, incompleteOrders: number): CostCoverage {
+  const coveredOrders = eligibleOrders - incompleteOrders;
+  return {
+    eligibleOrders,
+    coveredOrders,
+    incompleteOrders,
+    percentage: eligibleOrders === 0 ? null : Math.floor((coveredOrders / eligibleOrders) * 100),
+    complete: incompleteOrders === 0,
+  };
+}
+
+const coverageOf = (del: DeliveredAgg, ret: ReturnedAgg): CostCoverage =>
+  costCoverage(del.exactOrders + del.fallbackOrders + ret.orders, del.incompleteOrders + ret.missingFee);
+
 export type FinanceWarningCode =
   | "fallback_dated_revenue"
   | "missing_product_cost"
@@ -391,6 +433,8 @@ export async function financeSummary(merchantId: Types.ObjectId, period: Period)
     netProfit: round2(p.netProfit),
     /** False when a delivered/returned order lacks its product cost or courier fee: profit is then overstated. */
     costComplete: p.del.missingCost === 0 && missingFee === 0,
+    /** Share of the period's delivered/returned orders whose costs are all recorded (see CostCoverage). */
+    costCoverage: coverageOf(p.del, p.ret),
     byCategory: entries
       .map((e) => ({
         type: e.type,
@@ -443,12 +487,23 @@ export async function financeMonthly(merchantId: Types.ObjectId, year: number, p
       expenses: round2(p.totalExpenses),
       netProfit: round2(p.netProfit),
       costComplete: p.del.missingCost === 0 && p.del.missingFee + p.ret.missingFee === 0,
+      costCoverage: coverageOf(p.del, p.ret),
       fallbackDatedOrders: p.del.fallbackOrders + p.ret.fallbackOrders,
     };
   });
   // Year summary = the sum of its months (same rules, no separate computation).
-  type Num = Exclude<keyof (typeof months)[number], "month" | "costComplete">;
-  const keys = Object.keys(months[0]!).filter((k) => k !== "month" && k !== "costComplete") as Num[];
+  type Num = Exclude<keyof (typeof months)[number], "month" | "costComplete" | "costCoverage">;
+  const keys = Object.keys(months[0]!).filter((k) => k !== "month" && k !== "costComplete" && k !== "costCoverage") as Num[];
   const totals = Object.fromEntries(keys.map((k) => [k, round2(months.reduce((s, m) => s + (m[k] as number), 0))])) as Record<Num, number>;
-  return { year, currency: "BDT" as const, months, totals: { ...totals, costComplete: months.every((m) => m.costComplete) } };
+  const sumOf = (f: (c: CostCoverage) => number) => months.reduce((s, m) => s + f(m.costCoverage), 0);
+  return {
+    year,
+    currency: "BDT" as const,
+    months,
+    totals: {
+      ...totals,
+      costComplete: months.every((m) => m.costComplete),
+      costCoverage: costCoverage(sumOf((c) => c.eligibleOrders), sumOf((c) => c.incompleteOrders)),
+    },
+  };
 }

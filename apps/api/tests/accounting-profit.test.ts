@@ -127,6 +127,113 @@ describe("P&L: gross and net profit", () => {
   });
 });
 
+describe("cost coverage of the P&L", () => {
+  /** A delivered order whose single line matches a product with cost 400 (by SKU) unless `costed` is false. */
+  async function delivered(caller: Caller, opts: { costed: boolean; fee: number | null; price?: number }) {
+    const price = opts.price ?? 1000;
+    const o = await order(caller, [opts.costed ? { name: "Shirt", sku: "SHIRT-1", quantity: 1, price } : { name: "Free text item", quantity: 1, price }]);
+    await walk(caller, o.id, "delivered");
+    if (opts.fee !== null) await setFee(o.id, opts.fee);
+    return o;
+  }
+  async function returned(caller: Caller, fee: number | null) {
+    const o = await order(caller, [{ name: "Shirt", sku: "SHIRT-1", quantity: 1, price: 1000 }]);
+    await walk(caller, o.id, "rto");
+    if (fee !== null) await setFee(o.id, fee);
+    return o;
+  }
+  async function shop() {
+    const { m, caller } = await merchant();
+    await Product.create({ merchantId: m._id, name: "Shirt", sku: "SHIRT-1", price: 1000, costPrice: 400 });
+    return { m, caller };
+  }
+
+  it("full coverage: 100%, complete, and the profit is unchanged", async () => {
+    const { caller } = await shop();
+    await delivered(caller, { costed: true, fee: 80 });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toEqual({ eligibleOrders: 1, coveredOrders: 1, incompleteOrders: 0, percentage: 100, complete: true });
+    expect(s.costComplete).toBe(true);
+    expect(s.grossProfit).toBe(1000 - 400 - 80);
+    expect(s.netProfit).toBe(1000 - 400 - 80);
+  });
+
+  it("a missing product cost makes coverage incomplete; the unknown cost is not counted as a known 0", async () => {
+    const { caller } = await shop();
+    await delivered(caller, { costed: false, fee: 80 });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toEqual({ eligibleOrders: 1, coveredOrders: 0, incompleteOrders: 1, percentage: 0, complete: false });
+    expect(s.costComplete).toBe(false);
+    expect(s.productCost).toMatchObject({ total: 0, ordersMissingCost: 1, complete: false });
+  });
+
+  it("a missing courier fee makes coverage incomplete", async () => {
+    const { caller } = await shop();
+    await delivered(caller, { costed: true, fee: null });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toEqual({ eligibleOrders: 1, coveredOrders: 0, incompleteOrders: 1, percentage: 0, complete: false });
+    expect(s.courierCost).toMatchObject({ total: 0, ordersMissingFee: 1, complete: false });
+  });
+
+  it("mixed: delivered and returned orders count once each; open and cancelled orders are not eligible; known costs only", async () => {
+    const { caller } = await shop();
+    await delivered(caller, { costed: true, fee: 80 }); // covered
+    await delivered(caller, { costed: false, fee: null }); // lacks BOTH costs — one incomplete order, not two
+    await returned(caller, 70); // covered: a return needs only its fee
+    await returned(caller, null); // incomplete
+    await order(caller, [{ name: "Shirt", sku: "SHIRT-1", quantity: 1, price: 1000 }]); // pending: not eligible
+    const cancelled = await order(caller, [{ name: "Shirt", sku: "SHIRT-1", quantity: 1, price: 1000 }]);
+    await walk(caller, cancelled.id, "cancelled");
+
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toEqual({ eligibleOrders: 4, coveredOrders: 2, incompleteOrders: 2, percentage: 50, complete: false });
+    // The per-cost counters overlap on the order lacking both; coverage does not double count.
+    expect(s.productCost.ordersMissingCost + s.courierCost.ordersMissingFee).toBe(3);
+    expect(s.productCost.total).toBe(400);
+    expect(s.courierCost.total).toBe(80 + 70);
+    // Same population as the Order profit list's "missing costs" filter.
+    const missing = await caller.finance.orderProfit({ period: ALL, missingOnly: true, limit: 50 });
+    expect(missing.items).toHaveLength(s.costCoverage.incompleteOrders);
+    const all = await caller.finance.orderProfit({ period: ALL, limit: 50 });
+    expect(all.items).toHaveLength(s.costCoverage.eligibleOrders);
+  });
+
+  it("rounds down: 2 of 3 orders is 66%, and only a complete period reads 100%", async () => {
+    const { caller } = await shop();
+    await delivered(caller, { costed: true, fee: 80 });
+    await delivered(caller, { costed: true, fee: 80 });
+    await delivered(caller, { costed: true, fee: null });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toMatchObject({ eligibleOrders: 3, coveredOrders: 2, percentage: 66, complete: false });
+  });
+
+  it("no delivered or returned orders: no coverage percentage, nothing incomplete", async () => {
+    const { caller } = await shop();
+    await caller.finance.create({ type: "expense", category: "salary", amount: 500, occurredOn: today(), idempotencyKey: idem() });
+    const s = await caller.finance.summary({ period: ALL });
+    expect(s.costCoverage).toEqual({ eligibleOrders: 0, coveredOrders: 0, incompleteOrders: 0, percentage: null, complete: true });
+    expect(s.netProfit).toBe(-500);
+  });
+
+  it("monthly rows carry their own coverage, and the year's coverage is the sum of its months", async () => {
+    const { caller } = await shop();
+    const a = await delivered(caller, { costed: true, fee: 80 });
+    const b = await delivered(caller, { costed: false, fee: 80 });
+    const c = await delivered(caller, { costed: true, fee: 80 });
+    await Order.updateOne({ _id: a.id }, { $set: { "logistics.deliveredAt": new Date("2026-03-10T06:00:00Z") } });
+    await Order.updateOne({ _id: b.id }, { $set: { "logistics.deliveredAt": new Date("2026-04-10T06:00:00Z") } });
+    await Order.updateOne({ _id: c.id }, { $set: { "logistics.deliveredAt": new Date("2026-04-12T06:00:00Z") } });
+
+    const y = await caller.finance.monthly({ year: 2026 });
+    expect(y.months.find((m) => m.month === "2026-03")!.costCoverage).toMatchObject({ eligibleOrders: 1, coveredOrders: 1, percentage: 100, complete: true });
+    expect(y.months.find((m) => m.month === "2026-04")!.costCoverage).toMatchObject({ eligibleOrders: 2, coveredOrders: 1, percentage: 50, complete: false });
+    expect(y.months.find((m) => m.month === "2026-01")!.costCoverage).toMatchObject({ eligibleOrders: 0, percentage: null, complete: true });
+    expect(y.totals.costCoverage).toEqual({ eligibleOrders: 3, coveredOrders: 2, incompleteOrders: 1, percentage: 66, complete: false });
+    for (const m of y.months) expect(m.costCoverage.complete).toBe(m.costComplete);
+    expect(y.totals.costCoverage.complete).toBe(y.totals.costComplete);
+  });
+});
+
 describe("order cost snapshot (dashboard & integration orders)", () => {
   it("snapshots unitCost from an unambiguous SKU match only, and never rewrites it later", async () => {
     const { m, caller } = await merchant();

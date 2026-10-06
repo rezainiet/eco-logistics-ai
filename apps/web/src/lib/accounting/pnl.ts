@@ -69,6 +69,45 @@ export function pnlLines(s: PnlSummaryLike): PnlLine[] {
   return out;
 }
 
+/** `costCoverage` from the finance API (apps/api/src/lib/finance/report.ts, CostCoverage). */
+export interface CostCoverageLike {
+  eligibleOrders: number;
+  coveredOrders: number;
+  incompleteOrders: number;
+  percentage: number | null;
+  complete: boolean;
+}
+
+export type ProfitState = "complete" | "incomplete" | "no_orders";
+
+/**
+ * How a P&L profit figure may be presented. While a delivered or returned
+ * order lacks a cost, the P&L leaves that cost out, so the figure is an upper
+ * bound on the real profit: it is shown as "up to ৳X" with the cost coverage,
+ * never as the profit itself. A period with no delivered or returned orders
+ * has no coverage to speak of.
+ */
+export function profitPresentation(c: CostCoverageLike): {
+  state: ProfitState;
+  /** Put in front of the amount ("Up to ৳12,000"). */
+  prefix: string;
+  /** "Cost coverage 72%" — only when incomplete. */
+  coverage: string | null;
+  /** "18 of 25 orders fully costed" / "No delivered or returned orders in this period". */
+  detail: string | null;
+} {
+  if (c.eligibleOrders === 0) {
+    return { state: "no_orders", prefix: "", coverage: null, detail: "No delivered or returned orders in this period" };
+  }
+  if (c.complete) return { state: "complete", prefix: "", coverage: null, detail: null };
+  return {
+    state: "incomplete",
+    prefix: "Up to ",
+    coverage: `Cost coverage ${c.percentage ?? 0}%`,
+    detail: `${c.coveredOrders} of ${c.eligibleOrders} order${c.eligibleOrders === 1 ? "" : "s"} fully costed`,
+  };
+}
+
 /** First and last day of a "YYYY-MM" month (calendar days, Bangladesh). */
 export function monthRange(month: string): { from: string; to: string } | null {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
