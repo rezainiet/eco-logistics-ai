@@ -9,7 +9,8 @@ import {
   MERCHANT_COUNTRIES,
   MERCHANT_LANGUAGES,
 } from "@ecom/db";
-import { protectedProcedure, router } from "../trpc.js";
+import { loadSubscriptionSnapshot, protectedProcedure, router } from "../trpc.js";
+import { assertFullAutomation, entitlementsFor, fullAutomationTier } from "../../lib/entitlements.js";
 import { encryptSecret, maskSecretPayload } from "../../lib/crypto.js";
 import { adapterFor, hasCourierAdapter } from "../../lib/couriers/index.js";
 import { registerCourierWebhook } from "../../lib/couriers/webhook-registration.js";
@@ -496,10 +497,11 @@ export const merchantsRouter = router({
    */
   getAutomationConfig: protectedProcedure.query(async ({ ctx }) => {
     const m = await Merchant.findById(ctx.user.id)
-      .select("automationConfig couriers")
+      .select("automationConfig couriers subscription.tier")
       .lean();
     if (!m) throw new TRPCError({ code: "NOT_FOUND", message: "merchant not found" });
     const cfg = (m as { automationConfig?: Record<string, unknown> }).automationConfig ?? {};
+    const tier = (m.subscription?.tier ?? "starter") as PlanTier;
     const couriers = ((m as { couriers?: Array<{ name: string; enabled?: boolean }> }).couriers ?? [])
       .filter((c) => c.enabled !== false)
       .map((c) => c.name);
@@ -510,6 +512,9 @@ export const merchantsRouter = router({
       autoBookEnabled: (cfg.autoBookEnabled as boolean | undefined) ?? false,
       autoBookCourier: (cfg.autoBookCourier as string | undefined) ?? null,
       enabledCouriers: couriers,
+      /** Whether the plan includes full-auto (and auto-book); the cheapest plan that does. */
+      fullAutomation: ctx.user.role === "admin" || entitlementsFor(tier).fullAutomation,
+      fullAutomationTier: fullAutomationTier(),
     };
   }),
 
@@ -524,6 +529,11 @@ export const merchantsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // Full-auto and auto-book are plan features (PLANS[tier].features.fullAutomation).
+      if (ctx.user.role !== "admin") {
+        const sub = await loadSubscriptionSnapshot(ctx.user.id);
+        assertFullAutomation(sub?.tier ?? "starter", input);
+      }
       const set: Record<string, unknown> = {};
       if (input.enabled !== undefined) set["automationConfig.enabled"] = input.enabled;
       if (input.mode !== undefined) set["automationConfig.mode"] = input.mode;

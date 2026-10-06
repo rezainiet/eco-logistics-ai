@@ -14,6 +14,9 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { InlineLockedFeature } from "@/components/billing/locked-feature";
+import { humanizeError } from "@/lib/friendly-errors";
+import { PLAN_NAME } from "@/lib/plan-pricing";
 
 const MODE_DESCRIPTIONS: Record<string, string> = {
   manual: "Every order goes to pending — you click Confirm or Reject. Safest.",
@@ -51,14 +54,19 @@ export function AutomationModePicker() {
     autoBookEnabled: false,
     autoBookCourier: null as string | null,
     enabledCouriers: [] as string[],
+    fullAutomation: false,
+    fullAutomationTier: "growth" as const,
   };
+  // Full-auto (and auto-book) is a plan feature; the API refuses it on plans without it.
+  const fullAutoLocked = !data.fullAutomation;
 
   const setField = async (input: Parameters<typeof update.mutate>[0]) => {
     try {
       setError(null);
       await update.mutateAsync(input);
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message.startsWith("entitlement_blocked:") ? humanizeError(message) : message);
     }
   };
 
@@ -100,10 +108,26 @@ export function AutomationModePicker() {
             <SelectContent>
               <SelectItem value="manual">Manual (default)</SelectItem>
               <SelectItem value="semi_auto">Semi-automatic</SelectItem>
-              <SelectItem value="full_auto">Full automatic</SelectItem>
+              <SelectItem value="full_auto" disabled={fullAutoLocked}>
+                Full automatic{fullAutoLocked ? ` · ${PLAN_NAME[data.fullAutomationTier]}` : ""}
+              </SelectItem>
             </SelectContent>
           </Select>
           <p className="mt-1 text-xs text-fg-muted">{MODE_DESCRIPTIONS[data.mode]}</p>
+          {fullAutoLocked ? (
+            <p className="mt-1 text-xs">
+              <InlineLockedFeature
+                requiredTier={data.fullAutomationTier}
+                locked
+                feature="Full automatic + auto-book"
+                hint="Low-risk orders confirm and book with your courier without a click."
+              >
+                {data.mode === "full_auto" || data.autoBookEnabled
+                  ? `Runs as semi-automatic without auto-book — full automatic needs ${PLAN_NAME[data.fullAutomationTier]}`
+                  : `Full automatic and auto-book need ${PLAN_NAME[data.fullAutomationTier]}`}
+              </InlineLockedFeature>
+            </p>
+          ) : null}
         </div>
 
         <div className={data.enabled && data.mode !== "manual" ? "" : "pointer-events-none opacity-50"}>
@@ -124,7 +148,7 @@ export function AutomationModePicker() {
           </p>
         </div>
 
-        <div className={data.enabled && data.mode === "full_auto" ? "" : "pointer-events-none opacity-50"}>
+        <div className={data.enabled && data.mode === "full_auto" && !fullAutoLocked ? "" : "pointer-events-none opacity-50"}>
           <div className="flex items-center justify-between">
             <div>
               <Label className="text-sm">Auto-book courier</Label>

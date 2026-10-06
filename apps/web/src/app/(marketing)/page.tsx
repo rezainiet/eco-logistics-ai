@@ -176,7 +176,7 @@ const FAQ_ITEMS: ReadonlyArray<{ q: string; a: string }> = [
       "No order is auto-rejected — an operator decides on every flagged " +
       "order. ConfirmX surfaces signals (phone history, address " +
       "consistency, COD-amount anomalies) and routes orders into three " +
-      "buckets — auto-confirm, confirmation call, or human review queue. " +
+      "buckets — auto-confirm, confirmation SMS, or human review queue. " +
       "Every threshold is yours to tune, and the system calibrates " +
       "against your store's baseline RTO so a 30%-RTO category doesn't " +
       "flag normal buyers.",
@@ -428,10 +428,10 @@ export default function HomePage() {
               </div>
               <div className="solution-card">
                 <div className="solution-step">Layer 02 — Confirm</div>
-                <h3>Calls only when calls matter.</h3>
+                <h3>Ask only when it matters.</h3>
                 <p>
-                  Low-risk orders auto-confirm. Medium-risk orders trigger a Twilio confirmation
-                  call with status tracking. High-risk orders sit in a review queue waiting for
+                  Low-risk orders auto-confirm. Medium-risk orders get a confirmation SMS the
+                  buyer answers with a code. High-risk orders sit in a review queue waiting for
                   your approval.
                 </p>
               </div>
@@ -491,7 +491,7 @@ export default function HomePage() {
                   <div className="step-num">/04</div>
                   <div className="step-name">Route</div>
                   <div className="step-desc">
-                    Low → auto-confirm. Medium → confirmation call. High → human review queue.
+                    Low → auto-confirm. Medium → confirmation SMS. High → human review queue.
                   </div>
                 </div>
                 <div className="step">
@@ -641,13 +641,13 @@ export default function HomePage() {
                 <div className="mode-name">Mode 03</div>
                 <h3>Full-Auto</h3>
                 <p>
-                  Low-risk auto-confirms and auto-books. Medium gets a confirmation call. Only
-                  high-risk orders land on your desk.
+                  Low-risk auto-confirms and auto-books. Medium gets a confirmation SMS. Only
+                  high-risk orders land on your desk. Growth plan and above.
                 </p>
                 <ul className="mode-list">
                   <li>End-to-end pipeline, hands-off operations</li>
-                  <li>Twilio confirmation for medium-risk</li>
-                  <li>SLA-grade recovery on failures</li>
+                  <li>SMS confirmation for medium-risk</li>
+                  <li>Booking retries + alerts on failures</li>
                 </ul>
               </div>
             </div>
@@ -672,7 +672,7 @@ export default function HomePage() {
               <div className="integration"><div className="name">Pathao</div><div className="role">courier · primary</div></div>
               <div className="integration"><div className="name">Steadfast</div><div className="role">courier · primary</div></div>
               <div className="integration"><div className="name">RedX</div><div className="role">courier · primary</div></div>
-              <div className="integration"><div className="name">Twilio</div><div className="role">voice · confirm</div></div>
+              <div className="integration"><div className="name">Twilio</div><div className="role">voice · call customers</div></div>
               <div className="integration"><div className="name">bKash + Nagad</div><div className="role">manual billing</div></div>
               <div className="integration"><div className="name">Stripe</div><div className="role">card billing</div></div>
             </div>
@@ -744,7 +744,7 @@ export default function HomePage() {
                 </blockquote>
                 <figcaption>
                   <div className="testimonial-name">Pattern · ops time</div>
-                  <div className="testimonial-role">Semi-Auto + Twilio confirmation</div>
+                  <div className="testimonial-role">Semi-Auto + SMS confirmation</div>
                 </figcaption>
               </figure>
 
@@ -943,7 +943,7 @@ export default function HomePage() {
                 <div className="compare-good" role="cell">
                   <span className="compare-cell-label">With ConfirmX</span>
                   <span className="compare-num compare-num-good">8 / day</span>
-                  <span className="compare-note">Twilio handles the rest, only exceptions reach a human</span>
+                  <span className="compare-note">SMS confirms the rest, only exceptions reach a human</span>
                 </div>
               </div>
 
@@ -1054,7 +1054,7 @@ export default function HomePage() {
                   No order is auto-rejected — an operator decides on every flagged order.
                   ConfirmX surfaces signals (phone history, address consistency, COD-amount
                   anomalies) and routes orders into three buckets — auto-confirm,
-                  confirmation call, or human review queue. Every threshold is yours to
+                  confirmation SMS, or human review queue. Every threshold is yours to
                   tune, and the system calibrates against your store&apos;s baseline RTO so
                   a 30%-RTO category doesn&apos;t flag normal buyers.
                 </p>

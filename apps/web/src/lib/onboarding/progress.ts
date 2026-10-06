@@ -56,7 +56,7 @@ export function deriveOnboardingProgress(state: OnboardingState): OnboardingProg
       key: "connect_store",
       title: "Connect your store",
       description:
-        "Connect Shopify or WooCommerce. New orders will flow in automatically — no copy-paste needed.",
+        "Connect Shopify (WooCommerce on Growth and up). New orders will flow in automatically — no copy-paste needed.",
       done: state.hasStoreConnected,
       ctaLabel: "Connect store",
       ctaHref: "/dashboard/settings/integrations",

@@ -10,21 +10,22 @@ import { formatPlanPrice, formatPlanQuantity } from "@/lib/plan-pricing";
 const COPY: Record<PlanTier, { desc: (quota: string) => string; features: string[] }> = {
   starter: {
     desc: (q) => `For new stores still finding their footing — up to ${q} orders a month.`,
-    features: ["Shopify or Woo connection", "Manual + Semi-auto modes", "1 courier integration", "Email support"],
+    features: ["Shopify or CSV import", "Manual + Semi-auto modes", "1 courier integration", "Email support"],
   },
   growth: {
     desc: (q) => `The default for stores doing up to ${q} orders a month with a real ops bleed.`,
     features: [
       "All Starter features",
-      "Full-auto mode + Twilio calls",
+      "Full-auto mode + auto-book",
+      "WooCommerce connection",
       "3 couriers (Pathao + Steadfast + RedX)",
       "Cross-merchant signal network",
       "Cart recovery worker",
     ],
   },
   scale: {
-    desc: (q) => `For up to ${q} orders a month, multi-store ops, and finer-grained automation control.`,
-    features: ["All Growth features", "Multi-store / multi-merchant", "Custom verification rules + tuning", "Priority queue + Slack support"],
+    desc: (q) => `For up to ${q} orders a month, more live integrations, and finer-grained automation control.`,
+    features: ["All Growth features", "Up to 5 live integrations + Custom API", "Custom verification rules + tuning", "Priority queue + Slack support"],
   },
   enterprise: {
     desc: (q) => `For up to ${q} orders a month, dedicated infrastructure, custom courier integrations.`,

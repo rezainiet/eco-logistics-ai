@@ -45,7 +45,7 @@ export function SampleOrdersPreview() {
               order="#1041"
               customer="Mahin · 01882-…"
               risk={{ tone: "medium", label: "Medium · new address" }}
-              status="Confirmation call"
+              status="Confirmation SMS"
               cod="৳ 1,200"
             />
             <SampleRow

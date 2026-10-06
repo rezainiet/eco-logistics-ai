@@ -27,6 +27,11 @@ export interface PlanFeatures {
   fraudReview: boolean;
   callMinutes: number;
   analyticsLevel: AnalyticsLevel;
+  /**
+   * Seats per workspace — reserved for when team access ships. Every
+   * workspace is single-login today and nothing enforces this, so it is
+   * not shown or sold as a plan feature (see plan-pricing.test.tsx).
+   */
   seats: number;
   orderQuota: number;
   shipmentQuota: number;
@@ -38,6 +43,14 @@ export interface PlanFeatures {
   behaviorRetentionDays: number | null;
   behaviorExports: boolean;
   slaFeatures: boolean;
+  /**
+   * Full-auto order automation: low-risk orders are confirmed AND booked
+   * with a courier without a human (create-time auto-book, plus auto-book
+   * after a confirmation). Manual and semi-auto (auto-confirm only) are on
+   * every plan. Enforced in the API by `assertFullAutomation` (settings)
+   * and `entitledAutomationConfig` (every auto-book path).
+   */
+  fullAutomation: boolean;
 }
 
 export interface PlanDefinition {
@@ -78,14 +91,15 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       behaviorRetentionDays: 30,
       behaviorExports: false,
       slaFeatures: false,
+      fullAutomation: false,
     },
     highlights: [
       "300 orders / month",
       "1 courier integration",
       "Shopify or CSV sync",
+      "Manual + semi-auto automation",
       "30-day analytics window",
       "60 call-center minutes",
-      "1 user",
     ],
   },
   growth: {
@@ -110,14 +124,15 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       behaviorRetentionDays: 90,
       behaviorExports: false,
       slaFeatures: false,
+      fullAutomation: true,
     },
     highlights: [
       "1,500 orders / month",
-      "Shopify + WooCommerce sync",
+      "Shopify or WooCommerce sync",
+      "Full-auto mode (auto-confirm + auto-book)",
       "Behavior analytics (90-day window)",
       "Fraud review + COD verification",
       "300 call-center minutes",
-      "3 users",
     ],
   },
   scale: {
@@ -144,6 +159,7 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       behaviorRetentionDays: 180,
       behaviorExports: false,
       slaFeatures: false,
+      fullAutomation: true,
     },
     highlights: [
       "6,000 orders / month",
@@ -151,7 +167,7 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       "Custom-API connector",
       "High-intent + suspicious-session tables",
       "180-day analytics window",
-      "10 users",
+      "1,500 call-center minutes",
     ],
   },
   enterprise: {
@@ -176,14 +192,15 @@ export const PLANS: Record<PlanTier, PlanDefinition> = {
       behaviorRetentionDays: null,
       behaviorExports: true,
       slaFeatures: true,
+      fullAutomation: true,
     },
     highlights: [
       "50,000 orders / month",
-      "Unlimited commerce integrations",
+      "Up to 50 commerce integrations",
       "Behavior data exports (CSV/JSON)",
-      "Custom analytics retention",
+      "Unlimited analytics retention",
       "Priority support + SLA",
-      "50 users",
+      "10,000 call-center minutes",
     ],
   },
 };

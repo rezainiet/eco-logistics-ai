@@ -40,6 +40,7 @@ import {
 import { resolveProviderOrderId } from "../../lib/couriers/provider-ref.js";
 import { syncOrderTracking } from "../tracking.js";
 import { enqueueAutoBook } from "../../workers/automationBook.js";
+import { entitledAutomationConfig } from "../../lib/entitlements.js";
 import { enqueueOrderConfirmationSms } from "../../workers/automationSms.js";
 import {
   canTransitionAutomation,
@@ -2502,10 +2503,14 @@ export const ordersRouter = router({
       // automatically too. Never inline-await; never throw.
       try {
         const merchant = await Merchant.findById(merchantId)
-          .select("automationConfig couriers")
+          .select("automationConfig couriers subscription.tier")
           .lean();
-        const cfg = (merchant as { automationConfig?: { autoBookEnabled?: boolean; autoBookCourier?: string } } | null)
-          ?.automationConfig ?? {};
+        // Auto-book is a full-auto feature: only on a plan that includes it.
+        const cfg = entitledAutomationConfig(
+          merchant?.subscription?.tier,
+          (merchant as { automationConfig?: { autoBookEnabled?: boolean; autoBookCourier?: string } } | null)
+            ?.automationConfig ?? {},
+        );
         if (cfg.autoBookEnabled === true) {
           const courierName =
             cfg.autoBookCourier ??

@@ -24,7 +24,8 @@ export type EntitlementCode =
   | "behavior_analytics_locked"
   | "advanced_behavior_tables_locked"
   | "behavior_exports_locked"
-  | "retention_window_capped";
+  | "retention_window_capped"
+  | "full_automation_locked";
 
 export interface EntitlementsView {
   tier: PlanTier;
@@ -35,6 +36,7 @@ export interface EntitlementsView {
   behaviorRetentionDays: number | null;
   behaviorExports: boolean;
   slaFeatures: boolean;
+  fullAutomation: boolean;
   recommendedUpgradeTier: PlanTier | null;
 }
 
@@ -61,6 +63,7 @@ export function entitlementsFor(tier: PlanTier): EntitlementsView {
     behaviorRetentionDays: features.behaviorRetentionDays,
     behaviorExports: features.behaviorExports,
     slaFeatures: features.slaFeatures,
+    fullAutomation: features.fullAutomation,
     recommendedUpgradeTier: nextTierAbove(tier),
   };
 }
@@ -184,6 +187,45 @@ export function assertBehaviorExports(tier: PlanTier): void {
   if (!getPlan(tier).features.behaviorExports) {
     throw blocked("behavior_exports_locked");
   }
+}
+
+/** The cheapest plan that includes full-auto order automation. */
+export function fullAutomationTier(): PlanTier {
+  return PLAN_TIERS.find((t) => getPlan(t).features.fullAutomation) ?? "enterprise";
+}
+
+/**
+ * Throw if the plan doesn't include full-auto automation. Called when a
+ * merchant saves automation settings that would auto-book: `full_auto`
+ * mode or auto-book itself. Manual / semi-auto are on every plan.
+ */
+export function assertFullAutomation(
+  tier: PlanTier,
+  wants: { mode?: string | null; autoBookEnabled?: boolean | null },
+): void {
+  if (getPlan(tier).features.fullAutomation) return;
+  if (wants.mode === "full_auto" || wants.autoBookEnabled === true) {
+    throw blocked("full_automation_locked");
+  }
+}
+
+/**
+ * The automation settings a merchant's plan lets the system act on. A
+ * stored `full_auto` / auto-book (saved before a downgrade, or on an older
+ * build) runs as semi-auto without auto-book on a plan without
+ * `fullAutomation` — the saved settings are kept, so they apply again after
+ * an upgrade. Every auto-book path reads its config through this.
+ */
+export function entitledAutomationConfig<T extends { mode?: unknown; autoBookEnabled?: unknown }>(
+  tier: PlanTier | string | null | undefined,
+  config: T,
+): T {
+  if (getPlan(tier).features.fullAutomation) return config;
+  return {
+    ...config,
+    ...(config.mode === "full_auto" ? { mode: "semi_auto" } : {}),
+    autoBookEnabled: false,
+  };
 }
 
 /**

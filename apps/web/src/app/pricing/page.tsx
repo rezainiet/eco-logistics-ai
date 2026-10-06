@@ -60,7 +60,7 @@ const FAQ = [
   },
   {
     q: "What about webhook fees, calls, SMS?",
-    a: "All Twilio call-center minutes shown above are included in your plan. Webhook ingestion and analytics are unlimited within your monthly order quota.",
+    a: "The call-center minutes shown above are included in your plan — they cover calls your team places to customers from the dashboard. Webhook ingestion and analytics are unlimited within your monthly order quota.",
   },
 ];
 
@@ -114,8 +114,9 @@ function buildPlanBullets(p: ReturnType<typeof listPlans>[number]): string[] {
     integrationsLine,
     retentionLine,
     fraudLine,
+    f.fullAutomation ? "Manual, semi-auto + full-auto (auto-book) modes" : "Manual + semi-auto modes",
     `${f.callMinutes.toLocaleString()} call-center minutes`,
-    `${f.seats} ${f.seats === 1 ? "user" : "users"}`,
+    // No seat count: every workspace is single-login until team access ships.
     `${f.courierLimit} courier integration${f.courierLimit === 1 ? "" : "s"}`,
   ];
 }
@@ -355,8 +356,10 @@ export default function PricingPage() {
                   )}
                 />
                 <ComparisonRow
-                  label="Team seats"
-                  values={plans.map((p) => p.features.seats.toString())}
+                  label="Full-auto mode (auto-book)"
+                  values={plans.map((p) =>
+                    p.features.fullAutomation ? "✓" : "—",
+                  )}
                 />
                 <ComparisonRow
                   label="SLA + priority support"

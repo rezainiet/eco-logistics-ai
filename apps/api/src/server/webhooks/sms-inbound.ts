@@ -7,6 +7,7 @@ import { writeAudit } from "../../lib/audit.js";
 import { notifyCustomerRejected } from "../../lib/merchant-notices.js";
 import { canTransitionAutomation } from "../../lib/automation.js";
 import { enqueueAutoBook } from "../../workers/automationBook.js";
+import { entitledAutomationConfig } from "../../lib/entitlements.js";
 import { checkSmsWebhookAuth } from "../../lib/sms/webhook-verify.js";
 import { normalizePhoneOrRaw } from "../../lib/phone.js";
 import { sendOrderExpiredSms } from "../../lib/sms/index.js";
@@ -232,9 +233,13 @@ smsInboundWebhookRouter.post(
       if (writeRes.modifiedCount > 0) {
         try {
           const merchant = await Merchant.findById(merchantOid)
-            .select("automationConfig couriers")
+            .select("automationConfig couriers subscription.tier")
             .lean();
-          const cfg = (merchant as { automationConfig?: { autoBookEnabled?: boolean; autoBookCourier?: string } } | null)?.automationConfig ?? {};
+          // Auto-book is a full-auto feature: only on a plan that includes it.
+          const cfg = entitledAutomationConfig(
+            merchant?.subscription?.tier,
+            (merchant as { automationConfig?: { autoBookEnabled?: boolean; autoBookCourier?: string } } | null)?.automationConfig ?? {},
+          );
           if (cfg.autoBookEnabled === true) {
             const courierName =
               cfg.autoBookCourier ??

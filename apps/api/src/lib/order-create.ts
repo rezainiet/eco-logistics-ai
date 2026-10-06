@@ -1,6 +1,7 @@
 import type { Types } from "mongoose";
 import { FraudPrediction, Merchant, type MerchantFraudConfig, Order } from "@ecom/db";
 import { enqueueAutoBook } from "../workers/automationBook.js";
+import { entitledAutomationConfig } from "./entitlements.js";
 import { enqueueOrderConfirmationSms } from "../workers/automationSms.js";
 import { type AutomationState, decideAutomationAction } from "./automation.js";
 import { type NetworkRiskAggregate, hashPhoneForNetwork, lookupNetworkRisk } from "./fraud-network.js";
@@ -220,9 +221,13 @@ export async function afterOrderCreated(args: {
     let automationReason = "";
     try {
       const merchant = await Merchant.findById(merchantId)
-        .select("automationConfig couriers")
+        .select("automationConfig couriers subscription.tier")
         .lean();
-      const automationCfg = (merchant as { automationConfig?: Record<string, unknown> } | null)?.automationConfig ?? {};
+      // Full-auto / auto-book run only on a plan that includes them.
+      const automationCfg = entitledAutomationConfig(
+        merchant?.subscription?.tier,
+        (merchant as { automationConfig?: Record<string, unknown> } | null)?.automationConfig ?? {},
+      );
       const decision = decideAutomationAction(risk.level, risk.riskScore, automationCfg as never);
       automationState = decision.state;
       automationReason = decision.reason;

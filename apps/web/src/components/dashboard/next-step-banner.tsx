@@ -72,7 +72,7 @@ export function NextStepBanner() {
       icon: Plug,
       title: "Next step: Connect your store",
       body:
-        "Connect Shopify or WooCommerce in under 2 minutes — new orders will start syncing automatically.",
+        "Connect Shopify in under 2 minutes (WooCommerce on Growth and up) — new orders will start syncing automatically.",
       cta: "Connect store",
       href: "/dashboard/integrations",
       tone: "border-brand/30 bg-brand/8",

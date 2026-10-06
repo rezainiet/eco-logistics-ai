@@ -305,7 +305,7 @@ export function buildVerifyEmail(args: {
   const html = renderLayout({
     branding: b,
     heading: `Welcome to ${escapeHtml(b.name)}, ${escapeHtml(args.businessName)}.`,
-    body: `<p>Your 14-day trial is active. Verify your email so we can keep your workspace secure, then connect Shopify or WooCommerce — ${escapeHtml(b.name)} will start scoring your incoming orders the moment your first webhook lands.</p>
+    body: `<p>Your 14-day trial is active. Verify your email so we can keep your workspace secure, then connect your Shopify store (WooCommerce is on Growth and up) — ${escapeHtml(b.name)} will start scoring your incoming orders the moment your first webhook lands.</p>
     <p style="color:#94a3b8;font-size:13px">This verification link expires in 24 hours.</p>`,
     cta: { label: "Verify email and start", href: args.verifyUrl },
     footer: b.email.supportLine,

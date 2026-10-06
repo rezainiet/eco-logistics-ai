@@ -33,7 +33,7 @@ export function EmptyOrdersState() {
         </div>
         <p className="mt-2 text-xs text-fg-faint">
           <Sparkles className="mr-1 inline h-3 w-3" aria-hidden /> Tip: connect
-          Shopify or WooCommerce in Integrations to auto-import every new order.
+          Shopify (or WooCommerce on Growth and up) in Integrations to auto-import every new order.
         </p>
       </CardContent>
     </Card>

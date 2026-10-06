@@ -193,6 +193,52 @@ describe("upgrade prompts (LockedFeature / InlineLockedFeature)", () => {
   });
 });
 
+describe("plan claims match what the product enforces", () => {
+  /** The homepage card for one plan, as text. */
+  const card = (name: string) => {
+    const html = home();
+    const at = html.indexOf(`data-plan="${name}"`);
+    return text(html.slice(at, html.indexOf("</div>", html.indexOf("price-features", at))));
+  };
+
+  it("WooCommerce is promised only on plans that include it (Starter is Shopify + CSV)", () => {
+    expect(PLANS.starter.features.integrationProviders).not.toContain("woocommerce");
+    expect(card("Starter")).not.toMatch(/woo/i);
+    expect(card("Starter")).toContain("Shopify or CSV import");
+    expect(card("Growth")).toContain("WooCommerce");
+  });
+
+  it("full-auto is promised only on plans whose features include it", () => {
+    expect(card("Starter")).toContain("Manual + Semi-auto modes");
+    expect(card("Starter")).not.toMatch(/full.auto/i);
+    expect(card("Growth")).toContain("Full-auto mode + auto-book");
+    const html = text(pricing());
+    for (const p of listPlans()) {
+      expect(p.features.fullAutomation, p.tier).toBe(p.tier !== "starter");
+    }
+    expect(html.match(/Manual, semi-auto \+ full-auto \(auto-book\) modes/g)).toHaveLength(3);
+    expect(html.match(/Manual \+ semi-auto modes/g)).toHaveLength(1);
+    expect(html).toContain("Full-auto mode (auto-book)");
+  });
+
+  it("no seat / user counts and no multi-store claims (single-login workspaces, one store per platform)", () => {
+    for (const t of [text(home()), text(pricing())]) {
+      expect(t).not.toMatch(/\d+\s+(users?|seats?)/i);
+      expect(t).not.toMatch(/team seats/i);
+      expect(t).not.toMatch(/multi-?store|multiple stores|multi-merchant/i);
+    }
+    for (const p of listPlans()) expect(p.highlights.join(" "), p.tier).not.toMatch(/\d+\s+users?|unlimited commerce integrations/i);
+  });
+
+  it("call minutes are for calls placed from the dashboard — no automated confirmation calls", () => {
+    expect(text(pricing())).toContain("calls your team places to customers from the dashboard");
+    const homepage = readFileSync(join(SRC, "app/(marketing)/page.tsx"), "utf8");
+    // Medium-risk orders get an SMS; calls are placed by the merchant's team.
+    expect(homepage).not.toMatch(/Medium[^.]{0,20}confirmation call|confirmation call, or human review|Twilio confirmation|Twilio handles/i);
+    expect(text(home())).not.toMatch(/Twilio calls/i);
+  });
+});
+
 // ── Source guard: no plan price is ever written as a literal ──────────────
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 const CUSTOMER_FACING = [
