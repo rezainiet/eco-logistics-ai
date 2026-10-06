@@ -46,6 +46,9 @@ import {
 import { enqueueCommerceImport } from "../../workers/commerceImport.js";
 import { syncOneIntegration } from "../../workers/orderSync.worker.js";
 import { writeAudit } from "../../lib/audit.js";
+import { ORDER_QUOTA_EXCEEDED } from "../../lib/order-quota.js";
+import { getPlan } from "../../lib/plans.js";
+import { checkQuota } from "../../lib/usage.js";
 
 function decryptCreds(stored: Record<string, unknown> | null | undefined): IntegrationCredentials {
   const s = (stored ?? {}) as Record<string, string | null | undefined>;
@@ -2230,6 +2233,7 @@ export const integrationsRouter = router({
         orderId: result.orderId ?? null,
         error: result.error ?? null,
         duplicate: !!result.duplicate,
+        skipReason: result.skipReason ?? null,
       };
     }),
 
@@ -2615,6 +2619,14 @@ export const integrationsRouter = router({
         total: rows.length,
         integrationIssues,
         integrationIssuesCount,
+        // Room for one more order right now — drives the quota-held banner
+        // and whether replaying held orders can succeed.
+        orderQuota: await (async () => {
+          const merchant = await Merchant.findById(merchantId).select("subscription.tier").lean();
+          const plan = getPlan(merchant?.subscription?.tier);
+          const q = await checkQuota(merchantId, plan, "ordersCreated", 1);
+          return { used: q.used, limit: q.limit, available: q.allowed, planName: plan.name };
+        })(),
       };
     }),
 
@@ -2660,6 +2672,7 @@ export const integrationsRouter = router({
       let succeeded = 0;
       let stillStuck = 0;
       let deadLettered = 0;
+      let stillHeldForQuota = 0;
       for (const row of due) {
         const r = await replayWebhookInbox({
           inboxId: row._id as Types.ObjectId,
@@ -2669,6 +2682,7 @@ export const integrationsRouter = router({
         if (r.status === "succeeded") succeeded += 1;
         else if (r.status === "dead_lettered") deadLettered += 1;
         else stillStuck += 1;
+        if (r.skipReason === ORDER_QUOTA_EXCEEDED) stillHeldForQuota += 1;
       }
       return {
         ok: true,
@@ -2676,6 +2690,8 @@ export const integrationsRouter = router({
         succeeded,
         stillStuck,
         deadLettered,
+        /** Of `stillStuck`: orders still held because the order quota is used up. */
+        stillHeldForQuota,
       };
     }),
 

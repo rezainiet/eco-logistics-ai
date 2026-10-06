@@ -27,6 +27,7 @@ import { fireFraudAlert } from "../lib/alerts.js";
 import { writeAudit } from "../lib/audit.js";
 import { releaseQuota, reserveQuota } from "../lib/usage.js";
 import { getPlan } from "../lib/plans.js";
+import { ORDER_QUOTA_EXCEEDED, notifyOrderQuotaReached, type OrderQuotaDetail } from "../lib/order-quota.js";
 import { invalidate } from "../lib/cache.js";
 import { adapterFor, hasAdapter } from "../lib/integrations/index.js";
 import { wasOrderDeleted } from "../lib/integrations/order-tombstone.js";
@@ -74,6 +75,10 @@ export interface IngestResult {
   orderId?: string;
   duplicate?: boolean;
   error?: string;
+  /** Typed failure reason — set when the monthly order quota is used up (nothing was created). */
+  code?: typeof ORDER_QUOTA_EXCEEDED;
+  /** With `code`: the quota that stopped the order, as `reserveQuota` saw it. */
+  quota?: OrderQuotaDetail;
   riskLevel?: "low" | "medium" | "high";
   riskScore?: number;
 }
@@ -126,6 +131,13 @@ export async function ingestNormalizedOrder(
     return {
       ok: false,
       error: `monthly order quota reached (${reservation.used}/${reservation.limit})`,
+      code: ORDER_QUOTA_EXCEEDED,
+      quota: {
+        metric: "ordersCreated",
+        used: reservation.used,
+        limit: reservation.limit,
+        tier: merchant.subscription?.tier ?? "starter",
+      },
     };
   }
 
@@ -719,6 +731,18 @@ export async function processWebhookOnce(args: {
         },
       },
     );
+  } else if (result.code === ORDER_QUOTA_EXCEEDED) {
+    await holdForOrderQuota({
+      inboxId: inboxRow._id as Types.ObjectId,
+      merchantId: args.merchantId,
+      integrationId: args.integrationId,
+      provider: args.provider,
+      topic: args.topic,
+      externalId: args.externalId,
+      orderExternalId: args.normalized.externalId,
+      result,
+      wasHeld: false,
+    });
   } else {
     // Schedule the first retry. Subsequent retries are scheduled by
     // `replayWebhookInbox`, which keeps backoff state in one place.
@@ -952,6 +976,32 @@ export async function replayWebhookInbox(args: {
     };
   }
 
+  // Order quota used up — hold the order (not a delivery failure: no
+  // attempt is spent, no retry is scheduled, it is never dead-lettered).
+  if (result.code === ORDER_QUOTA_EXCEEDED) {
+    const held = await holdForOrderQuota({
+      inboxId: inbox._id as Types.ObjectId,
+      merchantId: inbox.merchantId as Types.ObjectId,
+      integrationId: inbox.integrationId as Types.ObjectId | undefined,
+      provider: inbox.provider,
+      topic: inbox.topic,
+      externalId: inbox.externalId,
+      orderExternalId: normalized.externalId,
+      result,
+      wasHeld: inbox.status === "needs_attention" && inbox.skipReason === ORDER_QUOTA_EXCEEDED,
+    });
+    if (held.collapsedInto) {
+      return { ok: true, duplicate: true, status: "succeeded", attempts: inbox.attempts ?? 0 };
+    }
+    return {
+      ok: false,
+      error: result.error,
+      status: "needs_attention",
+      attempts: inbox.attempts ?? 0,
+      skipReason: ORDER_QUOTA_EXCEEDED,
+    };
+  }
+
   // Failure path — bump attempts, schedule next retry or dead-letter.
   const attempts = (inbox.attempts ?? 0) + 1;
   inbox.attempts = attempts;
@@ -978,6 +1028,88 @@ export async function replayWebhookInbox(args: {
     status: "failed",
     attempts,
   };
+}
+
+/**
+ * Hold an order that arrived after the monthly order quota ran out. The
+ * inbox row keeps the payload and becomes `needs_attention` with skipReason
+ * `order_quota_exceeded`: no order is created, no retry is scheduled and no
+ * attempt is spent, so it is never dead-lettered as a "failed webhook". It
+ * is replayed (manually, from Integrations → Issues) through the normal
+ * ingest path once there is capacity; the Order's unique
+ * `(merchantId, source.externalId)` keeps replays from creating a second
+ * order.
+ *
+ * One held row per upstream order: a second delivery of the same order
+ * (another event id, e.g. create + update) resolves as a duplicate of the
+ * row already held — the normal path would also ignore it once the order
+ * exists.
+ */
+async function holdForOrderQuota(args: {
+  inboxId: Types.ObjectId;
+  merchantId: Types.ObjectId;
+  integrationId?: Types.ObjectId;
+  provider: string;
+  topic: string;
+  externalId: string;
+  orderExternalId: string;
+  result: IngestResult;
+  /** The row was already held (a replay that is still over quota) — don't re-audit. */
+  wasHeld: boolean;
+}): Promise<{ collapsedInto?: Types.ObjectId }> {
+  const now = new Date();
+  const already = await WebhookInbox.findOne({
+    merchantId: args.merchantId,
+    status: "needs_attention",
+    skipReason: ORDER_QUOTA_EXCEEDED,
+    orderExternalId: args.orderExternalId,
+    _id: { $ne: args.inboxId },
+  })
+    .select("_id")
+    .lean();
+  if (already) {
+    await WebhookInbox.updateOne(
+      { _id: args.inboxId },
+      {
+        $set: { status: "succeeded", processedAt: now, lastError: `duplicate of held order (inbox ${String(already._id)})` },
+        $unset: { nextRetryAt: "" },
+      },
+    );
+    return { collapsedInto: already._id as Types.ObjectId };
+  }
+  await WebhookInbox.updateOne(
+    { _id: args.inboxId },
+    {
+      $set: {
+        status: "needs_attention",
+        skipReason: ORDER_QUOTA_EXCEEDED,
+        orderExternalId: args.orderExternalId,
+        lastError: `${ORDER_QUOTA_EXCEEDED}: ${args.result.error ?? "monthly order quota reached"}`.slice(0, 500),
+        processedAt: now,
+      },
+      $unset: { nextRetryAt: "" },
+    },
+  );
+  if (args.result.quota) await notifyOrderQuotaReached(args.merchantId, args.result.quota, "held");
+  if (!args.wasHeld) {
+    void writeAudit({
+      merchantId: args.merchantId,
+      actorId: args.merchantId,
+      actorType: "system",
+      action: "integration.webhook_needs_attention",
+      subjectType: "integration",
+      subjectId: args.integrationId ?? args.inboxId,
+      meta: {
+        provider: args.provider,
+        topic: args.topic,
+        externalId: args.externalId,
+        orderExternalId: args.orderExternalId,
+        skipReason: ORDER_QUOTA_EXCEEDED,
+        quota: args.result.quota ?? null,
+      },
+    });
+  }
+  return {};
 }
 
 /**

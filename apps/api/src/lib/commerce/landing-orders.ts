@@ -8,6 +8,7 @@ import { alertStockLevels, type StockChange } from "../inventory-alerts.js";
 import { afterOrderCreated, fraudDocFromRisk, generateOrderNumber, loadMerchantScoring, scoreOrderForCreate } from "../order-create.js";
 import { getPlan } from "../plans.js";
 import { reserveQuota } from "../usage.js";
+import { notifyOrderQuotaReached } from "../order-quota.js";
 import { hashAddress } from "../../server/risk.js";
 import { resolvePublishedForOrder } from "../landing/resolve.js";
 import { linkRecoveredOrder, markRecoveryCheckoutStarted } from "../recovery/landing.js";
@@ -134,7 +135,10 @@ export function validateCustomer(c: PlaceOrderInput["customer"]) {
 const PHONE_WINDOW_MS = 10 * 60 * 1000;
 const PHONE_MAX_ORDERS = 5;
 
-type Outcome = { kind: "created"; order: any; stock: StockChange[] } | { kind: "duplicate"; order: any } | { kind: "quota" };
+type Outcome =
+  | { kind: "created"; order: any; stock: StockChange[] }
+  | { kind: "duplicate"; order: any }
+  | { kind: "quota"; used: number; limit: number | null };
 
 function placedFrom(order: any, duplicate: boolean): PlacedOrder {
   return {
@@ -335,7 +339,7 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
       const dup = await Order.findOne({ merchantId, "source.clientRequestId": clientRequestId }).session(session).lean();
       if (dup) return { kind: "duplicate", order: dup };
       const reservation = await reserveQuota(merchantId, plan, "ordersCreated", 1, { session });
-      if (!reservation.allowed) return { kind: "quota" };
+      if (!reservation.allowed) return { kind: "quota", used: reservation.used, limit: reservation.limit };
       const orderId = new Types.ObjectId();
       const now = new Date();
       const [order] = await Order.create(
@@ -403,7 +407,16 @@ export async function placeLandingOrder(input: PlaceOrderInput, meta: PlaceOrder
     await session.endSession();
   }
 
-  if (outcome.kind === "quota") return fail({ code: "not_accepting_orders" });
+  if (outcome.kind === "quota") {
+    // Nothing to hold (the buyer is told the store isn't taking orders) —
+    // but the merchant must know checkouts are being turned away.
+    await notifyOrderQuotaReached(
+      merchantId,
+      { metric: "ordersCreated", used: outcome.used, limit: outcome.limit, tier: scoring.tier ?? "starter" },
+      "checkout_refused",
+    );
+    return fail({ code: "not_accepting_orders" });
+  }
   if (outcome.kind === "duplicate") return { ok: true, ...placedFrom(outcome.order, true) };
 
   const order = outcome.order;

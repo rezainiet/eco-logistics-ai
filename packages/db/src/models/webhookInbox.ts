@@ -56,6 +56,10 @@ export const WEBHOOK_INBOX_TTL_DAYS = WEBHOOK_PAYLOAD_REAP_DAYS;
  *                     storefront and trigger a manual replay.
  *                     **Not retried automatically** — that's the whole
  *                     point of carving it out from "failed".
+ *                     Also holds orders received after the merchant's
+ *                     monthly order quota ran out (`skipReason:
+ *                     "order_quota_exceeded"`): kept here, never created
+ *                     past the quota, replayed once there is capacity.
  */
 export const WEBHOOK_STATUSES = [
   "received",
@@ -100,6 +104,13 @@ const webhookInboxSchema = new Schema(
      * they can correlate the exact reason with their storefront config.
      */
     skipReason: { type: String, trim: true, maxlength: 60 },
+    /**
+     * The upstream ORDER id (the normalized order's `externalId`, i.e. the
+     * Order's `source.externalId`) — set on rows held for the order quota,
+     * so two deliveries of the same order (e.g. create + update events,
+     * whose `externalId`s differ) collapse into one held row.
+     */
+    orderExternalId: { type: String, trim: true, maxlength: 200 },
     /** Set once an Order has been created/updated as a result. */
     resolvedOrderId: { type: Schema.Types.ObjectId, ref: "Order" },
     receivedAt: { type: Date, default: () => new Date() },

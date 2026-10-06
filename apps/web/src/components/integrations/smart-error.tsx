@@ -63,6 +63,16 @@ export function explainError(args: {
       tone: "warning",
     };
   }
+  // Not a provider or webhook failure: the order arrived fine and is held.
+  if (reason === "order_quota_exceeded" || raw.startsWith("order_quota_exceeded")) {
+    return {
+      code: "order_quota_exceeded",
+      what: "Order received and held — your monthly order quota is used up.",
+      why: "Your plan's orders for this month are used up, so this order was kept here instead of being created. Nothing is lost.",
+      how: "Upgrade your plan or wait for the monthly reset, then click Replay to create the order.",
+      tone: "warning",
+    };
+  }
   if (reason === "missing_external_id") {
     return {
       code: "missing_external_id",

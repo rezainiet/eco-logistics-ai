@@ -31,6 +31,14 @@ export const NOTIFICATION_KINDS = [
    * upgrade and reconnect" CTA.
    */
   "subscription.plan_downgrade_enforced",
+  /**
+   * The monthly order quota is used up: store orders arriving now are held
+   * in the webhook inbox (`needs_attention`, skipReason
+   * `order_quota_exceeded`) instead of being created, and landing-page
+   * checkouts are turned away. One row per merchant per usage period; its
+   * body/meta carry the live held / turned-away counts.
+   */
+  "subscription.order_quota_reached",
   "recovery.cart_pending",
   "automation.stale_pending",
   "automation.watchdog_exhausted",

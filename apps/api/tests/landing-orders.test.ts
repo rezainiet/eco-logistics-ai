@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import express from "express";
 import { Types } from "mongoose";
-import { AuditLog, InventoryMovement, LandingPage, Merchant, Order, Product } from "@ecom/db";
+import { AuditLog, InventoryMovement, LandingPage, Merchant, Notification, Order, Product, Usage, currentUsagePeriod } from "@ecom/db";
 import { ensureSystemTemplates, __resetTemplateCacheForTests } from "../src/lib/landing/templates.js";
 import { resolveLandingPageByHost } from "../src/lib/landing/resolve.js";
 import { placeLandingOrder, type PlaceOrderInput } from "../src/lib/commerce/landing-orders.js";
@@ -9,6 +9,7 @@ import { applyTrackingEvents } from "../src/server/tracking.js";
 import { landingOrdersRouter } from "../src/server/landing-orders.js";
 import { courierWebhookRouter } from "../src/server/webhooks/courier.js";
 import { encryptSecret } from "../src/lib/crypto.js";
+import { getPlan } from "../src/lib/plans.js";
 import { authUserFor, callerFor, createMerchant, disconnectDb, ensureDb, resetDb } from "./helpers.js";
 
 /**
@@ -257,6 +258,22 @@ describe("placing a landing-page order", () => {
     const zone = resolved.commerce!.delivery[0]!.id;
     for (let i = 0; i < 5; i++) expect((await placeLandingOrder(order(host, [{ productId: shirt.id, quantity: 1 }], {}, zone))).ok).toBe(true);
     expect(await placeLandingOrder(order(host, [{ productId: shirt.id, quantity: 1 }], {}, zone))).toMatchObject({ ok: false, code: "rate_limited" });
+  });
+
+  it("with the order quota used up, checkouts are turned away and the merchant is told — once, with a count", async () => {
+    const { host, shirt, resolved, merchant } = await shopWithProducts("shop-a");
+    const limit = getPlan(merchant.subscription?.tier).features.orderQuota;
+    await Usage.updateOne({ merchantId: merchant._id, period: currentUsagePeriod() }, { $set: { ordersCreated: limit } }, { upsert: true });
+    const zone = resolved.commerce!.delivery[0]!.id;
+    const other = { ...customer, phone: "01912345678" };
+    expect(await placeLandingOrder(order(host, [{ productId: shirt.id, quantity: 1 }], {}, zone))).toMatchObject({ ok: false, code: "not_accepting_orders" });
+    expect(await placeLandingOrder(order(host, [{ productId: shirt.id, quantity: 1 }], { customer: other }, zone))).toMatchObject({ ok: false, code: "not_accepting_orders" });
+    expect(await Order.countDocuments({})).toBe(0);
+    expect(await stockOf(shirt.id)).toEqual({ onHand: 23, reserved: 0 });
+    const notices = await Notification.find({ merchantId: merchant._id, kind: "subscription.order_quota_reached" }).lean();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.meta).toMatchObject({ checkoutsRefused: 2, held: 0 });
+    expect(notices[0]!.body).toContain("2 landing-page checkouts were turned away");
   });
 });
 

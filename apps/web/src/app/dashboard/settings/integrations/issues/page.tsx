@@ -38,6 +38,14 @@ import {
   explainError,
   SmartError,
 } from "@/components/integrations/smart-error";
+import { QuotaHoldBanner } from "@/components/integrations/quota-hold-banner";
+import {
+  canReplayIssue,
+  isQuotaHeld,
+  ORDER_QUOTA_REASON,
+  UPGRADE_HREF,
+  type OrderQuotaLike,
+} from "@/lib/integrations/quota-hold";
 
 /**
  * Centralised "things that need your attention" view. Rolls up every
@@ -62,6 +70,7 @@ const REASON_LABELS: Record<string, string> = {
   missing_phone: "Customer phone missing",
   missing_external_id: "Order ID missing",
   invalid_payload: "Invalid payload shape",
+  [ORDER_QUOTA_REASON]: "Held — order quota reached",
   unknown: "Other / unclassified",
 };
 
@@ -137,6 +146,8 @@ export default function IssuesPage() {
   const rows = (issues.data?.rows ?? []) as IssueRow[];
   const reasonsCount = (issues.data?.reasonsCount ?? {}) as Record<string, number>;
   const integrationIssues = (issues.data?.integrationIssues ?? []) as IntegrationIssue[];
+  const orderQuota = (issues.data?.orderQuota ?? null) as OrderQuotaLike | null;
+  const heldForQuota = reasonsCount[ORDER_QUOTA_REASON] ?? 0;
   const totalStuck = useMemo(
     () => Object.values(reasonsCount).reduce((s, n) => s + n, 0),
     [reasonsCount],
@@ -167,6 +178,8 @@ export default function IssuesPage() {
       const r = await replayOne.mutateAsync({ id: row.id });
       if (r.status === "succeeded") {
         toast.success("Replayed", `Order ${row.externalId} ingested.`);
+      } else if ("skipReason" in r && r.skipReason === ORDER_QUOTA_REASON) {
+        toast.info("Still held", "Your monthly order quota is still used up — the order stays safely held.");
       } else if (r.status === "needs_attention") {
         toast.error(
           "Still needs attention",
@@ -209,7 +222,9 @@ export default function IssuesPage() {
       const r = await bulkReplay.mutateAsync(ids ? { ids } : {});
       const parts: string[] = [];
       if (r.succeeded > 0) parts.push(`${r.succeeded} fixed`);
-      if (r.stillStuck > 0) parts.push(`${r.stillStuck} still stuck`);
+      const otherStuck = r.stillStuck - (r.stillHeldForQuota ?? 0);
+      if (otherStuck > 0) parts.push(`${otherStuck} still stuck`);
+      if (r.stillHeldForQuota > 0) parts.push(`${r.stillHeldForQuota} still held — order quota used up`);
       if (r.deadLettered > 0) parts.push(`${r.deadLettered} dead-lettered`);
       const summary = parts.join(", ") || `${r.attempted} processed`;
       if (r.succeeded > 0) toast.success("Bulk replay complete", summary);
@@ -218,6 +233,24 @@ export default function IssuesPage() {
       invalidateAfterMutation();
     } catch (err) {
       toast.error("Bulk replay failed", (err as Error).message);
+    }
+  };
+
+  // Replay just the quota-held orders (oldest first, as the API caps a call at 50).
+  const handleReplayHeld = async () => {
+    try {
+      const ids = rows.filter(isQuotaHeld).map((r) => r.id).slice(-50);
+      if (ids.length === 0) {
+        // Another reason tab is open — show the held orders first.
+        setActiveReason(ORDER_QUOTA_REASON);
+        return;
+      }
+      const r = await bulkReplay.mutateAsync({ ids });
+      if (r.succeeded > 0) toast.success("Held orders replayed", `${r.succeeded} order${r.succeeded === 1 ? "" : "s"} created.`);
+      if (r.stillHeldForQuota > 0) toast.info("Some still held", `${r.stillHeldForQuota} still held — your order quota ran out again.`);
+      invalidateAfterMutation();
+    } catch (err) {
+      toast.error("Replay failed", (err as Error).message);
     }
   };
 
@@ -305,6 +338,13 @@ export default function IssuesPage() {
         </div>
       </header>
 
+      <QuotaHoldBanner
+        heldCount={heldForQuota}
+        quota={orderQuota}
+        onReplay={handleReplayHeld}
+        replaying={bulkReplay.isPending}
+      />
+
       {integrationIssues.length > 0 ? (
         <IntegrationHealthSection issues={integrationIssues} />
       ) : null}
@@ -358,6 +398,7 @@ export default function IssuesPage() {
                   selected={selected.has(row.id)}
                   onToggle={() => toggleOne(row.id)}
                   onReplay={() => handleReplay(row)}
+                  canReplay={canReplayIssue(row, orderQuota)}
                   onResolve={() => handleResolve([row.id])}
                   isMutating={
                     (replayOne.isPending && replayOne.variables?.id === row.id) ||
@@ -452,6 +493,7 @@ function IssueRowCard({
   selected,
   onToggle,
   onReplay,
+  canReplay,
   onResolve,
   isMutating,
 }: {
@@ -459,6 +501,8 @@ function IssueRowCard({
   selected: boolean;
   onToggle: () => void;
   onReplay: () => void;
+  /** False for a quota-held order while there is still no room for it. */
+  canReplay: boolean;
   onResolve: () => void;
   isMutating: boolean;
 }) {
@@ -466,11 +510,14 @@ function IssueRowCard({
     skipReason: row.skipReason,
     lastError: row.lastError,
   });
-  const fixUrl = buildSourceFixUrl({
-    provider: row.provider,
-    accountKey: row.providerAccountKey,
-    externalId: row.externalId,
-  });
+  // A quota-held order has nothing to fix in the storefront.
+  const fixUrl = isQuotaHeld(row)
+    ? null
+    : buildSourceFixUrl({
+        provider: row.provider,
+        accountKey: row.providerAccountKey,
+        externalId: row.externalId,
+      });
 
   return (
     <li className="rounded-md border border-stroke/10 bg-surface p-3">
@@ -516,19 +563,28 @@ function IssueRowCard({
                 {fixUrl.label}
               </a>
             ) : null}
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={onReplay}
-              disabled={isMutating}
-            >
-              {isMutating ? (
-                <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
-              ) : (
-                <PlayCircle className="mr-1 h-3 w-3" />
-              )}
-              Replay
-            </Button>
+            {canReplay ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={onReplay}
+                disabled={isMutating}
+              >
+                {isMutating ? (
+                  <RefreshCw className="mr-1 h-3 w-3 animate-spin" />
+                ) : (
+                  <PlayCircle className="mr-1 h-3 w-3" />
+                )}
+                Replay
+              </Button>
+            ) : (
+              <Link
+                href={UPGRADE_HREF}
+                className="inline-flex items-center gap-1 rounded-md border border-stroke/12 bg-surface px-2.5 py-1 text-2xs font-medium text-fg hover:bg-surface-raised"
+              >
+                Upgrade plan
+              </Link>
+            )}
             <Button
               size="sm"
               variant="ghost"

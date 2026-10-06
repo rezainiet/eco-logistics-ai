@@ -41,6 +41,7 @@ export const INBOX_KIND_CATEGORY = {
   "integration.webhook_failed": "integration",
   "integration.webhook_needs_attention": "integration",
   "subscription.plan_downgrade_enforced": "account",
+  "subscription.order_quota_reached": "account",
   "account.welcome": "account",
   "gdpr.data_request_received": "compliance",
   "recovery.cart_pending": "recovery",
@@ -110,6 +111,7 @@ export function resolveInboxLink(n: InboxLinkInput, ctx: { fraudReview: boolean 
   switch (n.kind) {
     case "integration.webhook_failed":
     case "integration.webhook_needs_attention":
+    case "subscription.order_quota_reached":
       return INBOX_ROUTES.integrationIssues;
     case "subscription.plan_downgrade_enforced":
       return INBOX_ROUTES.integrations;
